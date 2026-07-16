@@ -111,6 +111,7 @@ app.post("/api/respond", (request, response, next) => {
       requestId?: string;
       model?: string;
       reasoningEffort?: ReasoningEffort;
+      maxOutputTokens?: number;
       customInstructions?: string;
       context?: ContextNode[];
       message?: string;
@@ -118,6 +119,7 @@ app.post("/api/respond", (request, response, next) => {
     };
     const model = body.model ?? "gpt-5.6-sol";
     const reasoningEffort = body.reasoningEffort ?? (model.startsWith("gpt-5.6") ? "max" : "xhigh");
+    const maxOutputTokens = body.maxOutputTokens ?? 50_000;
     if (!body.requestId || !/^[a-zA-Z0-9_-]{16,128}$/.test(body.requestId)) {
       response.status(400).json({ error: "A valid request ID is required" });
       return;
@@ -131,6 +133,10 @@ app.post("/api/respond", (request, response, next) => {
       (reasoningEffort === "max" && !model.startsWith("gpt-5.6"))
     ) {
       response.status(400).json({ error: "Unsupported reasoning effort for this model" });
+      return;
+    }
+    if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0) {
+      response.status(400).json({ error: "The output-token limit must be a positive integer" });
       return;
     }
     if (!Array.isArray(body.context) || !body.message?.trim()) {
@@ -152,6 +158,7 @@ app.post("/api/respond", (request, response, next) => {
       context: body.context,
       message: body.message,
       reasoningEffort,
+      maxOutputTokens,
       customInstructions: body.customInstructions ?? "",
       anchor: body.anchor,
     });

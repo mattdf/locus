@@ -82,6 +82,7 @@ export interface RespondInput {
   context: ContextNode[];
   message: string;
   reasoningEffort: ReasoningEffort;
+  maxOutputTokens: number;
   customInstructions: string;
   anchor?: HighlightAnchor;
 }
@@ -111,7 +112,7 @@ export async function streamResponse(
       ].join(" ") + customInstructions,
       input: `Here is the complete path of conversation context:\n\n${formatContext(input.context)}${highlighted}\n\n<learner_request>\n${input.message}\n</learner_request>`,
       reasoning: { effort: input.reasoningEffort },
-      max_output_tokens: 5000,
+      max_output_tokens: input.maxOutputTokens,
       stream: true,
     },
     { signal },

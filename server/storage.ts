@@ -12,6 +12,7 @@ export const emptyState = (): WorkspaceState => ({
   settings: {
     model: "gpt-5.6-sol",
     reasoningEffort: "max",
+    maxOutputTokens: 50_000,
     customInstructions: "",
     focusDrawerWidth: 440,
     sidebarCollapsed: false,
@@ -31,6 +32,11 @@ function normalizeState(state: WorkspaceState): WorkspaceState {
       model,
       reasoningEffort:
         state.settings?.reasoningEffort ?? (model.startsWith("gpt-5.6") ? "max" : "xhigh"),
+      maxOutputTokens:
+        Number.isSafeInteger(state.settings?.maxOutputTokens) &&
+        state.settings.maxOutputTokens > 0
+          ? state.settings.maxOutputTokens
+          : 50_000,
       customInstructions: state.settings?.customInstructions ?? "",
       focusDrawerWidth:
         typeof state.settings?.focusDrawerWidth === "number"

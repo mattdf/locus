@@ -6,6 +6,7 @@ import {
   CornerUpRight,
   FileInput,
   GitBranch,
+  Hash,
   KeyRound,
   Menu,
   Maximize2,
@@ -63,6 +64,7 @@ const DEFAULT_STATE: WorkspaceState = {
   settings: {
     model: "gpt-5.6-sol",
     reasoningEffort: "max",
+    maxOutputTokens: 50_000,
     customInstructions: "",
     focusDrawerWidth: 440,
     sidebarCollapsed: false,
@@ -804,6 +806,7 @@ export default function App() {
         {
           model: workspace.settings.model,
           reasoningEffort: workspace.settings.reasoningEffort,
+          maxOutputTokens: workspace.settings.maxOutputTokens,
           customInstructions: workspace.settings.customInstructions,
           context: contextFor(chat, nodeId, [userMessage.id, assistantId]),
           message: userMessage.content,
@@ -872,6 +875,7 @@ export default function App() {
         {
           model: workspace.settings.model,
           reasoningEffort: workspace.settings.reasoningEffort,
+          maxOutputTokens: workspace.settings.maxOutputTokens,
           customInstructions: workspace.settings.customInstructions,
           context: contextBeforeMessage(chat, nodeId, revisionGroupId),
           message: userMessage.content,
@@ -1505,6 +1509,29 @@ export default function App() {
                     </option>
                   ))}
                 </select>
+              </span>
+            </label>
+            <label className="model-select">
+              <Hash size={15} />
+              <span>
+                <small>Output-token limit</small>
+                <input
+                  type="number"
+                  min={1}
+                  step={1_000}
+                  inputMode="numeric"
+                  aria-label="Maximum output tokens"
+                  title="Includes reasoning tokens and visible output tokens"
+                  value={workspace.settings.maxOutputTokens}
+                  onChange={(event) => {
+                    const maxOutputTokens = event.currentTarget.valueAsNumber;
+                    if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0) return;
+                    setWorkspace((current) => ({
+                      ...current,
+                      settings: { ...current.settings, maxOutputTokens },
+                    }));
+                  }}
+                />
               </span>
             </label>
             <button

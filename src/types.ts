@@ -62,6 +62,7 @@ export interface WorkspaceState {
   settings: {
     model: string;
     reasoningEffort: ReasoningEffort;
+    maxOutputTokens: number;
     customInstructions: string;
     focusDrawerWidth: number;
     sidebarCollapsed: boolean;
