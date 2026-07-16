@@ -3,6 +3,8 @@
 A local-first chat UI for studying difficult technical material without flattening every
 clarification into one long conversation.
 
+![Locus recursive learning chat interface](screenshot.png)
+
 ## What it does
 
 - Select any rendered passage or equation and choose **Elaborate**.
