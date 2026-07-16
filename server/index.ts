@@ -1,7 +1,13 @@
 import express from "express";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { getApiKeyStatus, saveApiKey, streamResponse } from "./openai.ts";
+import {
+  abortGeneration,
+  attachGenerationStream,
+  createGeneration,
+  getGeneration,
+} from "./generations.ts";
+import { getApiKeyStatus, saveApiKey } from "./openai.ts";
 import { readState, writeState } from "./storage.ts";
 import type {
   ContextNode,
@@ -77,9 +83,32 @@ app.put("/api/state", async (request, response, next) => {
   }
 });
 
-app.post("/api/respond", async (request, response, next) => {
+app.get("/api/respond/:requestId/stream", (request, response) => {
+  const job = getGeneration(request.params.requestId);
+  if (!job) {
+    response.status(404).json({ error: "This response is no longer available" });
+    return;
+  }
+  attachGenerationStream(response, job);
+});
+
+app.post("/api/respond/:requestId/abort", (request, response) => {
+  const job = getGeneration(request.params.requestId);
+  if (!job) {
+    response.status(404).json({ error: "This response is no longer available" });
+    return;
+  }
+  if (!abortGeneration(job)) {
+    response.status(409).json({ error: `The response is already ${job.status}` });
+    return;
+  }
+  response.json({ stopped: true });
+});
+
+app.post("/api/respond", (request, response, next) => {
   try {
     const body = request.body as {
+      requestId?: string;
       model?: string;
       reasoningEffort?: ReasoningEffort;
       customInstructions?: string;
@@ -89,6 +118,10 @@ app.post("/api/respond", async (request, response, next) => {
     };
     const model = body.model ?? "gpt-5.6-sol";
     const reasoningEffort = body.reasoningEffort ?? (model.startsWith("gpt-5.6") ? "max" : "xhigh");
+    if (!body.requestId || !/^[a-zA-Z0-9_-]{16,128}$/.test(body.requestId)) {
+      response.status(400).json({ error: "A valid request ID is required" });
+      return;
+    }
     if (!allowedModels.has(model)) {
       response.status(400).json({ error: "Unsupported model" });
       return;
@@ -114,30 +147,15 @@ app.post("/api/respond", async (request, response, next) => {
       return;
     }
 
-    response.status(200);
-    response.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
-    response.setHeader("Cache-Control", "no-cache, no-transform");
-    response.setHeader("X-Content-Type-Options", "nosniff");
-    response.flushHeaders();
-
-    try {
-      await streamResponse({
-        model,
-        context: body.context,
-        message: body.message,
-        reasoningEffort,
-        customInstructions: body.customInstructions ?? "",
-        anchor: body.anchor,
-      }, (delta) => {
-        response.write(`${JSON.stringify({ type: "delta", delta })}\n`);
-      });
-      response.write(`${JSON.stringify({ type: "done" })}\n`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "The model request failed";
-      response.write(`${JSON.stringify({ type: "error", error: message })}\n`);
-    } finally {
-      response.end();
-    }
+    const job = createGeneration(body.requestId, {
+      model,
+      context: body.context,
+      message: body.message,
+      reasoningEffort,
+      customInstructions: body.customInstructions ?? "",
+      anchor: body.anchor,
+    });
+    attachGenerationStream(response, job);
   } catch (error) {
     next(error);
   }

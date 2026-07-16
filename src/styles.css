@@ -929,6 +929,60 @@ a:focus-visible {
   text-transform: uppercase;
 }
 
+.message__author,
+.message__controls,
+.revision-switcher {
+  display: inline-flex;
+  align-items: center;
+}
+
+.message__author {
+  gap: 6px;
+}
+
+.message__controls {
+  gap: 5px;
+  margin-left: auto;
+}
+
+.revision-switcher {
+  gap: 2px;
+  color: #75807b;
+  letter-spacing: 0;
+}
+
+.revision-switcher > button,
+.edit-message-button {
+  display: grid;
+  width: 23px;
+  height: 23px;
+  place-items: center;
+  padding: 0;
+  color: #6d7873;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.revision-switcher > button:hover:not(:disabled),
+.edit-message-button:hover:not(:disabled) {
+  color: var(--accent);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.revision-switcher > button:disabled,
+.edit-message-button:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+.revision-switcher > span {
+  min-width: 31px;
+  text-align: center;
+  font-size: 8px;
+}
+
 .message--assistant .message__meta {
   color: var(--accent);
 }
@@ -956,6 +1010,67 @@ a:focus-visible {
 
 .message--error .message__meta {
   color: var(--danger);
+}
+
+.message-editor textarea {
+  display: block;
+  width: 100%;
+  min-height: 92px;
+  padding: 10px 11px;
+  resize: vertical;
+  color: #27332f;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid #cbd8d3;
+  border-radius: 7px;
+  outline: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.message-editor textarea:focus {
+  border-color: rgba(13, 112, 101, 0.58);
+  box-shadow: 0 0 0 3px rgba(13, 112, 101, 0.08);
+}
+
+.message-editor > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.message-editor button {
+  min-height: 30px;
+  padding: 0 10px;
+  color: #65706b;
+  background: transparent;
+  border: 1px solid #cdd8d4;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.message-editor button:hover:not(:disabled) {
+  color: var(--accent);
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.message-editor .message-editor__save {
+  color: white;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.message-editor .message-editor__save:hover:not(:disabled) {
+  color: white;
+  background: var(--accent-dark);
+}
+
+.message-editor button:disabled {
+  opacity: 0.42;
+  cursor: default;
 }
 
 .markdown-message {
@@ -1230,6 +1345,15 @@ a:focus-visible {
   animation: stream-cursor 900ms steps(2, jump-none) infinite;
 }
 
+.stopped-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 7px;
+  color: #929a96;
+  font-size: 9px;
+}
+
 @keyframes stream-cursor {
   50% {
     opacity: 0.2;
@@ -1255,6 +1379,29 @@ a:focus-visible {
   padding: 11px max(38px, calc((100% - 760px) / 2)) 14px;
   background: rgba(251, 250, 246, 0.97);
   border-top: 1px solid var(--line-soft);
+}
+
+.stop-response-button {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  margin: 0 auto 7px;
+  color: #59645f;
+  background: #f4f2ec;
+  border: 1px solid #d7d3c9;
+  border-radius: 7px;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.stop-response-button:hover {
+  color: var(--danger);
+  background: #f6e9e6;
+  border-color: #e4c9c3;
 }
 
 .composer {
@@ -2639,13 +2786,61 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .message__meta,
 .app-shell[data-theme="dark"] .thinking,
 .app-shell[data-theme="dark"] .streaming-status,
+.app-shell[data-theme="dark"] .stopped-status,
 .app-shell[data-theme="dark"] .selection-tip {
   color: #7f8984;
+}
+
+.app-shell[data-theme="dark"] .stop-response-button {
+  color: #aab4af;
+  background: #222825;
+  border-color: #3b4440;
+}
+
+.app-shell[data-theme="dark"] .stop-response-button:hover {
+  color: #f0a093;
+  background: #382522;
+  border-color: #583630;
 }
 
 .app-shell[data-theme="dark"] .message--user {
   background: #21332f;
   border-color: #2d4841;
+}
+
+.app-shell[data-theme="dark"] .revision-switcher,
+.app-shell[data-theme="dark"] .revision-switcher > button,
+.app-shell[data-theme="dark"] .edit-message-button {
+  color: #92a09a;
+}
+
+.app-shell[data-theme="dark"] .revision-switcher > button:hover:not(:disabled),
+.app-shell[data-theme="dark"] .edit-message-button:hover:not(:disabled) {
+  color: var(--accent);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.app-shell[data-theme="dark"] .message-editor textarea {
+  color: #dce4e0;
+  background: #19231f;
+  border-color: #3b4d46;
+}
+
+.app-shell[data-theme="dark"] .message-editor button {
+  color: #aab4af;
+  border-color: #405049;
+}
+
+.app-shell[data-theme="dark"] .message-editor button:hover:not(:disabled) {
+  color: var(--accent);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.app-shell[data-theme="dark"] .message-editor .message-editor__save,
+.app-shell[data-theme="dark"] .message-editor .message-editor__save:hover:not(:disabled) {
+  color: #10201c;
+  background: var(--accent);
+  border-color: var(--accent);
 }
 
 .app-shell[data-theme="dark"] .message--error {

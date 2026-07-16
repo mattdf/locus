@@ -89,6 +89,7 @@ export interface RespondInput {
 export async function streamResponse(
   input: RespondInput,
   onDelta: (delta: string) => void,
+  signal?: AbortSignal,
 ): Promise<void> {
   const openai = await getClient();
   const highlighted = input.anchor
@@ -98,20 +99,23 @@ export async function streamResponse(
   const customInstructions = input.customInstructions.trim()
     ? ` The learner also supplied these additional behavior preferences. Follow them where compatible with the tutoring instructions above; they supplement rather than replace the tutoring role:\n<custom_instructions>\n${input.customInstructions.trim()}\n</custom_instructions>`
     : "";
-  const stream = await openai.responses.create({
-    model: input.model,
-    instructions: [
-      "You are an expert tutor helping a technically sophisticated learner work through mathematics, physics, and machine learning.",
-      "Be rigorous, patient, and local: focus on the exact point of confusion before widening the explanation.",
-      "Do not skip algebraic or logical steps that are necessary to bridge the learner's gap.",
-      "Use Markdown and LaTeX with $...$ for inline math and $$...$$ for display math; never use \\(...\\) or \\[...\\] delimiters. Define symbols when their meaning may be ambiguous.",
-      "When useful, include a small numerical or geometric sanity check. Avoid generic encouragement and unnecessary restatement.",
-    ].join(" ") + customInstructions,
-    input: `Here is the complete path of conversation context:\n\n${formatContext(input.context)}${highlighted}\n\n<learner_request>\n${input.message}\n</learner_request>`,
-    reasoning: { effort: input.reasoningEffort },
-    max_output_tokens: 5000,
-    stream: true,
-  });
+  const stream = await openai.responses.create(
+    {
+      model: input.model,
+      instructions: [
+        "You are an expert tutor helping a technically sophisticated learner work through mathematics, physics, and machine learning.",
+        "Be rigorous, patient, and local: focus on the exact point of confusion before widening the explanation.",
+        "Do not skip algebraic or logical steps that are necessary to bridge the learner's gap.",
+        "Use Markdown and LaTeX with $...$ for inline math and $$...$$ for display math; never use \\(...\\) or \\[...\\] delimiters. Define symbols when their meaning may be ambiguous.",
+        "When useful, include a small numerical or geometric sanity check. Avoid generic encouragement and unnecessary restatement.",
+      ].join(" ") + customInstructions,
+      input: `Here is the complete path of conversation context:\n\n${formatContext(input.context)}${highlighted}\n\n<learner_request>\n${input.message}\n</learner_request>`,
+      reasoning: { effort: input.reasoningEffort },
+      max_output_tokens: 5000,
+      stream: true,
+    },
+    { signal },
+  );
 
   let receivedText = false;
   for await (const event of stream) {

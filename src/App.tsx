@@ -25,7 +25,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -36,6 +36,7 @@ import { ThreadView } from "./components/ThreadView";
 import { markdownBlockquote } from "./lib/markdown";
 import {
   childThreads,
+  contextBeforeMessage,
   contextFor,
   makeMessage,
   newId,
@@ -48,6 +49,7 @@ import type {
   ChatTree,
   HighlightAnchor,
   Message,
+  MessageRevisionGroup,
   SelectionDraft,
   ThreadNode,
   WorkspaceState,
@@ -93,6 +95,90 @@ interface ApiKeyStatus {
   source: "saved" | "project-file" | null;
 }
 
+interface GenerationResult {
+  content: string;
+  stopped: boolean;
+}
+
+interface PendingGeneration {
+  chatId: string;
+  nodeId: string;
+  assistantId: string;
+  requestId: string;
+}
+
+interface ViewLocation {
+  chatId: string | null;
+  nodeId: string | null;
+  maximized: boolean;
+}
+
+function readViewLocation(): ViewLocation {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    chatId: params.get("chat"),
+    nodeId: params.get("thread"),
+    maximized: params.get("view") === "focus",
+  };
+}
+
+function viewUrl(chat: ChatTree | null, nodeId: string | null, maximized: boolean): string {
+  const params = new URLSearchParams();
+  if (chat) {
+    params.set("chat", chat.id);
+    if (nodeId && nodeId !== chat.rootId && chat.nodes[nodeId]) {
+      params.set("thread", nodeId);
+      if (maximized) params.set("view", "focus");
+    }
+  }
+  const query = params.toString();
+  return `${window.location.pathname}${query ? `?${query}` : ""}`;
+}
+
+function assistantMessageById(node: ThreadNode, assistantId: string): Message | undefined {
+  const direct = node.messages.find((message) => message.id === assistantId);
+  if (direct) return direct;
+  for (const group of Object.values(node.messageRevisions ?? {})) {
+    const variant = group.variants.find(
+      (candidate) => candidate.assistantMessage.id === assistantId,
+    );
+    if (variant) return variant.assistantMessage;
+  }
+  return undefined;
+}
+
+function pendingGenerations(workspace: WorkspaceState): PendingGeneration[] {
+  const pending = new Map<string, PendingGeneration>();
+  workspace.chats.forEach((chat) => {
+    Object.values(chat.nodes).forEach((node) => {
+      const messages = [
+        ...node.messages,
+        ...Object.values(node.messageRevisions ?? {}).flatMap((group) =>
+          group.variants.map((variant) => variant.assistantMessage),
+        ),
+      ];
+      messages.forEach((message) => {
+        if (message.role !== "assistant" || !message.pending || !message.requestId) return;
+        pending.set(message.id, {
+          chatId: chat.id,
+          nodeId: node.id,
+          assistantId: message.id,
+          requestId: message.requestId,
+        });
+      });
+    });
+  });
+  return [...pending.values()];
+}
+
+function makePendingAssistant(): Message & { requestId: string } {
+  return {
+    ...makeMessage("assistant", ""),
+    pending: true,
+    requestId: newId(),
+  };
+}
+
 function BranchTree({
   chat,
   parentId,
@@ -136,17 +222,13 @@ function BranchTree({
   );
 }
 
-async function modelRequest(
-  payload: unknown,
+async function readGenerationStream(
+  response: Response,
   onDelta: (delta: string) => void,
-): Promise<string> {
-  const response = await fetch("/api/respond", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  onSnapshot: (content: string) => void,
+): Promise<GenerationResult> {
   if (!response.ok) {
-    const data = (await response.json()) as ApiError;
+    const data = (await response.json().catch(() => ({}))) as ApiError;
     throw new Error(data.error ?? "The model request failed");
   }
   if (!response.body) throw new Error("The browser could not read the response stream");
@@ -156,17 +238,30 @@ async function modelRequest(
   let buffer = "";
   let content = "";
   let streamError: string | null = null;
+  let terminal = false;
+  let stopped = false;
 
   const consumeLine = (line: string) => {
     if (!line.trim()) return;
     const event = JSON.parse(line) as
+      | { type: "snapshot"; content: string }
       | { type: "delta"; delta: string }
       | { type: "done" }
+      | { type: "stopped" }
       | { type: "error"; error: string };
-    if (event.type === "delta") {
+    if (event.type === "snapshot") {
+      content = event.content;
+      onSnapshot(content);
+    } else if (event.type === "delta") {
       content += event.delta;
       onDelta(event.delta);
+    } else if (event.type === "done") {
+      terminal = true;
+    } else if (event.type === "stopped") {
+      terminal = true;
+      stopped = true;
     } else if (event.type === "error") {
+      terminal = true;
       streamError = event.error;
     }
   };
@@ -181,8 +276,38 @@ async function modelRequest(
   }
   consumeLine(buffer);
   if (streamError) throw new Error(streamError);
-  if (!content) throw new Error("The model returned no text");
-  return content;
+  if (!terminal) throw new Error("The response stream disconnected");
+  if (!content && !stopped) throw new Error("The model returned no text");
+  return { content, stopped };
+}
+
+async function modelRequest(
+  requestId: string,
+  payload: unknown,
+  onDelta: (delta: string) => void,
+  onSnapshot: (content: string) => void,
+  signal?: AbortSignal,
+): Promise<GenerationResult> {
+  const response = await fetch("/api/respond", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...(payload as object), requestId }),
+    signal,
+  });
+  return readGenerationStream(response, onDelta, onSnapshot);
+}
+
+async function resumeModelRequest(
+  requestId: string,
+  onDelta: (delta: string) => void,
+  onSnapshot: (content: string) => void,
+  signal?: AbortSignal,
+): Promise<GenerationResult> {
+  const response = await fetch(
+    `/api/respond/${encodeURIComponent(requestId)}/stream`,
+    { signal },
+  );
+  return readGenerationStream(response, onDelta, onSnapshot);
 }
 
 function SelectionToolbar({
@@ -419,6 +544,10 @@ export default function App() {
   const [renamingChat, setRenamingChat] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
   const [focusMaximized, setFocusMaximized] = useState(false);
+  const responseControllers = useRef(new Map<string, AbortController>());
+  const workspaceRef = useRef(workspace);
+  const historyAction = useRef<"push" | "replace">("replace");
+  workspaceRef.current = workspace;
 
   const activeChat = workspace.chats.find((chat) => chat.id === workspace.activeChatId) ?? null;
   const rootNode = activeChat ? activeChat.nodes[activeChat.rootId] : null;
@@ -435,14 +564,73 @@ export default function App() {
         return (await response.json()) as WorkspaceState;
       })
       .then((state) => {
-        setWorkspace(state);
+        const requestedView = readViewLocation();
+        const chat = requestedView.chatId
+          ? state.chats.find((item) => item.id === requestedView.chatId) ?? null
+          : state.chats.find((item) => item.id === state.activeChatId) ?? null;
+        const requestedNode =
+          chat && requestedView.nodeId && chat.nodes[requestedView.nodeId]
+            ? requestedView.nodeId
+            : chat?.rootId ?? null;
+        const nextState = { ...state, activeChatId: chat?.id ?? null };
+        workspaceRef.current = nextState;
+        setWorkspace(nextState);
         setDrawerWidth(state.settings.focusDrawerWidth ?? 440);
-        const chat = state.chats.find((item) => item.id === state.activeChatId);
-        setActiveNodeId(chat?.rootId ?? null);
+        setActiveNodeId(requestedNode);
+        setFocusMaximized(
+          Boolean(chat && requestedNode !== chat.rootId && requestedView.maximized),
+        );
       })
       .catch(() => setWorkspace(DEFAULT_STATE))
       .finally(() => setLoaded(true));
   }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    const applyLocation = () => {
+      const requestedView = readViewLocation();
+      const state = workspaceRef.current;
+      const chat = requestedView.chatId
+        ? state.chats.find((item) => item.id === requestedView.chatId) ?? null
+        : null;
+      const nodeId =
+        chat && requestedView.nodeId && chat.nodes[requestedView.nodeId]
+          ? requestedView.nodeId
+          : chat?.rootId ?? null;
+      historyAction.current = "replace";
+      setWorkspace((current) => ({ ...current, activeChatId: chat?.id ?? null }));
+      setActiveNodeId(nodeId);
+      setFocusMaximized(Boolean(chat && nodeId !== chat.rootId && requestedView.maximized));
+      setDraft(null);
+      setSelection(null);
+      setChatMenuOpen(false);
+      setBranchMenuOpen(false);
+    };
+    window.addEventListener("popstate", applyLocation);
+    return () => window.removeEventListener("popstate", applyLocation);
+  }, [loaded]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    const url = viewUrl(activeChat, activeNode?.id ?? null, focusMaximized);
+    const currentUrl = `${window.location.pathname}${window.location.search}`;
+    const method = historyAction.current;
+    historyAction.current = "replace";
+    if (url !== currentUrl) {
+      const state = {
+        chatId: activeChat?.id ?? null,
+        nodeId: activeNode?.id ?? null,
+        maximized: Boolean(sideNode && focusMaximized),
+      };
+      if (method === "push") window.history.pushState(state, "", url);
+      else window.history.replaceState(state, "", url);
+    }
+    document.title = activeChat
+      ? sideNode
+        ? `${sideNode.title} — ${activeChat.title} · Locus`
+        : `${activeChat.title} · Locus`
+      : "Locus";
+  }, [loaded, activeChat?.id, activeChat?.title, activeNode?.id, activeNode?.title, focusMaximized]);
 
   useEffect(() => {
     fetch("/api/api-key")
@@ -498,17 +686,37 @@ export default function App() {
     }));
   };
 
-  const finishAssistant = (
+  const updateAssistantMessage = (
     chatId: string,
     nodeId: string,
     assistantId: string,
-    content: string,
-    error = false,
+    update: (message: Message) => Message,
+    touchChat = false,
   ) => {
     updateChat(chatId, (chat) => {
       const node = chat.nodes[nodeId];
       if (!node) return chat;
-      const updatedAt = timestamp();
+      let changed = false;
+      const messages = node.messages.map((message) => {
+        if (message.id !== assistantId) return message;
+        changed = true;
+        return update(message);
+      });
+      const messageRevisions = Object.fromEntries(
+        Object.entries(node.messageRevisions ?? {}).map(([groupId, group]) => [
+          groupId,
+          {
+            ...group,
+            variants: group.variants.map((variant) => {
+              if (variant.assistantMessage.id !== assistantId) return variant;
+              changed = true;
+              return { ...variant, assistantMessage: update(variant.assistantMessage) };
+            }),
+          },
+        ]),
+      );
+      if (!changed) return chat;
+      const updatedAt = touchChat ? timestamp() : chat.updatedAt;
       return {
         ...chat,
         updatedAt,
@@ -516,16 +724,29 @@ export default function App() {
           ...chat.nodes,
           [nodeId]: {
             ...node,
-            updatedAt,
-            messages: node.messages.map((message) =>
-              message.id === assistantId
-                ? { ...message, content, pending: false, error }
-                : message,
-            ),
+            updatedAt: touchChat ? updatedAt : node.updatedAt,
+            messages,
+            messageRevisions,
           },
         },
       };
     });
+  };
+
+  const finishAssistant = (
+    chatId: string,
+    nodeId: string,
+    assistantId: string,
+    content: string,
+    error = false,
+  ) => {
+    updateAssistantMessage(
+      chatId,
+      nodeId,
+      assistantId,
+      (message) => ({ ...message, content, pending: false, error, stopped: false }),
+      true,
+    );
   };
 
   const appendAssistantDelta = (
@@ -534,24 +755,37 @@ export default function App() {
     assistantId: string,
     delta: string,
   ) => {
-    updateChat(chatId, (chat) => {
-      const node = chat.nodes[nodeId];
-      if (!node) return chat;
-      return {
-        ...chat,
-        nodes: {
-          ...chat.nodes,
-          [nodeId]: {
-            ...node,
-            messages: node.messages.map((message) =>
-              message.id === assistantId
-                ? { ...message, content: `${message.content}${delta}` }
-                : message,
-            ),
-          },
-        },
-      };
-    });
+    updateAssistantMessage(chatId, nodeId, assistantId, (message) => ({
+      ...message,
+      content: `${message.content}${delta}`,
+    }));
+  };
+
+  const replaceAssistantContent = (
+    chatId: string,
+    nodeId: string,
+    assistantId: string,
+    content: string,
+  ) => {
+    updateAssistantMessage(chatId, nodeId, assistantId, (message) => ({
+      ...message,
+      content,
+    }));
+  };
+
+  const markAssistantStopped = (chatId: string, nodeId: string, assistantId: string) => {
+    updateAssistantMessage(
+      chatId,
+      nodeId,
+      assistantId,
+      (message) => ({
+        ...message,
+        pending: false,
+        error: false,
+        stopped: true,
+      }),
+      true,
+    );
   };
 
   const askModel = async (
@@ -559,10 +793,14 @@ export default function App() {
     nodeId: string,
     userMessage: Message,
     assistantId: string,
+    requestId: string,
     anchor?: HighlightAnchor,
   ) => {
+    const controller = new AbortController();
+    responseControllers.current.set(assistantId, controller);
     try {
-      const content = await modelRequest(
+      const result = await modelRequest(
+        requestId,
         {
           model: workspace.settings.model,
           reasoningEffort: workspace.settings.reasoningEffort,
@@ -572,9 +810,14 @@ export default function App() {
           anchor,
         },
         (delta) => appendAssistantDelta(chat.id, nodeId, assistantId, delta),
+        (content) => replaceAssistantContent(chat.id, nodeId, assistantId, content),
+        controller.signal,
       );
-      finishAssistant(chat.id, nodeId, assistantId, content);
+      if (controller.signal.aborted) return;
+      if (result.stopped) markAssistantStopped(chat.id, nodeId, assistantId);
+      else finishAssistant(chat.id, nodeId, assistantId, result.content);
     } catch (error) {
+      if (controller.signal.aborted) return;
       finishAssistant(
         chat.id,
         nodeId,
@@ -582,17 +825,227 @@ export default function App() {
         error instanceof Error ? error.message : "The request failed",
         true,
       );
+    } finally {
+      if (responseControllers.current.get(assistantId) === controller) {
+        responseControllers.current.delete(assistantId);
+      }
     }
   };
 
+  const stopResponse = async (nodeId: string, assistantId: string) => {
+    if (!activeChat) return;
+    const node = activeChat.nodes[nodeId];
+    const assistant = node ? assistantMessageById(node, assistantId) : undefined;
+    if (!assistant?.requestId) {
+      window.alert("This response predates resumable requests and cannot be stopped remotely.");
+      return;
+    }
+    try {
+      const response = await fetch(
+        `/api/respond/${encodeURIComponent(assistant.requestId)}/abort`,
+        { method: "POST" },
+      );
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({}))) as ApiError;
+        throw new Error(data.error ?? "The server could not stop this response");
+      }
+      responseControllers.current.get(assistantId)?.abort();
+      markAssistantStopped(activeChat.id, nodeId, assistantId);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "The response could not be stopped");
+    }
+  };
+
+  const askMessageRevision = async (
+    chat: ChatTree,
+    nodeId: string,
+    revisionGroupId: string,
+    userMessage: Message,
+    assistantMessage: Message,
+  ) => {
+    if (!assistantMessage.requestId) return;
+    const controller = new AbortController();
+    responseControllers.current.set(assistantMessage.id, controller);
+    try {
+      const result = await modelRequest(
+        assistantMessage.requestId,
+        {
+          model: workspace.settings.model,
+          reasoningEffort: workspace.settings.reasoningEffort,
+          customInstructions: workspace.settings.customInstructions,
+          context: contextBeforeMessage(chat, nodeId, revisionGroupId),
+          message: userMessage.content,
+        },
+        (delta) => appendAssistantDelta(chat.id, nodeId, assistantMessage.id, delta),
+        (content) => replaceAssistantContent(chat.id, nodeId, assistantMessage.id, content),
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      if (result.stopped) markAssistantStopped(chat.id, nodeId, assistantMessage.id);
+      else finishAssistant(chat.id, nodeId, assistantMessage.id, result.content);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      finishAssistant(
+        chat.id,
+        nodeId,
+        assistantMessage.id,
+        error instanceof Error ? error.message : "The request failed",
+        true,
+      );
+    } finally {
+      if (responseControllers.current.get(assistantMessage.id) === controller) {
+        responseControllers.current.delete(assistantMessage.id);
+      }
+    }
+  };
+
+  const resumeGeneration = async (pending: PendingGeneration) => {
+    const controller = new AbortController();
+    responseControllers.current.set(pending.assistantId, controller);
+    try {
+      const result = await resumeModelRequest(
+        pending.requestId,
+        (delta) =>
+          appendAssistantDelta(pending.chatId, pending.nodeId, pending.assistantId, delta),
+        (content) =>
+          replaceAssistantContent(pending.chatId, pending.nodeId, pending.assistantId, content),
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      if (result.stopped) {
+        markAssistantStopped(pending.chatId, pending.nodeId, pending.assistantId);
+      } else {
+        finishAssistant(
+          pending.chatId,
+          pending.nodeId,
+          pending.assistantId,
+          result.content,
+        );
+      }
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      finishAssistant(
+        pending.chatId,
+        pending.nodeId,
+        pending.assistantId,
+        error instanceof Error ? error.message : "The request failed",
+        true,
+      );
+    } finally {
+      if (responseControllers.current.get(pending.assistantId) === controller) {
+        responseControllers.current.delete(pending.assistantId);
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!loaded) return;
+    pendingGenerations(workspace).forEach((pending) => {
+      if (!responseControllers.current.has(pending.assistantId)) {
+        void resumeGeneration(pending);
+      }
+    });
+  }, [loaded, workspace.chats]);
+
+  const editUserMessage = (nodeId: string, revisionGroupId: string, content: string) => {
+    if (!activeChat) return;
+    const node = activeChat.nodes[nodeId];
+    if (!node) return;
+    const userIndex = node.messages.findIndex(
+      (message) => message.id === revisionGroupId && message.role === "user",
+    );
+    const originalUser = node.messages[userIndex];
+    const originalAssistant = node.messages[userIndex + 1];
+    if (!originalUser || originalAssistant?.role !== "assistant") return;
+
+    const existingGroup = node.messageRevisions?.[revisionGroupId];
+    const baseVariantId = newId();
+    const baseVariants = existingGroup?.variants ?? [
+      {
+        id: baseVariantId,
+        userMessage: { ...originalUser },
+        assistantMessage: { ...originalAssistant },
+      },
+    ];
+    const revisionId = newId();
+    const userMessage = makeMessage("user", content);
+    const assistantMessage = makePendingAssistant();
+    const group: MessageRevisionGroup = {
+      userMessageId: revisionGroupId,
+      assistantMessageId: originalAssistant.id,
+      activeVariantId: revisionId,
+      variants: [
+        ...baseVariants,
+        { id: revisionId, userMessage, assistantMessage },
+      ],
+    };
+    const updatedAt = timestamp();
+    const nextChat: ChatTree = {
+      ...activeChat,
+      updatedAt,
+      nodes: {
+        ...activeChat.nodes,
+        [nodeId]: {
+          ...node,
+          updatedAt,
+          messageRevisions: {
+            ...node.messageRevisions,
+            [revisionGroupId]: group,
+          },
+        },
+      },
+    };
+    setWorkspace((current) => ({
+      ...current,
+      chats: current.chats.map((chat) => (chat.id === nextChat.id ? nextChat : chat)),
+    }));
+    void askMessageRevision(
+      nextChat,
+      nodeId,
+      revisionGroupId,
+      userMessage,
+      assistantMessage,
+    );
+  };
+
+  const switchMessageRevision = (
+    nodeId: string,
+    revisionGroupId: string,
+    variantId: string,
+  ) => {
+    if (!activeChat) return;
+    updateChat(activeChat.id, (chat) => {
+      const node = chat.nodes[nodeId];
+      const group = node?.messageRevisions?.[revisionGroupId];
+      if (!node || !group || !group.variants.some((variant) => variant.id === variantId)) {
+        return chat;
+      }
+      return {
+        ...chat,
+        updatedAt: timestamp(),
+        nodes: {
+          ...chat.nodes,
+          [nodeId]: {
+            ...node,
+            messageRevisions: {
+              ...node.messageRevisions,
+              [revisionGroupId]: { ...group, activeVariantId: variantId },
+            },
+          },
+        },
+      };
+    });
+  };
+
   const createChat = (mode: "ask" | "import", content: string, suppliedTitle: string) => {
+    historyAction.current = "push";
     const createdAt = timestamp();
     const rootId = newId();
     const chatId = newId();
     const userMessage = makeMessage(mode === "import" ? "source" : "user", content);
-    const assistantMessage: Message | null =
+    const assistantMessage =
       mode === "ask"
-        ? { ...makeMessage("assistant", ""), pending: true }
+        ? makePendingAssistant()
         : null;
     const title = suppliedTitle || titleFrom(content, "New study");
     const root: ThreadNode = {
@@ -618,7 +1071,15 @@ export default function App() {
     }));
     setActiveNodeId(rootId);
     setDraft(null);
-    if (assistantMessage) void askModel(chat, rootId, userMessage, assistantMessage.id);
+    if (assistantMessage) {
+      void askModel(
+        chat,
+        rootId,
+        userMessage,
+        assistantMessage.id,
+        assistantMessage.requestId,
+      );
+    }
   };
 
   const sendToThread = (nodeId: string, content: string) => {
@@ -626,7 +1087,7 @@ export default function App() {
     const node = activeChat.nodes[nodeId];
     if (!node) return;
     const userMessage = makeMessage("user", content);
-    const assistantMessage: Message = { ...makeMessage("assistant", ""), pending: true };
+    const assistantMessage = makePendingAssistant();
     const updatedAt = timestamp();
     const nextChat: ChatTree = {
       ...activeChat,
@@ -644,11 +1105,19 @@ export default function App() {
       ...current,
       chats: current.chats.map((chat) => (chat.id === nextChat.id ? nextChat : chat)),
     }));
-    void askModel(nextChat, nodeId, userMessage, assistantMessage.id, node.anchor);
+    void askModel(
+      nextChat,
+      nodeId,
+      userMessage,
+      assistantMessage.id,
+      assistantMessage.requestId,
+      node.anchor,
+    );
   };
 
   const beginElaboration = (request: string) => {
     if (!activeChat || !draft) return;
+    historyAction.current = "push";
     const parent = activeChat.nodes[draft.sourceNodeId];
     if (!parent) return;
     const createdAt = timestamp();
@@ -660,7 +1129,7 @@ export default function App() {
       blockIndex: draft.blockIndex,
     };
     const userMessage = makeMessage("user", request);
-    const assistantMessage: Message = { ...makeMessage("assistant", ""), pending: true };
+    const assistantMessage = makePendingAssistant();
     const child: ThreadNode = {
       id: childId,
       parentId: parent.id,
@@ -683,7 +1152,14 @@ export default function App() {
     setDraft(null);
     setSelection(null);
     window.getSelection()?.removeAllRanges();
-    void askModel(nextChat, childId, userMessage, assistantMessage.id, anchor);
+    void askModel(
+      nextChat,
+      childId,
+      userMessage,
+      assistantMessage.id,
+      assistantMessage.requestId,
+      anchor,
+    );
   };
 
   const saveDrawerWidth = (width: number) => {
@@ -767,6 +1243,7 @@ export default function App() {
 
   const deleteActiveChat = () => {
     if (!activeChat || !window.confirm(`Delete “${activeChat.title}”?`)) return;
+    historyAction.current = "push";
     setWorkspace((current) => ({
       ...current,
       activeChatId: null,
@@ -789,6 +1266,7 @@ export default function App() {
   }, [search, workspace.chats]);
 
   const openChat = (chat: ChatTree) => {
+    historyAction.current = "push";
     setWorkspace((current) => ({ ...current, activeChatId: chat.id }));
     setActiveNodeId(chat.rootId);
     setDraft(null);
@@ -801,6 +1279,7 @@ export default function App() {
   };
 
   const startNew = (mode: "ask" | "import") => {
+    historyAction.current = "push";
     setNewMode(mode);
     setWorkspace((current) => ({ ...current, activeChatId: null }));
     setActiveNodeId(null);
@@ -1163,6 +1642,7 @@ export default function App() {
                           activeNodeId={activeNodeId}
                           root
                           onOpen={(nodeId) => {
+                            historyAction.current = "push";
                             setActiveNodeId(nodeId);
                             setDraft(null);
                             setSelection(null);
@@ -1242,11 +1722,19 @@ export default function App() {
             node={rootNode}
             onSelect={setSelection}
             onOpenElaboration={(id) => {
+              historyAction.current = "push";
               setActiveNodeId(id);
               setDraft(null);
               setFocusMaximized(false);
             }}
             onSend={(message) => sendToThread(rootNode.id, message)}
+            onStop={(assistantId) => stopResponse(rootNode.id, assistantId)}
+            onEditMessage={(revisionGroupId, content) =>
+              editUserMessage(rootNode.id, revisionGroupId, content)
+            }
+            onSwitchMessageRevision={(revisionGroupId, variantId) =>
+              switchMessageRevision(rootNode.id, revisionGroupId, variantId)
+            }
             composerInsertion={
               composerInsertion?.nodeId === rootNode.id ? composerInsertion : undefined
             }
@@ -1281,7 +1769,11 @@ export default function App() {
             {draftPath.map((node, index) => (
               <span key={node.id}>
                 {index > 0 && <ChevronRight size={12} />}
-                <button type="button" onClick={() => { setActiveNodeId(node.id); setDraft(null); }}>
+                <button type="button" onClick={() => {
+                  historyAction.current = "push";
+                  setActiveNodeId(node.id);
+                  setDraft(null);
+                }}>
                   {index === 0 ? "Main" : node.title}
                 </button>
               </span>
@@ -1335,7 +1827,10 @@ export default function App() {
                 type="button"
                 title={focusMaximized ? "Restore split view" : "Maximize focused thread"}
                 aria-label={focusMaximized ? "Restore split view" : "Maximize focused thread"}
-                onClick={() => setFocusMaximized((maximized) => !maximized)}
+                onClick={() => {
+                  historyAction.current = "push";
+                  setFocusMaximized((maximized) => !maximized);
+                }}
               >
                 {focusMaximized ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
               </button>
@@ -1344,6 +1839,7 @@ export default function App() {
                 type="button"
                 aria-label="Close focused thread"
                 onClick={() => {
+                  historyAction.current = "push";
                   setActiveNodeId(activeChat.rootId);
                   setFocusMaximized(false);
                 }}
@@ -1359,7 +1855,11 @@ export default function App() {
                 {node.id === sideNode.id ? (
                   <strong>{node.title}</strong>
                 ) : (
-                  <button type="button" onClick={() => setActiveNodeId(node.id)}>
+                  <button type="button" onClick={() => {
+                    historyAction.current = "push";
+                    setActiveNodeId(node.id);
+                    setFocusMaximized(false);
+                  }}>
                     {index === 0 ? "Main" : node.title}
                   </button>
                 )}
@@ -1377,8 +1877,19 @@ export default function App() {
             node={sideNode}
             side
             onSelect={setSelection}
-            onOpenElaboration={(id) => setActiveNodeId(id)}
+            onOpenElaboration={(id) => {
+              historyAction.current = "push";
+              setActiveNodeId(id);
+              setFocusMaximized(false);
+            }}
             onSend={(message) => sendToThread(sideNode.id, message)}
+            onStop={(assistantId) => stopResponse(sideNode.id, assistantId)}
+            onEditMessage={(revisionGroupId, content) =>
+              editUserMessage(sideNode.id, revisionGroupId, content)
+            }
+            onSwitchMessageRevision={(revisionGroupId, variantId) =>
+              switchMessageRevision(sideNode.id, revisionGroupId, variantId)
+            }
             composerInsertion={
               composerInsertion?.nodeId === sideNode.id ? composerInsertion : undefined
             }

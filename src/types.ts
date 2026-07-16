@@ -8,6 +8,23 @@ export interface Message {
   createdAt: string;
   pending?: boolean;
   error?: boolean;
+  stopped?: boolean;
+  requestId?: string;
+  revisionGroupId?: string;
+  revisionVariantId?: string;
+}
+
+export interface MessageRevisionVariant {
+  id: string;
+  userMessage: Message;
+  assistantMessage: Message;
+}
+
+export interface MessageRevisionGroup {
+  userMessageId: string;
+  assistantMessageId: string;
+  activeVariantId: string;
+  variants: MessageRevisionVariant[];
 }
 
 export interface HighlightAnchor {
@@ -23,6 +40,7 @@ export interface ThreadNode {
   title: string;
   anchor?: HighlightAnchor;
   messages: Message[];
+  messageRevisions?: Record<string, MessageRevisionGroup>;
   createdAt: string;
   updatedAt: string;
 }
