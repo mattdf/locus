@@ -418,6 +418,77 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+.theme-toggle-button {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 15px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 7px;
+  color: #69736e;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid rgba(210, 206, 195, 0.62);
+  cursor: pointer;
+}
+
+.theme-toggle-button:hover {
+  color: var(--accent);
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.theme-toggle-button > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.theme-toggle-button small {
+  color: #929994;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.theme-toggle-button strong {
+  margin-top: 2px;
+  color: #46504c;
+  font-size: 10px;
+  font-weight: 620;
+}
+
+.theme-switch {
+  position: relative;
+  display: block;
+  width: 29px;
+  height: 16px;
+  background: #c9cbc4;
+  border-radius: 99px;
+  transition: background 140ms ease;
+}
+
+.theme-switch span {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  background: white;
+  border-radius: 50%;
+  box-shadow: 0 1px 2px rgba(30, 40, 36, 0.2);
+  transition: transform 140ms ease;
+}
+
+.theme-toggle-button[aria-pressed="true"] .theme-switch {
+  background: var(--accent);
+}
+
+.theme-toggle-button[aria-pressed="true"] .theme-switch span {
+  transform: translateX(13px);
+}
+
 .save-status {
   display: flex;
   align-items: center;
@@ -2032,4 +2103,443 @@ body.resizing-drawer {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+.app-shell[data-theme="dark"] {
+  color: #e0e7e3;
+  color-scheme: dark;
+  background: #101412;
+  --ink: #e0e7e3;
+  --muted: #a1aba6;
+  --faint: #78827d;
+  --line: #36403c;
+  --line-soft: #2b332f;
+  --paper: #191e1c;
+  --canvas: #101412;
+  --sidebar: #151a18;
+  --accent: #55b3a4;
+  --accent-dark: #3d9387;
+  --accent-soft: #203a35;
+  --amber: #d4a845;
+  --danger: #df7d6d;
+}
+
+.app-shell[data-theme="dark"] .sidebar {
+  border-right-color: #303835;
+}
+
+.app-shell[data-theme="dark"] .brand small {
+  color: #95a09b;
+  border-color: #3b4440;
+}
+
+.app-shell[data-theme="dark"] .new-button {
+  color: #eef4f1;
+  background: #27312e;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.3);
+}
+
+.app-shell[data-theme="dark"] .new-button:hover {
+  background: #323e3a;
+}
+
+.app-shell[data-theme="dark"] .new-button span,
+.app-shell[data-theme="dark"] .import-button,
+.app-shell[data-theme="dark"] .chat-row,
+.app-shell[data-theme="dark"] .model-select,
+.app-shell[data-theme="dark"] .custom-instructions-button,
+.app-shell[data-theme="dark"] .theme-toggle-button {
+  color: #9aa59f;
+}
+
+.app-shell[data-theme="dark"] .import-button:hover,
+.app-shell[data-theme="dark"] .chat-row:hover,
+.app-shell[data-theme="dark"] .custom-instructions-button:hover,
+.app-shell[data-theme="dark"] .theme-toggle-button:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.app-shell[data-theme="dark"] .search-box {
+  color: #89948f;
+  background: rgba(255, 255, 255, 0.035);
+  border-color: #303835;
+}
+
+.app-shell[data-theme="dark"] .search-box:focus-within {
+  color: var(--accent);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(85, 179, 164, 0.55);
+}
+
+.app-shell[data-theme="dark"] .search-box input,
+.app-shell[data-theme="dark"] .model-select select {
+  color: #d3dcd7;
+}
+
+.app-shell[data-theme="dark"] .list-label,
+.app-shell[data-theme="dark"] .chat-row small,
+.app-shell[data-theme="dark"] .empty-list,
+.app-shell[data-theme="dark"] .model-select small,
+.app-shell[data-theme="dark"] .custom-instructions-button small,
+.app-shell[data-theme="dark"] .theme-toggle-button small,
+.app-shell[data-theme="dark"] .save-status {
+  color: #77817c;
+}
+
+.app-shell[data-theme="dark"] .chat-row.active {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.075);
+  box-shadow: 0 0 0 1px #333c38;
+}
+
+.app-shell[data-theme="dark"] .sidebar__footer,
+.app-shell[data-theme="dark"] .settings-panel .model-select + .model-select,
+.app-shell[data-theme="dark"] .custom-instructions-button,
+.app-shell[data-theme="dark"] .theme-toggle-button,
+.app-shell[data-theme="dark"] .save-status {
+  border-color: #2d3532;
+}
+
+.app-shell[data-theme="dark"] .custom-instructions-button strong,
+.app-shell[data-theme="dark"] .theme-toggle-button strong {
+  color: #c9d2cd;
+}
+
+.app-shell[data-theme="dark"] .theme-switch {
+  background: #3d4642;
+}
+
+.app-shell[data-theme="dark"] .theme-switch span {
+  background: #dfe7e3;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+.app-shell[data-theme="dark"] .pane-header {
+  background: rgba(25, 30, 28, 0.96);
+  border-bottom-color: var(--line-soft);
+}
+
+.app-shell[data-theme="dark"] .pane-header h1,
+.app-shell[data-theme="dark"] .focus-header h2,
+.app-shell[data-theme="dark"] .draft-prompt h3 {
+  color: #e0e7e3;
+}
+
+.app-shell[data-theme="dark"] .branch-stat {
+  color: #9aa49f;
+  background: #222825;
+  border-color: #343d39;
+}
+
+.app-shell[data-theme="dark"] .icon-button,
+.app-shell[data-theme="dark"] .menu-button,
+.app-shell[data-theme="dark"] .mobile-close {
+  color: #98a39e;
+}
+
+.app-shell[data-theme="dark"] .icon-button:hover,
+.app-shell[data-theme="dark"] .menu-button:hover,
+.app-shell[data-theme="dark"] .mobile-close:hover {
+  color: var(--ink);
+  background: #272e2b;
+  border-color: #39423e;
+}
+
+.app-shell[data-theme="dark"] .icon-button.danger:hover {
+  color: var(--danger);
+  background: #382522;
+  border-color: #583630;
+}
+
+.app-shell[data-theme="dark"] .chat-menu {
+  color: #d5ddd9;
+  background: #202623;
+  border-color: #3a433f;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.36);
+}
+
+.app-shell[data-theme="dark"] .chat-menu > button:hover,
+.app-shell[data-theme="dark"] .chat-menu__rename button:hover:not(:disabled) {
+  color: var(--ink);
+  background: #2a322e;
+}
+
+.app-shell[data-theme="dark"] .chat-menu__rename label,
+.app-shell[data-theme="dark"] .chat-menu__rename button {
+  color: #9ba5a0;
+}
+
+.app-shell[data-theme="dark"] .chat-menu__rename input {
+  color: var(--ink);
+  background: #161b19;
+  border-color: #3b4540;
+}
+
+.app-shell[data-theme="dark"] .thread-messages {
+  scrollbar-color: #3a433f transparent;
+}
+
+.app-shell[data-theme="dark"] .message__meta,
+.app-shell[data-theme="dark"] .thinking,
+.app-shell[data-theme="dark"] .streaming-status,
+.app-shell[data-theme="dark"] .selection-tip {
+  color: #7f8984;
+}
+
+.app-shell[data-theme="dark"] .message--user {
+  background: #21332f;
+  border-color: #2d4841;
+}
+
+.app-shell[data-theme="dark"] .message--error {
+  color: #efb5aa;
+  background: #352321;
+  border-color: #573631;
+}
+
+.app-shell[data-theme="dark"] .markdown-message,
+.app-shell[data-theme="dark"] .markdown-message h1,
+.app-shell[data-theme="dark"] .markdown-message h2,
+.app-shell[data-theme="dark"] .markdown-message h3,
+.app-shell[data-theme="dark"] .markdown-message h4,
+.app-shell[data-theme="dark"] .markdown-message strong,
+.app-shell[data-theme="dark"] .markdown-message .katex-display {
+  color: #dce4e0;
+}
+
+.app-shell[data-theme="dark"] .markdown-message h2,
+.app-shell[data-theme="dark"] .markdown-message th,
+.app-shell[data-theme="dark"] .markdown-message td {
+  border-color: #343c38;
+}
+
+.app-shell[data-theme="dark"] .markdown-message blockquote {
+  color: #aab4af;
+  border-left-color: #477268;
+}
+
+.app-shell[data-theme="dark"] .markdown-message code {
+  color: #8fd1c4;
+  background: #23312e;
+}
+
+.app-shell[data-theme="dark"] .markdown-message pre {
+  color: #dce5e1;
+  background: #0f1413;
+  border: 1px solid #2b3430;
+}
+
+.app-shell[data-theme="dark"] .markdown-message pre code {
+  background: transparent;
+}
+
+.app-shell[data-theme="dark"] .markdown-message th {
+  color: #a8b2ad;
+  background: #222825;
+}
+
+.app-shell[data-theme="dark"] .has-linked-elaboration {
+  background: rgba(214, 168, 69, 0.12);
+  border-left-color: rgba(214, 168, 69, 0.55);
+}
+
+.app-shell[data-theme="dark"] .has-linked-elaboration:hover {
+  background: rgba(214, 168, 69, 0.19);
+  border-left-color: rgba(231, 184, 81, 0.75);
+}
+
+.app-shell[data-theme="dark"] .elaboration-links {
+  border-top-color: #3a3c32;
+}
+
+.app-shell[data-theme="dark"] .elaboration-links button {
+  color: #e4c77d;
+  background: #332d20;
+  border-color: #594a28;
+}
+
+.app-shell[data-theme="dark"] .elaboration-links button:hover {
+  color: #f0d99d;
+  background: #403720;
+  border-color: #746035;
+}
+
+.app-shell[data-theme="dark"] .thread-composer-wrap,
+.app-shell[data-theme="dark"] .thread-view--side .thread-composer-wrap {
+  background: rgba(25, 30, 28, 0.97);
+  border-top-color: var(--line-soft);
+}
+
+.app-shell[data-theme="dark"] .composer {
+  background: #202623;
+  border-color: #39423e;
+  box-shadow: 0 2px 9px rgba(0, 0, 0, 0.24);
+}
+
+.app-shell[data-theme="dark"] .composer:focus-within {
+  border-color: rgba(85, 179, 164, 0.65);
+  box-shadow: 0 0 0 3px rgba(85, 179, 164, 0.1);
+}
+
+.app-shell[data-theme="dark"] .composer textarea,
+.app-shell[data-theme="dark"] .title-input,
+.app-shell[data-theme="dark"] .start-card > textarea,
+.app-shell[data-theme="dark"] .settings-modal textarea {
+  color: #dce4e0;
+}
+
+.app-shell[data-theme="dark"] .composer textarea::placeholder,
+.app-shell[data-theme="dark"] .title-input::placeholder,
+.app-shell[data-theme="dark"] .start-card > textarea::placeholder {
+  color: #717b76;
+}
+
+.app-shell[data-theme="dark"] .send-button:disabled {
+  color: #646e69;
+  background: #29302d;
+}
+
+.app-shell[data-theme="dark"] .focus-drawer {
+  background: #171c1a;
+  border-left-color: #303835;
+  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.18);
+}
+
+.app-shell[data-theme="dark"] .focus-header {
+  background: #1d2421;
+  border-bottom-color: #303834;
+}
+
+.app-shell[data-theme="dark"] .breadcrumbs {
+  color: #828c87;
+  background: #191e1c;
+  border-bottom-color: #303734;
+}
+
+.app-shell[data-theme="dark"] .focus-quote {
+  background: #29261d;
+  border-bottom-color: #3d3827;
+}
+
+.app-shell[data-theme="dark"] .focus-quote span,
+.app-shell[data-theme="dark"] .quoted-passage > span {
+  color: #d1ad57;
+}
+
+.app-shell[data-theme="dark"] .focus-quote p {
+  color: #c6ba9b;
+}
+
+.app-shell[data-theme="dark"] .quoted-passage {
+  background: #29261d;
+  border-color: #4a4127;
+}
+
+.app-shell[data-theme="dark"] .quoted-passage blockquote {
+  color: #d0c8b4;
+}
+
+.app-shell[data-theme="dark"] .draft-prompt > p {
+  color: #89938e;
+}
+
+.app-shell[data-theme="dark"] .prompt-suggestions button {
+  color: #9ba59f;
+  border-color: #3a433f;
+}
+
+.app-shell[data-theme="dark"] .prompt-suggestions button:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: #3d6b62;
+}
+
+.app-shell[data-theme="dark"] .new-chat {
+  background-color: #111513;
+  background-image:
+    linear-gradient(rgba(139, 167, 157, 0.055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(139, 167, 157, 0.055) 1px, transparent 1px);
+}
+
+.app-shell[data-theme="dark"] .new-chat__mark {
+  box-shadow: 7px 7px 0 #20312d;
+}
+
+.app-shell[data-theme="dark"] .new-chat h1 {
+  color: #e1e8e4;
+}
+
+.app-shell[data-theme="dark"] .new-chat__lede {
+  color: #a1aba6;
+}
+
+.app-shell[data-theme="dark"] .start-card {
+  background: #1c211f;
+  border-color: #343c38;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.28);
+}
+
+.app-shell[data-theme="dark"] .mode-switch {
+  background: #131816;
+}
+
+.app-shell[data-theme="dark"] .mode-switch button {
+  color: #8f9994;
+}
+
+.app-shell[data-theme="dark"] .mode-switch button.active {
+  color: var(--ink);
+  background: #29302d;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.app-shell[data-theme="dark"] .title-input,
+.app-shell[data-theme="dark"] .start-card__footer {
+  border-color: #303835;
+}
+
+.app-shell[data-theme="dark"] .start-card__footer > span,
+.app-shell[data-theme="dark"] .settings-modal > footer > span {
+  color: #7e8883;
+}
+
+.app-shell[data-theme="dark"] .secondary-button {
+  color: #c9d2cd;
+  background: #222825;
+  border-color: #3b4440;
+}
+
+.app-shell[data-theme="dark"] .secondary-button:hover {
+  color: var(--accent);
+  border-color: #47766c;
+}
+
+.app-shell[data-theme="dark"] .settings-modal-backdrop {
+  background: rgba(4, 7, 6, 0.66);
+}
+
+.app-shell[data-theme="dark"] .settings-modal {
+  background: #1b211e;
+  border-color: #39413d;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
+}
+
+.app-shell[data-theme="dark"] .settings-modal > p {
+  color: #9ba59f;
+}
+
+.app-shell[data-theme="dark"] .settings-modal textarea {
+  background: #131816;
+  border-color: #3a433f;
+}
+
+.app-shell[data-theme="dark"] .new-chat__mobile-header {
+  color: #dce4e0;
+  background: rgba(21, 26, 24, 0.97);
+  border-bottom-color: #2d3532;
+}
+
+.app-shell[data-theme="dark"] .sidebar-scrim {
+  background: rgba(0, 0, 0, 0.56);
 }

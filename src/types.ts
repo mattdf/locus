@@ -46,6 +46,7 @@ export interface WorkspaceState {
     reasoningEffort: ReasoningEffort;
     customInstructions: string;
     focusDrawerWidth: number;
+    theme: "light" | "dark";
   };
 }
 

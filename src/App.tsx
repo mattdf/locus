@@ -9,6 +9,7 @@ import {
   Menu,
   Maximize2,
   Minimize2,
+  Moon,
   MoreHorizontal,
   Pencil,
   Pin,
@@ -17,6 +18,7 @@ import {
   Settings2,
   SlidersHorizontal,
   Sparkles,
+  Sun,
   Trash2,
   X,
 } from "lucide-react";
@@ -56,6 +58,7 @@ const DEFAULT_STATE: WorkspaceState = {
     reasoningEffort: "max",
     customInstructions: "",
     focusDrawerWidth: 440,
+    theme: "light",
   },
 };
 
@@ -126,6 +129,94 @@ async function modelRequest(
   if (streamError) throw new Error(streamError);
   if (!content) throw new Error("The model returned no text");
   return content;
+}
+
+function SelectionToolbar({
+  selection,
+  onElaborate,
+  onDismiss,
+}: {
+  selection: SelectionDraft;
+  onElaborate: () => void;
+  onDismiss: () => void;
+}) {
+  const [rect, setRect] = useState(selection.rect);
+
+  useEffect(() => setRect(selection.rect), [selection]);
+
+  useEffect(() => {
+    let frameId: number | null = null;
+    const syncSelection = () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+      frameId = window.requestAnimationFrame(() => {
+        frameId = null;
+        const liveSelection = window.getSelection();
+        if (!liveSelection || liveSelection.isCollapsed || !liveSelection.rangeCount) {
+          onDismiss();
+          return;
+        }
+
+        const range = liveSelection.getRangeAt(0);
+        if (!range.toString().trim()) {
+          onDismiss();
+          return;
+        }
+
+        const bounds = range.getBoundingClientRect();
+        if (!bounds.width && !bounds.height) {
+          onDismiss();
+          return;
+        }
+
+        setRect({
+          left: bounds.left,
+          top: bounds.top,
+          width: bounds.width,
+          height: bounds.height,
+        });
+      });
+    };
+
+    document.addEventListener("selectionchange", syncSelection);
+    document.addEventListener("scroll", syncSelection, true);
+    window.addEventListener("resize", syncSelection);
+    return () => {
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+      document.removeEventListener("selectionchange", syncSelection);
+      document.removeEventListener("scroll", syncSelection, true);
+      window.removeEventListener("resize", syncSelection);
+    };
+  }, [selection.sourceNodeId, selection.sourceMessageId, selection.quote]);
+
+  return (
+    <div
+      className="selection-toolbar"
+      style={{
+        left: Math.max(116, Math.min(window.innerWidth - 116, rect.left + rect.width / 2)),
+        top: rect.top > 70 ? rect.top - 12 : rect.top + rect.height + 46,
+      }}
+      onMouseDown={(event) => event.preventDefault()}
+    >
+      <span>
+        “{selection.quote.replace(/\s+/g, " ").trim().slice(0, 42)}
+        {selection.quote.trim().length > 42 ? "…" : ""}”
+      </span>
+      <button type="button" onClick={onElaborate}>
+        <CornerUpRight size={14} /> Elaborate
+      </button>
+      <button
+        type="button"
+        className="toolbar-close"
+        aria-label="Dismiss"
+        onClick={() => {
+          window.getSelection()?.removeAllRanges();
+          onDismiss();
+        }}
+      >
+        <X size={13} />
+      </button>
+    </div>
+  );
 }
 
 function NewChatScreen({
@@ -291,6 +382,7 @@ export default function App() {
     const close = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setSelection(null);
+        window.getSelection()?.removeAllRanges();
         setDraft(null);
         setCustomInstructionsOpen(false);
         setChatMenuOpen(false);
@@ -634,6 +726,7 @@ export default function App() {
   return (
     <div
       className={`app-shell ${drawerOpen ? "app-shell--drawer" : ""} ${focusMaximized && sideNode ? "app-shell--focus-maximized" : ""}`}
+      data-theme={workspace.settings.theme}
       style={{ "--focus-drawer-width": `${drawerWidth}px` } as CSSProperties}
     >
       <aside className={`sidebar ${sidebarOpen ? "sidebar--open" : ""}`}>
@@ -767,6 +860,30 @@ export default function App() {
                 </strong>
               </span>
               <ChevronRight size={13} />
+            </button>
+            <button
+              className="theme-toggle-button"
+              type="button"
+              aria-label={
+                workspace.settings.theme === "dark" ? "Use light mode" : "Use dark mode"
+              }
+              aria-pressed={workspace.settings.theme === "dark"}
+              onClick={() =>
+                setWorkspace((current) => ({
+                  ...current,
+                  settings: {
+                    ...current.settings,
+                    theme: current.settings.theme === "dark" ? "light" : "dark",
+                  },
+                }))
+              }
+            >
+              {workspace.settings.theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
+              <span>
+                <small>Appearance</small>
+                <strong>{workspace.settings.theme === "dark" ? "Dark mode" : "Light mode"}</strong>
+              </span>
+              <i className="theme-switch" aria-hidden="true"><span /></i>
             </button>
           </div>
           <div className={`save-status save-status--${saveState}`}>
@@ -1096,29 +1213,15 @@ export default function App() {
       )}
 
       {selection && !draft && (
-        <div
-          className="selection-toolbar"
-          style={{
-            left: Math.max(116, Math.min(window.innerWidth - 116, selection.rect.left + selection.rect.width / 2)),
-            top: selection.rect.top > 70 ? selection.rect.top - 12 : selection.rect.top + selection.rect.height + 46,
+        <SelectionToolbar
+          selection={selection}
+          onDismiss={() => setSelection(null)}
+          onElaborate={() => {
+            setDraft(selection);
+            setSelection(null);
+            setFocusMaximized(false);
           }}
-          onMouseDown={(event) => event.preventDefault()}
-        >
-          <span>“{selection.quote.replace(/\s+/g, " ").trim().slice(0, 42)}{selection.quote.trim().length > 42 ? "…" : ""}”</span>
-          <button
-            type="button"
-            onClick={() => {
-              setDraft(selection);
-              setSelection(null);
-              setFocusMaximized(false);
-            }}
-          >
-            <CornerUpRight size={14} /> Elaborate
-          </button>
-          <button type="button" className="toolbar-close" aria-label="Dismiss" onClick={() => setSelection(null)}>
-            <X size={13} />
-          </button>
-        </div>
+        />
       )}
     </div>
   );
