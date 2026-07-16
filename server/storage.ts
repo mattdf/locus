@@ -14,6 +14,7 @@ export const emptyState = (): WorkspaceState => ({
     reasoningEffort: "max",
     customInstructions: "",
     focusDrawerWidth: 440,
+    sidebarCollapsed: false,
     theme: "light",
   },
 });
@@ -35,6 +36,7 @@ function normalizeState(state: WorkspaceState): WorkspaceState {
         typeof state.settings?.focusDrawerWidth === "number"
           ? Math.min(720, Math.max(320, state.settings.focusDrawerWidth))
           : 440,
+      sidebarCollapsed: state.settings?.sidebarCollapsed === true,
       theme: state.settings?.theme === "dark" ? "dark" : "light",
     },
   };

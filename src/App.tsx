@@ -11,6 +11,7 @@ import {
   Minimize2,
   Moon,
   MoreHorizontal,
+  PanelLeftClose,
   Pencil,
   Pin,
   Plus,
@@ -59,6 +60,7 @@ const DEFAULT_STATE: WorkspaceState = {
     reasoningEffort: "max",
     customInstructions: "",
     focusDrawerWidth: 440,
+    sidebarCollapsed: false,
     theme: "light",
   },
 };
@@ -280,6 +282,14 @@ function NewChatScreen({
 
   return (
     <main className="new-chat">
+      <button
+        className="new-chat__sidebar-button"
+        type="button"
+        aria-label="Open studies"
+        onClick={onOpenSidebar}
+      >
+        <Menu size={19} />
+      </button>
       <header className="new-chat__mobile-header">
         <button
           className="menu-button"
@@ -760,6 +770,25 @@ export default function App() {
     setFocusMaximized(false);
   };
 
+  const openSidebar = () => {
+    if (window.matchMedia("(min-width: 1021px)").matches) {
+      setWorkspace((current) => ({
+        ...current,
+        settings: { ...current.settings, sidebarCollapsed: false },
+      }));
+      return;
+    }
+    setSidebarOpen(true);
+  };
+
+  const collapseSidebar = () => {
+    setSidebarOpen(false);
+    setWorkspace((current) => ({
+      ...current,
+      settings: { ...current.settings, sidebarCollapsed: true },
+    }));
+  };
+
   if (!loaded) {
     return (
       <div className="loading-screen">
@@ -790,7 +819,7 @@ export default function App() {
 
   return (
     <div
-      className={`app-shell ${drawerOpen ? "app-shell--drawer" : ""} ${focusMaximized && sideNode ? "app-shell--focus-maximized" : ""}`}
+      className={`app-shell ${workspace.settings.sidebarCollapsed ? "app-shell--sidebar-collapsed" : ""} ${drawerOpen ? "app-shell--drawer" : ""} ${focusMaximized && sideNode ? "app-shell--focus-maximized" : ""}`}
       data-theme={workspace.settings.theme}
       style={{ "--focus-drawer-width": `${drawerWidth}px` } as CSSProperties}
     >
@@ -800,6 +829,15 @@ export default function App() {
             <div className="brand-mark"><GitBranch size={18} /></div>
             <span>Locus</span>
             <small>LOCAL</small>
+            <button
+              className="sidebar-collapse-button"
+              type="button"
+              title="Collapse sidebar"
+              aria-label="Collapse studies sidebar"
+              onClick={collapseSidebar}
+            >
+              <PanelLeftClose size={15} />
+            </button>
           </div>
           <button className="mobile-close" type="button" aria-label="Close menu" onClick={() => setSidebarOpen(false)}>
             <X size={18} />
@@ -964,7 +1002,7 @@ export default function App() {
         <NewChatScreen
           initialMode={newMode}
           onCreate={createChat}
-          onOpenSidebar={() => setSidebarOpen(true)}
+          onOpenSidebar={openSidebar}
         />
       ) : (
         <main className="main-pane">
@@ -981,7 +1019,7 @@ export default function App() {
             />
           )}
           <header className="pane-header">
-            <button className="menu-button" type="button" aria-label="Open studies" onClick={() => setSidebarOpen(true)}>
+            <button className="menu-button" type="button" aria-label="Open studies" onClick={openSidebar}>
               <Menu size={19} />
             </button>
             <div className="pane-header__title">
@@ -1114,7 +1152,7 @@ export default function App() {
               className="menu-button focus-menu-button"
               type="button"
               aria-label="Open studies"
-              onClick={() => setSidebarOpen(true)}
+              onClick={openSidebar}
             >
               <Menu size={19} />
             </button>
@@ -1172,7 +1210,7 @@ export default function App() {
               className="menu-button focus-menu-button"
               type="button"
               aria-label="Open studies"
-              onClick={() => setSidebarOpen(true)}
+              onClick={openSidebar}
             >
               <Menu size={19} />
             </button>

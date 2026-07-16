@@ -139,6 +139,26 @@ a:focus-visible {
   letter-spacing: 0.12em;
 }
 
+.sidebar-collapse-button {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  flex: 0 0 auto;
+  place-items: center;
+  padding: 0;
+  color: #6c7671;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.sidebar-collapse-button:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.38);
+  border-color: #d2cec3;
+}
+
 .brand-mark {
   display: grid;
   width: 29px;
@@ -1716,6 +1736,30 @@ body.resizing-drawer {
   display: none;
 }
 
+.new-chat__sidebar-button {
+  position: fixed;
+  z-index: 10;
+  top: 16px;
+  left: 18px;
+  display: none;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  padding: 0;
+  color: #6c7671;
+  background: rgba(251, 250, 246, 0.88);
+  border: 1px solid #e2ded4;
+  border-radius: 7px;
+  box-shadow: 0 2px 8px rgba(35, 44, 41, 0.07);
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+}
+
+.new-chat__sidebar-button:hover {
+  color: var(--ink);
+  background: #f0eee8;
+}
+
 .new-chat__inner {
   width: min(100%, 690px);
   padding: 24px 0 48px;
@@ -2085,6 +2129,10 @@ body.resizing-drawer {
     display: grid;
   }
 
+  .sidebar-collapse-button {
+    display: none;
+  }
+
   .menu-button {
     display: grid;
   }
@@ -2145,6 +2193,45 @@ body.resizing-drawer {
   .app-shell--focus-maximized .focus-drawer {
     width: 100%;
     grid-column: auto;
+  }
+}
+
+@media (min-width: 1021px) {
+  .app-shell--sidebar-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-shell--sidebar-collapsed.app-shell--drawer {
+    grid-template-columns:
+      minmax(420px, 1fr)
+      min(var(--focus-drawer-width, 440px), calc(100vw - 420px));
+  }
+
+  .app-shell--sidebar-collapsed.app-shell--drawer.app-shell--focus-maximized {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .app-shell--sidebar-collapsed .sidebar {
+    display: none;
+  }
+
+  .app-shell--sidebar-collapsed .main-pane,
+  .app-shell--sidebar-collapsed .new-chat {
+    grid-column: 1;
+  }
+
+  .app-shell--sidebar-collapsed .focus-drawer {
+    grid-column: 2;
+  }
+
+  .app-shell--sidebar-collapsed.app-shell--focus-maximized .focus-drawer {
+    grid-column: 1;
+  }
+
+  .app-shell--sidebar-collapsed .pane-header > .menu-button,
+  .app-shell--sidebar-collapsed.app-shell--focus-maximized .focus-menu-button,
+  .app-shell--sidebar-collapsed .new-chat__sidebar-button {
+    display: grid;
   }
 }
 
@@ -2280,6 +2367,16 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .brand small {
   color: #95a09b;
   border-color: #3b4440;
+}
+
+.app-shell[data-theme="dark"] .sidebar-collapse-button {
+  color: #98a39e;
+}
+
+.app-shell[data-theme="dark"] .sidebar-collapse-button:hover {
+  color: var(--ink);
+  background: #272e2b;
+  border-color: #39423e;
 }
 
 .app-shell[data-theme="dark"] .new-button {
@@ -2745,6 +2842,17 @@ body.resizing-drawer {
   color: #dce4e0;
   background: rgba(21, 26, 24, 0.97);
   border-bottom-color: #2d3532;
+}
+
+.app-shell[data-theme="dark"] .new-chat__sidebar-button {
+  color: #98a39e;
+  background: rgba(29, 36, 33, 0.9);
+  border-color: #39423e;
+}
+
+.app-shell[data-theme="dark"] .new-chat__sidebar-button:hover {
+  color: var(--ink);
+  background: #272e2b;
 }
 
 .app-shell[data-theme="dark"] .sidebar-scrim {
