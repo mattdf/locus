@@ -965,6 +965,33 @@ a:focus-visible {
   cursor: pointer;
 }
 
+.copy-response-button {
+  display: inline-flex;
+  min-height: 23px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  color: #6d7873;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.copy-response-button:hover,
+.copy-response-button--copied {
+  color: var(--accent);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.copy-response-button--failed {
+  color: var(--danger);
+}
+
 .revision-switcher > button:hover:not(:disabled),
 .edit-message-button:hover:not(:disabled) {
   color: var(--accent);
@@ -2810,14 +2837,21 @@ body.resizing-drawer {
 
 .app-shell[data-theme="dark"] .revision-switcher,
 .app-shell[data-theme="dark"] .revision-switcher > button,
-.app-shell[data-theme="dark"] .edit-message-button {
+.app-shell[data-theme="dark"] .edit-message-button,
+.app-shell[data-theme="dark"] .copy-response-button {
   color: #92a09a;
 }
 
 .app-shell[data-theme="dark"] .revision-switcher > button:hover:not(:disabled),
-.app-shell[data-theme="dark"] .edit-message-button:hover:not(:disabled) {
+.app-shell[data-theme="dark"] .edit-message-button:hover:not(:disabled),
+.app-shell[data-theme="dark"] .copy-response-button:hover,
+.app-shell[data-theme="dark"] .copy-response-button--copied {
   color: var(--accent);
   background: rgba(255, 255, 255, 0.07);
+}
+
+.app-shell[data-theme="dark"] .copy-response-button--failed {
+  color: #f0a093;
 }
 
 .app-shell[data-theme="dark"] .message-editor textarea {

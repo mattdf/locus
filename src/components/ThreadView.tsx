@@ -1,7 +1,9 @@
 import {
   BookOpen,
+  Check,
   ChevronLeft,
   ChevronRight,
+  Copy,
   MessageSquareText,
   Pencil,
   Sparkles,
@@ -27,6 +29,25 @@ interface ThreadViewProps {
   onComposerInsertionApplied?: (id: string) => void;
 }
 
+async function writeMarkdownToClipboard(markdown: string): Promise<void> {
+  const activeElement =
+    document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const fallback = document.createElement("textarea");
+  fallback.value = markdown;
+  fallback.setAttribute("readonly", "");
+  fallback.style.cssText =
+    "position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none";
+  document.body.appendChild(fallback);
+  fallback.select();
+  fallback.setSelectionRange(0, fallback.value.length);
+  const copiedSynchronously = document.execCommand("copy");
+  fallback.remove();
+  activeElement?.focus();
+  if (copiedSynchronously) return;
+
+  await navigator.clipboard.writeText(markdown);
+}
+
 export function ThreadView({
   chat,
   node,
@@ -41,8 +62,13 @@ export function ThreadView({
   onComposerInsertionApplied,
 }: ThreadViewProps) {
   const endRef = useRef<HTMLDivElement>(null);
+  const copyResetTimer = useRef<number | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [copyState, setCopyState] = useState<{
+    messageId: string;
+    status: "copied" | "failed";
+  } | null>(null);
   const children = childThreads(chat, node.id);
   const messages = messagesForNode(node);
   const pendingAssistant = messages.find(
@@ -57,7 +83,33 @@ export function ThreadView({
   useEffect(() => {
     setEditingMessageId(null);
     setEditValue("");
+    setCopyState(null);
   }, [node.id]);
+
+  useEffect(
+    () => () => {
+      if (copyResetTimer.current !== null) {
+        window.clearTimeout(copyResetTimer.current);
+      }
+    },
+    [],
+  );
+
+  const copyResponse = async (messageId: string, markdown: string) => {
+    if (copyResetTimer.current !== null) {
+      window.clearTimeout(copyResetTimer.current);
+    }
+    try {
+      await writeMarkdownToClipboard(markdown);
+      setCopyState({ messageId, status: "copied" });
+    } catch {
+      setCopyState({ messageId, status: "failed" });
+    }
+    copyResetTimer.current = window.setTimeout(() => {
+      setCopyState(null);
+      copyResetTimer.current = null;
+    }, 1800);
+  };
 
   return (
     <div className={`thread-view ${side ? "thread-view--side" : ""}`}>
@@ -76,6 +128,8 @@ export function ThreadView({
                 ),
               )
             : 0;
+          const messageCopyStatus =
+            copyState?.messageId === message.id ? copyState.status : null;
           const linkedAnchors = children
             .filter((child) => child.anchor?.sourceMessageId === message.id)
             .map((child) => ({
@@ -151,6 +205,35 @@ export function ThreadView({
                       }}
                     >
                       <Pencil size={11} />
+                    </button>
+                  </span>
+                )}
+                {message.role === "assistant" && !message.pending && !message.error && message.content && (
+                  <span className="message__controls">
+                    <button
+                      className={`copy-response-button ${messageCopyStatus ? `copy-response-button--${messageCopyStatus}` : ""}`}
+                      type="button"
+                      aria-label={
+                        messageCopyStatus
+                          ? messageCopyStatus === "copied"
+                            ? "Response copied as Markdown"
+                            : "Copy failed"
+                          : "Copy response as Markdown"
+                      }
+                      onClick={() => void copyResponse(message.id, message.content)}
+                    >
+                      {messageCopyStatus === "copied" ? (
+                        <Check size={11} />
+                      ) : (
+                        <Copy size={11} />
+                      )}
+                      <span>
+                        {messageCopyStatus
+                          ? messageCopyStatus === "copied"
+                            ? "Copied"
+                            : "Failed"
+                          : "Copy"}
+                      </span>
                     </button>
                   </span>
                 )}
