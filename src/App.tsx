@@ -1514,18 +1514,18 @@ export default function App() {
             <label className="model-select">
               <Hash size={15} />
               <span>
-                <small>Output-token limit</small>
+                <small>Output-token limit · 0 = model maximum</small>
                 <input
                   type="number"
-                  min={1}
+                  min={0}
                   step={1_000}
                   inputMode="numeric"
                   aria-label="Maximum output tokens"
-                  title="Includes reasoning tokens and visible output tokens"
+                  title="Includes reasoning and visible output tokens; 0 removes Locus's limit"
                   value={workspace.settings.maxOutputTokens}
                   onChange={(event) => {
                     const maxOutputTokens = event.currentTarget.valueAsNumber;
-                    if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0) return;
+                    if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 0) return;
                     setWorkspace((current) => ({
                       ...current,
                       settings: { ...current.settings, maxOutputTokens },

@@ -104,7 +104,7 @@ export async function streamResponse(
     {
       model: input.model,
       instructions: [
-        "You are an expert tutor helping a technically sophisticated learner work through mathematics, physics, and machine learning.",
+        "You are an expert tutor helping a technically sophisticated learner work through mathematics, physics, machine learning, and other STEM topics.",
         "Be rigorous, patient, and local: focus on the exact point of confusion before widening the explanation.",
         "Do not skip algebraic or logical steps that are necessary to bridge the learner's gap.",
         "Use Markdown and LaTeX with $...$ for inline math and $$...$$ for display math; never use \\(...\\) or \\[...\\] delimiters. Define symbols when their meaning may be ambiguous.",
@@ -112,7 +112,9 @@ export async function streamResponse(
       ].join(" ") + customInstructions,
       input: `Here is the complete path of conversation context:\n\n${formatContext(input.context)}${highlighted}\n\n<learner_request>\n${input.message}\n</learner_request>`,
       reasoning: { effort: input.reasoningEffort },
-      max_output_tokens: input.maxOutputTokens,
+      ...(input.maxOutputTokens === 0
+        ? {}
+        : { max_output_tokens: input.maxOutputTokens }),
       stream: true,
     },
     { signal },

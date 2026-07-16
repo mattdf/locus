@@ -34,7 +34,7 @@ function normalizeState(state: WorkspaceState): WorkspaceState {
         state.settings?.reasoningEffort ?? (model.startsWith("gpt-5.6") ? "max" : "xhigh"),
       maxOutputTokens:
         Number.isSafeInteger(state.settings?.maxOutputTokens) &&
-        state.settings.maxOutputTokens > 0
+        state.settings.maxOutputTokens >= 0
           ? state.settings.maxOutputTokens
           : 50_000,
       customInstructions: state.settings?.customInstructions ?? "",

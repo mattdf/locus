@@ -135,8 +135,8 @@ app.post("/api/respond", (request, response, next) => {
       response.status(400).json({ error: "Unsupported reasoning effort for this model" });
       return;
     }
-    if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens <= 0) {
-      response.status(400).json({ error: "The output-token limit must be a positive integer" });
+    if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 0) {
+      response.status(400).json({ error: "The output-token limit must be a non-negative integer" });
       return;
     }
     if (!Array.isArray(body.context) || !body.message?.trim()) {
