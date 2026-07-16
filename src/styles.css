@@ -1393,6 +1393,24 @@ a:focus-visible {
   font-size: 9px;
 }
 
+.generation-details {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  padding-top: 8px;
+  margin-top: 13px;
+  color: #929a96;
+  border-top: 1px solid rgba(210, 206, 195, 0.58);
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.45;
+}
+
+.generation-details svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
 @keyframes stream-cursor {
   50% {
     opacity: 0.2;
@@ -2827,8 +2845,13 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .thinking,
 .app-shell[data-theme="dark"] .streaming-status,
 .app-shell[data-theme="dark"] .stopped-status,
+.app-shell[data-theme="dark"] .generation-details,
 .app-shell[data-theme="dark"] .selection-tip {
   color: #7f8984;
+}
+
+.app-shell[data-theme="dark"] .generation-details {
+  border-color: #2d3532;
 }
 
 .app-shell[data-theme="dark"] .stop-response-button {

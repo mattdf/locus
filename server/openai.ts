@@ -6,6 +6,7 @@ import type { ContextNode, HighlightAnchor, ReasoningEffort } from "../src/types
 let client: OpenAI | null = null;
 const SAVED_API_KEY_FILE = path.resolve("data", "openai-api-key.txt");
 const PROJECT_API_KEY_FILE = path.resolve("OPENAI_API_KEY.txt");
+const SYSTEM_PROMPT_FILE = path.resolve("SYSTEM_PROMPT.md");
 
 export interface ApiKeyStatus {
   configured: boolean;
@@ -65,6 +66,12 @@ async function getClient(): Promise<OpenAI> {
   return client;
 }
 
+async function readSystemPrompt(): Promise<string> {
+  const prompt = (await readFile(SYSTEM_PROMPT_FILE, "utf8")).trim();
+  if (!prompt) throw new Error("SYSTEM_PROMPT.md is empty");
+  return prompt;
+}
+
 function formatContext(context: ContextNode[]): string {
   return context
     .map((node, index) => {
@@ -87,29 +94,30 @@ export interface RespondInput {
   anchor?: HighlightAnchor;
 }
 
+export interface TokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  reasoningTokens: number;
+  totalTokens: number;
+}
+
 export async function streamResponse(
   input: RespondInput,
   onDelta: (delta: string) => void,
   signal?: AbortSignal,
-): Promise<void> {
-  const openai = await getClient();
+): Promise<TokenUsage | null> {
+  const [openai, systemPrompt] = await Promise.all([getClient(), readSystemPrompt()]);
   const highlighted = input.anchor
     ? `\n\nThe learner selected this exact passage:\n<highlighted_passage>\n${input.anchor.quote}\n</highlighted_passage>`
     : "";
 
   const customInstructions = input.customInstructions.trim()
-    ? ` The learner also supplied these additional behavior preferences. Follow them where compatible with the tutoring instructions above; they supplement rather than replace the tutoring role:\n<custom_instructions>\n${input.customInstructions.trim()}\n</custom_instructions>`
+    ? `\n\nThe learner also supplied these additional behavior preferences. Follow them where compatible with the tutoring instructions above; they supplement rather than replace the tutoring role:\n<custom_instructions>\n${input.customInstructions.trim()}\n</custom_instructions>`
     : "";
   const stream = await openai.responses.create(
     {
       model: input.model,
-      instructions: [
-        "You are an expert tutor helping a technically sophisticated learner work through mathematics, physics, machine learning, and other STEM topics.",
-        "Be rigorous, patient, and local: focus on the exact point of confusion before widening the explanation.",
-        "Do not skip algebraic or logical steps that are necessary to bridge the learner's gap.",
-        "Use Markdown and LaTeX with $...$ for inline math and $$...$$ for display math; never use \\(...\\) or \\[...\\] delimiters. Define symbols when their meaning may be ambiguous.",
-        "When useful, include a small numerical or geometric sanity check. Avoid generic encouragement and unnecessary restatement.",
-      ].join(" ") + customInstructions,
+      instructions: systemPrompt + customInstructions,
       input: `Here is the complete path of conversation context:\n\n${formatContext(input.context)}${highlighted}\n\n<learner_request>\n${input.message}\n</learner_request>`,
       reasoning: { effort: input.reasoningEffort },
       ...(input.maxOutputTokens === 0
@@ -121,11 +129,45 @@ export async function streamResponse(
   );
 
   let receivedText = false;
+  let usage: TokenUsage | null = null;
+  let terminalError: string | null = null;
+  let incompleteReason: "max_output_tokens" | "content_filter" | null = null;
   for await (const event of stream) {
     if (event.type === "response.output_text.delta") {
       receivedText = true;
       onDelta(event.delta);
+    } else if (
+      event.type === "response.completed" ||
+      event.type === "response.incomplete" ||
+      event.type === "response.failed"
+    ) {
+      const responseUsage = event.response.usage;
+      if (responseUsage) {
+        usage = {
+          inputTokens: responseUsage.input_tokens,
+          outputTokens: responseUsage.output_tokens,
+          reasoningTokens: responseUsage.output_tokens_details.reasoning_tokens,
+          totalTokens: responseUsage.total_tokens,
+        };
+      }
+      if (event.type === "response.failed") {
+        terminalError = event.response.error?.message ?? "The model request failed";
+      } else if (event.type === "response.incomplete") {
+        incompleteReason = event.response.incomplete_details?.reason ?? null;
+      }
+    } else if (event.type === "error") {
+      terminalError = event.message;
     }
   }
-  if (!receivedText) throw new Error("The model returned no text");
+  if (terminalError) throw new Error(terminalError);
+  if (!receivedText) {
+    if (incompleteReason === "max_output_tokens") {
+      throw new Error("The model exhausted the output-token limit before producing visible text");
+    }
+    if (incompleteReason === "content_filter") {
+      throw new Error("The model returned no text because the response was filtered");
+    }
+    throw new Error("The model returned no text");
+  }
+  return usage;
 }

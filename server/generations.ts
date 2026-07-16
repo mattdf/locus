@@ -1,20 +1,23 @@
 import type { Response } from "express";
-import { streamResponse, type RespondInput } from "./openai.ts";
+import type { GenerationMetrics } from "../src/types.ts";
+import { streamResponse, type RespondInput, type TokenUsage } from "./openai.ts";
 
 type GenerationStatus = "running" | "completed" | "stopped" | "failed";
 
 type GenerationEvent =
   | { type: "snapshot"; content: string }
   | { type: "delta"; delta: string }
-  | { type: "done" }
-  | { type: "stopped" }
-  | { type: "error"; error: string };
+  | { type: "done"; generation: GenerationMetrics }
+  | { type: "stopped"; generation: GenerationMetrics }
+  | { type: "error"; error: string; generation: GenerationMetrics };
 
 export interface GenerationJob {
   id: string;
   controller: AbortController;
   content: string;
   status: GenerationStatus;
+  startedAt: number;
+  generation?: GenerationMetrics;
   error?: string;
   subscribers: Set<Response>;
 }
@@ -29,10 +32,15 @@ function writeEvent(response: Response, event: GenerationEvent): void {
 }
 
 function terminalEvent(job: GenerationJob): GenerationEvent | null {
-  if (job.status === "completed") return { type: "done" };
-  if (job.status === "stopped") return { type: "stopped" };
+  if (!job.generation) return null;
+  if (job.status === "completed") return { type: "done", generation: job.generation };
+  if (job.status === "stopped") return { type: "stopped", generation: job.generation };
   if (job.status === "failed") {
-    return { type: "error", error: job.error ?? "The model request failed" };
+    return {
+      type: "error",
+      error: job.error ?? "The model request failed",
+      generation: job.generation,
+    };
   }
   return null;
 }
@@ -41,10 +49,22 @@ function broadcast(job: GenerationJob, event: GenerationEvent): void {
   job.subscribers.forEach((response) => writeEvent(response, event));
 }
 
-function finish(job: GenerationJob, status: Exclude<GenerationStatus, "running">, error?: string): void {
+function finish(
+  job: GenerationJob,
+  status: Exclude<GenerationStatus, "running">,
+  error?: string,
+  usage?: TokenUsage | null,
+): void {
   if (job.status !== "running") return;
   job.status = status;
   job.error = error;
+  job.generation = {
+    durationMs: Date.now() - job.startedAt,
+    inputTokens: usage?.inputTokens ?? null,
+    outputTokens: usage?.outputTokens ?? null,
+    reasoningTokens: usage?.reasoningTokens ?? null,
+    totalTokens: usage?.totalTokens ?? null,
+  };
   const event = terminalEvent(job);
   job.subscribers.forEach((response) => {
     if (event) writeEvent(response, event);
@@ -60,7 +80,7 @@ function finish(job: GenerationJob, status: Exclude<GenerationStatus, "running">
 
 async function run(job: GenerationJob, input: RespondInput): Promise<void> {
   try {
-    await streamResponse(
+    const usage = await streamResponse(
       input,
       (delta) => {
         if (job.status !== "running") return;
@@ -69,7 +89,7 @@ async function run(job: GenerationJob, input: RespondInput): Promise<void> {
       },
       job.controller.signal,
     );
-    finish(job, "completed");
+    finish(job, "completed", undefined, usage);
   } catch (error) {
     if (job.controller.signal.aborted) {
       finish(job, "stopped");
@@ -96,6 +116,7 @@ export function createGeneration(id: string, input: RespondInput): GenerationJob
     controller: new AbortController(),
     content: "",
     status: "running",
+    startedAt: Date.now(),
     subscribers: new Set(),
   };
   generations.set(id, job);
@@ -124,9 +145,9 @@ export function attachGenerationStream(response: Response, job: GenerationJob): 
   });
 }
 
-export function abortGeneration(job: GenerationJob): boolean {
-  if (job.status !== "running") return false;
+export function abortGeneration(job: GenerationJob): GenerationMetrics | null {
+  if (job.status !== "running") return null;
   job.controller.abort();
   finish(job, "stopped");
-  return true;
+  return job.generation ?? null;
 }

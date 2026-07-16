@@ -14,7 +14,8 @@ A local-first chat UI for studying difficult technical material without blowing 
   source block to reopen the branch.
 - Stream model responses into the thread as they are generated.
 - Paste an OpenAI API key in the sidebar, or keep using `OPENAI_API_KEY.txt`.
-- Add optional custom instructions that supplement the built-in tutoring prompt.
+- Edit `SYSTEM_PROMPT.md` to change the base tutoring prompt, and add optional custom
+  instructions from the UI that supplement it.
 - Paste Markdown (including LaTeX) into a new study without making a model request.
 - Recover LaTeX from ChatGPT rendered-copy imports where `\[` / `\(` delimiters were
   flattened into plain brackets and parentheses.
@@ -49,6 +50,7 @@ Then open [http://127.0.0.1:8787](http://127.0.0.1:8787).
   using original TeX source; and reconnects saved anchors to rendered passages.
 - `src/lib/tree.ts` contains the small set of tree and context helpers.
 - `server/openai.ts` is the only code that reads the API key and calls the Responses API.
+- `SYSTEM_PROMPT.md` contains the base instructions loaded fresh for every model request.
 - `server/storage.ts` persists one versioned JSON document using atomic replacement.
 
 Threads are stored as a flat map with `parentId` links. That keeps updates cheap while
@@ -63,5 +65,5 @@ to the model.
 - The default model is `gpt-5.6-sol` with `max` reasoning effort. Both model and reasoning
   effort are configurable in the sidebar.
 - Custom instructions are stored locally with the workspace and appended to, rather than
-  substituted for, the built-in tutoring instructions.
+  substituted for, `SYSTEM_PROMPT.md`.
 - Set `PORT` or `HOST` when starting the server if you need different local bindings.

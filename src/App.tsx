@@ -48,6 +48,7 @@ import {
 } from "./lib/tree";
 import type {
   ChatTree,
+  GenerationMetrics,
   HighlightAnchor,
   Message,
   MessageRevisionGroup,
@@ -100,6 +101,13 @@ interface ApiKeyStatus {
 interface GenerationResult {
   content: string;
   stopped: boolean;
+  generation: GenerationMetrics;
+}
+
+class GenerationStreamError extends Error {
+  constructor(message: string, readonly generation: GenerationMetrics) {
+    super(message);
+  }
 }
 
 interface PendingGeneration {
@@ -240,6 +248,8 @@ async function readGenerationStream(
   let buffer = "";
   let content = "";
   let streamError: string | null = null;
+  let streamErrorGeneration: GenerationMetrics | null = null;
+  let generation: GenerationMetrics | null = null;
   let terminal = false;
   let stopped = false;
 
@@ -248,9 +258,9 @@ async function readGenerationStream(
     const event = JSON.parse(line) as
       | { type: "snapshot"; content: string }
       | { type: "delta"; delta: string }
-      | { type: "done" }
-      | { type: "stopped" }
-      | { type: "error"; error: string };
+      | { type: "done"; generation: GenerationMetrics }
+      | { type: "stopped"; generation: GenerationMetrics }
+      | { type: "error"; error: string; generation: GenerationMetrics };
     if (event.type === "snapshot") {
       content = event.content;
       onSnapshot(content);
@@ -259,12 +269,16 @@ async function readGenerationStream(
       onDelta(event.delta);
     } else if (event.type === "done") {
       terminal = true;
+      generation = event.generation;
     } else if (event.type === "stopped") {
       terminal = true;
       stopped = true;
+      generation = event.generation;
     } else if (event.type === "error") {
       terminal = true;
+      generation = event.generation;
       streamError = event.error;
+      streamErrorGeneration = event.generation;
     }
   };
 
@@ -277,10 +291,14 @@ async function readGenerationStream(
     if (done) break;
   }
   consumeLine(buffer);
-  if (streamError) throw new Error(streamError);
+  if (streamError) {
+    if (!streamErrorGeneration) throw new Error(streamError);
+    throw new GenerationStreamError(streamError, streamErrorGeneration);
+  }
   if (!terminal) throw new Error("The response stream disconnected");
+  if (!generation) throw new Error("The response stream omitted generation details");
   if (!content && !stopped) throw new Error("The model returned no text");
-  return { content, stopped };
+  return { content, stopped, generation };
 }
 
 async function modelRequest(
@@ -741,12 +759,20 @@ export default function App() {
     assistantId: string,
     content: string,
     error = false,
+    generation?: GenerationMetrics,
   ) => {
     updateAssistantMessage(
       chatId,
       nodeId,
       assistantId,
-      (message) => ({ ...message, content, pending: false, error, stopped: false }),
+      (message) => ({
+        ...message,
+        content,
+        pending: false,
+        error,
+        stopped: false,
+        generation,
+      }),
       true,
     );
   };
@@ -775,7 +801,12 @@ export default function App() {
     }));
   };
 
-  const markAssistantStopped = (chatId: string, nodeId: string, assistantId: string) => {
+  const markAssistantStopped = (
+    chatId: string,
+    nodeId: string,
+    assistantId: string,
+    generation?: GenerationMetrics,
+  ) => {
     updateAssistantMessage(
       chatId,
       nodeId,
@@ -785,6 +816,7 @@ export default function App() {
         pending: false,
         error: false,
         stopped: true,
+        generation,
       }),
       true,
     );
@@ -817,8 +849,8 @@ export default function App() {
         controller.signal,
       );
       if (controller.signal.aborted) return;
-      if (result.stopped) markAssistantStopped(chat.id, nodeId, assistantId);
-      else finishAssistant(chat.id, nodeId, assistantId, result.content);
+      if (result.stopped) markAssistantStopped(chat.id, nodeId, assistantId, result.generation);
+      else finishAssistant(chat.id, nodeId, assistantId, result.content, false, result.generation);
     } catch (error) {
       if (controller.signal.aborted) return;
       finishAssistant(
@@ -827,6 +859,7 @@ export default function App() {
         assistantId,
         error instanceof Error ? error.message : "The request failed",
         true,
+        error instanceof GenerationStreamError ? error.generation : undefined,
       );
     } finally {
       if (responseControllers.current.get(assistantId) === controller) {
@@ -852,8 +885,12 @@ export default function App() {
         const data = (await response.json().catch(() => ({}))) as ApiError;
         throw new Error(data.error ?? "The server could not stop this response");
       }
+      const data = (await response.json()) as {
+        stopped: boolean;
+        generation: GenerationMetrics;
+      };
       responseControllers.current.get(assistantId)?.abort();
-      markAssistantStopped(activeChat.id, nodeId, assistantId);
+      markAssistantStopped(activeChat.id, nodeId, assistantId, data.generation);
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "The response could not be stopped");
     }
@@ -885,8 +922,18 @@ export default function App() {
         controller.signal,
       );
       if (controller.signal.aborted) return;
-      if (result.stopped) markAssistantStopped(chat.id, nodeId, assistantMessage.id);
-      else finishAssistant(chat.id, nodeId, assistantMessage.id, result.content);
+      if (result.stopped) {
+        markAssistantStopped(chat.id, nodeId, assistantMessage.id, result.generation);
+      } else {
+        finishAssistant(
+          chat.id,
+          nodeId,
+          assistantMessage.id,
+          result.content,
+          false,
+          result.generation,
+        );
+      }
     } catch (error) {
       if (controller.signal.aborted) return;
       finishAssistant(
@@ -895,6 +942,7 @@ export default function App() {
         assistantMessage.id,
         error instanceof Error ? error.message : "The request failed",
         true,
+        error instanceof GenerationStreamError ? error.generation : undefined,
       );
     } finally {
       if (responseControllers.current.get(assistantMessage.id) === controller) {
@@ -917,13 +965,20 @@ export default function App() {
       );
       if (controller.signal.aborted) return;
       if (result.stopped) {
-        markAssistantStopped(pending.chatId, pending.nodeId, pending.assistantId);
+        markAssistantStopped(
+          pending.chatId,
+          pending.nodeId,
+          pending.assistantId,
+          result.generation,
+        );
       } else {
         finishAssistant(
           pending.chatId,
           pending.nodeId,
           pending.assistantId,
           result.content,
+          false,
+          result.generation,
         );
       }
     } catch (error) {
@@ -934,6 +989,7 @@ export default function App() {
         pending.assistantId,
         error instanceof Error ? error.message : "The request failed",
         true,
+        error instanceof GenerationStreamError ? error.generation : undefined,
       );
     } finally {
       if (responseControllers.current.get(pending.assistantId) === controller) {

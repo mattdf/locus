@@ -3,6 +3,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Clock3,
   Copy,
   MessageSquareText,
   Pencil,
@@ -10,7 +11,7 @@ import {
   Square,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { ChatTree, SelectionDraft, ThreadNode } from "../types";
+import type { ChatTree, GenerationMetrics, SelectionDraft, ThreadNode } from "../types";
 import { childThreads, messagesForNode } from "../lib/tree";
 import { Composer } from "./Composer";
 import { MarkdownMessage } from "./MarkdownMessage";
@@ -46,6 +47,31 @@ async function writeMarkdownToClipboard(markdown: string): Promise<void> {
   if (copiedSynchronously) return;
 
   await navigator.clipboard.writeText(markdown);
+}
+
+function formatDuration(durationMs: number): string {
+  if (durationMs < 1_000) return `${Math.max(1, Math.round(durationMs))} ms`;
+  if (durationMs < 60_000) {
+    const seconds = durationMs / 1_000;
+    return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)} s`;
+  }
+  const minutes = Math.floor(durationMs / 60_000);
+  const seconds = Math.round((durationMs % 60_000) / 1_000);
+  return `${minutes}m ${seconds}s`;
+}
+
+function generationDetails(generation: GenerationMetrics): string {
+  const duration = formatDuration(generation.durationMs);
+  if (
+    generation.totalTokens === null ||
+    generation.inputTokens === null ||
+    generation.outputTokens === null ||
+    generation.reasoningTokens === null
+  ) {
+    return `${duration} · token usage unavailable`;
+  }
+  const format = (value: number) => value.toLocaleString();
+  return `${duration} · ${format(generation.totalTokens)} tokens total · ${format(generation.inputTokens)} input · ${format(generation.outputTokens)} generated (including ${format(generation.reasoningTokens)} reasoning)`;
 }
 
 export function ThreadView({
@@ -293,6 +319,12 @@ export function ThreadView({
                   )}
                   {message.stopped && (
                     <div className="stopped-status"><Square size={9} /> Response stopped</div>
+                  )}
+                  {message.role === "assistant" && !message.pending && message.generation && (
+                    <footer className="generation-details" aria-label="Generation details">
+                      <Clock3 size={10} />
+                      <span>{generationDetails(message.generation)}</span>
+                    </footer>
                   )}
                 </>
               )}

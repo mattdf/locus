@@ -98,11 +98,12 @@ app.post("/api/respond/:requestId/abort", (request, response) => {
     response.status(404).json({ error: "This response is no longer available" });
     return;
   }
-  if (!abortGeneration(job)) {
+  const generation = abortGeneration(job);
+  if (!generation) {
     response.status(409).json({ error: `The response is already ${job.status}` });
     return;
   }
-  response.json({ stopped: true });
+  response.json({ stopped: true, generation });
 });
 
 app.post("/api/respond", (request, response, next) => {

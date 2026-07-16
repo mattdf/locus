@@ -1,6 +1,14 @@
 export type MessageRole = "user" | "assistant" | "source";
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 
+export interface GenerationMetrics {
+  durationMs: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+  totalTokens: number | null;
+}
+
 export interface Message {
   id: string;
   role: MessageRole;
@@ -10,6 +18,7 @@ export interface Message {
   error?: boolean;
   stopped?: boolean;
   requestId?: string;
+  generation?: GenerationMetrics;
   revisionGroupId?: string;
   revisionVariantId?: string;
 }
