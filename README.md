@@ -1,11 +1,10 @@
 # Locus
 
-A local-first chat UI for studying difficult technical material without flattening every
-clarification into one long conversation.
+A local-first chat UI for studying difficult technical material without blowing up every conversation into a mess of unorganized follow ups / clarifications.
 
 ![Locus recursive learning chat interface](screenshot.png)
 
-## What it does
+## How to use / What this does
 
 - Select any rendered passage or equation and choose **Elaborate**.
 - The focused drawer receives the complete ancestor context, the exact selection, and your
@@ -23,7 +22,7 @@ clarification into one long conversation.
 
 ## Run it
 
-Requirements: Node.js 20+ and the existing `OPENAI_API_KEY.txt` file in this directory.
+Requirements: Node.js 20+ and add an `OPENAI_API_KEY.txt` file in this directory.
 
 ```bash
 npm install
@@ -58,7 +57,6 @@ to the model.
 ## Notes
 
 - The server binds to `127.0.0.1` by default so the API key is not exposed on the LAN.
-- `OPENAI_API_KEY.txt` and local chat data are ignored by Git.
 - The default model is `gpt-5.6-sol` with `max` reasoning effort. Both model and reasoning
   effort are configurable in the sidebar.
 - Custom instructions are stored locally with the workspace and appended to, rather than
