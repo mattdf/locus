@@ -17,7 +17,6 @@ A local-first chat UI for studying difficult technical material without blowing 
 - Paste Markdown (including LaTeX) into a new study without making a model request.
 - Recover LaTeX from ChatGPT rendered-copy imports where `\[` / `\(` delimiters were
   flattened into plain brackets and parentheses.
-- Render fenced code blocks with language-aware syntax highlighting.
 - Store the complete workspace as a readable local JSON document in `data/chats.json`.
 
 ## Run it
