@@ -1,5 +1,5 @@
 import { ArrowUp, CornerDownLeft } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 interface ComposerProps {
   onSend: (message: string) => void;
@@ -24,6 +24,7 @@ export function Composer({
 }: ComposerProps) {
   const [value, setValue] = useState(initialValue);
   const ref = useRef<HTMLTextAreaElement>(null);
+  const pendingInsertionId = useRef<string | null>(null);
 
   useEffect(() => {
     if (initialValue) ref.current?.focus();
@@ -31,6 +32,7 @@ export function Composer({
 
   useEffect(() => {
     if (!insertion) return;
+    pendingInsertionId.current = insertion.id;
     setValue((current) => {
       const separator = !current
         ? ""
@@ -41,16 +43,30 @@ export function Composer({
             : "\n\n";
       return `${current}${separator}${insertion.value}`;
     });
-    const frame = window.requestAnimationFrame(() => {
-      const textarea = ref.current;
-      if (textarea) {
-        textarea.focus();
-        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
-      }
-      onInsertionApplied?.(insertion.id);
-    });
-    return () => window.cancelAnimationFrame(frame);
   }, [insertion?.id]);
+
+  useLayoutEffect(() => {
+    const textarea = ref.current;
+    if (!textarea) return;
+
+    textarea.style.height = "auto";
+    const configuredMaximum = Number.parseFloat(
+      window.getComputedStyle(textarea).maxHeight,
+    );
+    const maximumHeight = Number.isFinite(configuredMaximum) ? configuredMaximum : 180;
+    const contentHeight = textarea.scrollHeight;
+    textarea.style.height = `${Math.min(contentHeight, maximumHeight)}px`;
+    textarea.style.overflowY = contentHeight > maximumHeight ? "auto" : "hidden";
+
+    const insertionId = pendingInsertionId.current;
+    if (insertionId) {
+      pendingInsertionId.current = null;
+      textarea.focus();
+      textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      textarea.scrollTop = textarea.scrollHeight;
+      onInsertionApplied?.(insertionId);
+    }
+  }, [compact, value]);
 
   const submit = () => {
     if (!value.trim() || disabled) return;
