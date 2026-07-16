@@ -8,6 +8,8 @@ interface ComposerProps {
   placeholder?: string;
   submitLabel?: string;
   initialValue?: string;
+  insertion?: { id: string; value: string };
+  onInsertionApplied?: (id: string) => void;
 }
 
 export function Composer({
@@ -17,6 +19,8 @@ export function Composer({
   placeholder = "Ask a follow-up…",
   submitLabel = "Send",
   initialValue = "",
+  insertion,
+  onInsertionApplied,
 }: ComposerProps) {
   const [value, setValue] = useState(initialValue);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -24,6 +28,29 @@ export function Composer({
   useEffect(() => {
     if (initialValue) ref.current?.focus();
   }, [initialValue]);
+
+  useEffect(() => {
+    if (!insertion) return;
+    setValue((current) => {
+      const separator = !current
+        ? ""
+        : current.endsWith("\n\n")
+          ? ""
+          : current.endsWith("\n")
+            ? "\n"
+            : "\n\n";
+      return `${current}${separator}${insertion.value}`;
+    });
+    const frame = window.requestAnimationFrame(() => {
+      const textarea = ref.current;
+      if (textarea) {
+        textarea.focus();
+        textarea.setSelectionRange(textarea.value.length, textarea.value.length);
+      }
+      onInsertionApplied?.(insertion.id);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [insertion?.id]);
 
   const submit = () => {
     if (!value.trim() || disabled) return;

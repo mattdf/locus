@@ -16,6 +16,7 @@ import {
   Pencil,
   Pin,
   Plus,
+  Quote,
   Search,
   Settings2,
   SlidersHorizontal,
@@ -32,6 +33,7 @@ import type {
 } from "react";
 import { Composer } from "./components/Composer";
 import { ThreadView } from "./components/ThreadView";
+import { markdownBlockquote } from "./lib/markdown";
 import {
   childThreads,
   contextFor,
@@ -186,10 +188,12 @@ async function modelRequest(
 function SelectionToolbar({
   selection,
   onElaborate,
+  onQuote,
   onDismiss,
 }: {
   selection: SelectionDraft;
   onElaborate: () => void;
+  onQuote: () => void;
   onDismiss: () => void;
 }) {
   const [rect, setRect] = useState(selection.rect);
@@ -244,7 +248,13 @@ function SelectionToolbar({
     <div
       className="selection-toolbar"
       style={{
-        left: Math.max(116, Math.min(window.innerWidth - 116, rect.left + rect.width / 2)),
+        left: Math.max(
+          Math.min(205, window.innerWidth / 2),
+          Math.min(
+            window.innerWidth - Math.min(205, window.innerWidth / 2),
+            rect.left + rect.width / 2,
+          ),
+        ),
         top: rect.top > 70 ? rect.top - 12 : rect.top + rect.height + 46,
       }}
       onMouseDown={(event) => event.preventDefault()}
@@ -255,6 +265,9 @@ function SelectionToolbar({
       </span>
       <button type="button" onClick={onElaborate}>
         <CornerUpRight size={14} /> Elaborate
+      </button>
+      <button className="selection-quote-button" type="button" onClick={onQuote}>
+        <Quote size={14} /> Quote
       </button>
       <button
         type="button"
@@ -385,6 +398,11 @@ export default function App() {
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [selection, setSelection] = useState<SelectionDraft | null>(null);
   const [draft, setDraft] = useState<SelectionDraft | null>(null);
+  const [composerInsertion, setComposerInsertion] = useState<{
+    id: string;
+    nodeId: string;
+    value: string;
+  } | null>(null);
   const [newMode, setNewMode] = useState<"ask" | "import">("ask");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
@@ -839,6 +857,21 @@ export default function App() {
     }
   };
 
+  const applyComposerInsertion = (id: string) => {
+    setComposerInsertion((current) => (current?.id === id ? null : current));
+  };
+
+  const quoteSelectionInThread = () => {
+    if (!selection) return;
+    setComposerInsertion({
+      id: newId(),
+      nodeId: selection.sourceNodeId,
+      value: markdownBlockquote(selection.quote),
+    });
+    window.getSelection()?.removeAllRanges();
+    setSelection(null);
+  };
+
   if (!loaded) {
     return (
       <div className="loading-screen">
@@ -1214,6 +1247,10 @@ export default function App() {
               setFocusMaximized(false);
             }}
             onSend={(message) => sendToThread(rootNode.id, message)}
+            composerInsertion={
+              composerInsertion?.nodeId === rootNode.id ? composerInsertion : undefined
+            }
+            onComposerInsertionApplied={applyComposerInsertion}
           />
         </main>
       )}
@@ -1342,6 +1379,10 @@ export default function App() {
             onSelect={setSelection}
             onOpenElaboration={(id) => setActiveNodeId(id)}
             onSend={(message) => sendToThread(sideNode.id, message)}
+            composerInsertion={
+              composerInsertion?.nodeId === sideNode.id ? composerInsertion : undefined
+            }
+            onComposerInsertionApplied={applyComposerInsertion}
           />
         </aside>
       )}
@@ -1490,6 +1531,7 @@ export default function App() {
         <SelectionToolbar
           selection={selection}
           onDismiss={() => setSelection(null)}
+          onQuote={quoteSelectionInThread}
           onElaborate={() => {
             setDraft(selection);
             setSelection(null);

@@ -77,3 +77,11 @@ export function normalizeMathDelimiters(
     .map((part) => (part.startsWith("$$") ? part : normalizeCopiedInlineMath(part)))
     .join("");
 }
+
+export function markdownBlockquote(source: string): string {
+  return source
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => `> ${line}`)
+    .join("\n");
+}

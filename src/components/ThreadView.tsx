@@ -12,6 +12,8 @@ interface ThreadViewProps {
   onSelect: (selection: SelectionDraft) => void;
   onOpenElaboration: (childId: string) => void;
   onSend: (message: string) => void;
+  composerInsertion?: { id: string; value: string };
+  onComposerInsertionApplied?: (id: string) => void;
 }
 
 export function ThreadView({
@@ -21,6 +23,8 @@ export function ThreadView({
   onSelect,
   onOpenElaboration,
   onSend,
+  composerInsertion,
+  onComposerInsertionApplied,
 }: ThreadViewProps) {
   const endRef = useRef<HTMLDivElement>(null);
   const children = childThreads(chat, node.id);
@@ -95,11 +99,13 @@ export function ThreadView({
           compact={side}
           disabled={waiting}
           onSend={onSend}
+          insertion={composerInsertion}
+          onInsertionApplied={onComposerInsertionApplied}
           placeholder={side ? "Continue this line of thought…" : "Ask about this topic…"}
         />
         {!side && (
           <p className="selection-tip">
-            Select any passage or equation to open a focused elaboration.
+            Select any passage or equation to quote it here or open a focused elaboration.
           </p>
         )}
       </div>

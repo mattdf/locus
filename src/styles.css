@@ -1697,6 +1697,16 @@ body.resizing-drawer {
   background: #f5cf70;
 }
 
+.selection-toolbar > button.selection-quote-button {
+  color: #edf2f0;
+  background: #394641;
+  border: 1px solid #53615c;
+}
+
+.selection-toolbar > button.selection-quote-button:hover {
+  background: #46544f;
+}
+
 .toolbar-close {
   display: grid;
   width: 23px;
