@@ -6,6 +6,7 @@ import {
   CornerUpRight,
   FileInput,
   GitBranch,
+  KeyRound,
   Menu,
   Maximize2,
   Minimize2,
@@ -83,6 +84,11 @@ const REASONING_OPTIONS: Array<{ value: ReasoningEffort; label: string }> = [
 
 interface ApiError {
   error?: string;
+}
+
+interface ApiKeyStatus {
+  configured: boolean;
+  source: "saved" | "project-file" | null;
 }
 
 function BranchTree({
@@ -384,6 +390,11 @@ export default function App() {
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
   const [customInstructionsOpen, setCustomInstructionsOpen] = useState(false);
   const [customInstructionsDraft, setCustomInstructionsDraft] = useState("");
+  const [apiKeyStatus, setApiKeyStatus] = useState<ApiKeyStatus | null>(null);
+  const [apiKeyOpen, setApiKeyOpen] = useState(false);
+  const [apiKeyDraft, setApiKeyDraft] = useState("");
+  const [apiKeySaving, setApiKeySaving] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState("");
   const [drawerWidth, setDrawerWidth] = useState(440);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
@@ -416,6 +427,16 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    fetch("/api/api-key")
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Could not check the API key");
+        return (await response.json()) as ApiKeyStatus;
+      })
+      .then(setApiKeyStatus)
+      .catch(() => setApiKeyStatus({ configured: false, source: null }));
+  }, []);
+
+  useEffect(() => {
     if (!loaded) return;
     setSaveState("saving");
     const timeout = window.setTimeout(() => {
@@ -440,6 +461,9 @@ export default function App() {
         window.getSelection()?.removeAllRanges();
         setDraft(null);
         setCustomInstructionsOpen(false);
+        setApiKeyOpen(false);
+        setApiKeyDraft("");
+        setApiKeyError("");
         setChatMenuOpen(false);
         setBranchMenuOpen(false);
         setRenamingChat(false);
@@ -789,6 +813,32 @@ export default function App() {
     }));
   };
 
+  const closeApiKeyModal = () => {
+    setApiKeyOpen(false);
+    setApiKeyDraft("");
+    setApiKeyError("");
+  };
+
+  const savePastedApiKey = async () => {
+    setApiKeySaving(true);
+    setApiKeyError("");
+    try {
+      const response = await fetch("/api/api-key", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: apiKeyDraft }),
+      });
+      const result = (await response.json()) as ApiKeyStatus & ApiError;
+      if (!response.ok) throw new Error(result.error || "Could not save the API key");
+      setApiKeyStatus(result);
+      closeApiKeyModal();
+    } catch (error) {
+      setApiKeyError(error instanceof Error ? error.message : "Could not save the API key");
+    } finally {
+      setApiKeySaving(false);
+    }
+  };
+
   if (!loaded) {
     return (
       <div className="loading-screen">
@@ -945,6 +995,30 @@ export default function App() {
                 </select>
               </span>
             </label>
+            <button
+              className="custom-instructions-button api-key-button"
+              type="button"
+              onClick={() => {
+                setApiKeyDraft("");
+                setApiKeyError("");
+                setApiKeyOpen(true);
+              }}
+            >
+              <KeyRound size={15} />
+              <span>
+                <small>OpenAI API key</small>
+                <strong>
+                  {!apiKeyStatus
+                    ? "Checking…"
+                    : apiKeyStatus.source === "saved"
+                      ? "Saved in Locus"
+                      : apiKeyStatus.source === "project-file"
+                        ? "Project file"
+                        : "Not configured"}
+                </strong>
+              </span>
+              <ChevronRight size={13} />
+            </button>
             <button
               className="custom-instructions-button"
               type="button"
@@ -1337,6 +1411,75 @@ export default function App() {
                 }}
               >
                 Save instructions
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+
+      {apiKeyOpen && (
+        <div
+          className="settings-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) closeApiKeyModal();
+          }}
+        >
+          <section
+            className="settings-modal settings-modal--api-key"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="api-key-title"
+          >
+            <header>
+              <div>
+                <span>Connection</span>
+                <h2 id="api-key-title">OpenAI API key</h2>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="Close API key settings"
+                onClick={closeApiKeyModal}
+              >
+                <X size={17} />
+              </button>
+            </header>
+            <p>
+              Paste a key here to store it in a private local file. Locus never returns the
+              saved value to the browser or includes it in your chat data. A pasted key takes
+              precedence over <code>OPENAI_API_KEY.txt</code>.
+            </p>
+            <input
+              autoFocus
+              type="password"
+              value={apiKeyDraft}
+              onChange={(event) => setApiKeyDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && apiKeyDraft.trim().length >= 20 && !apiKeySaving) {
+                  void savePastedApiKey();
+                }
+              }}
+              placeholder="sk-… or OPENAI_API_KEY=sk-…"
+              aria-label="OpenAI API key"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <p className="api-key-storage-note">
+              Stored at <code>data/openai-api-key.txt</code> with owner-only permissions.
+            </p>
+            {apiKeyError && <p className="api-key-error" role="alert">{apiKeyError}</p>}
+            <footer>
+              <button className="secondary-button" type="button" onClick={closeApiKeyModal}>
+                Cancel
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                disabled={apiKeyDraft.trim().length < 20 || apiKeySaving}
+                onClick={() => void savePastedApiKey()}
+              >
+                {apiKeySaving ? "Saving…" : "Save API key"}
               </button>
             </footer>
           </section>

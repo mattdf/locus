@@ -1,7 +1,7 @@
 import express from "express";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { streamResponse } from "./openai.ts";
+import { getApiKeyStatus, saveApiKey, streamResponse } from "./openai.ts";
 import { readState, writeState } from "./storage.ts";
 import type {
   ContextNode,
@@ -32,6 +32,27 @@ app.use(express.json({ limit: "3mb" }));
 
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true });
+});
+
+app.get("/api/api-key", async (_request, response, next) => {
+  try {
+    response.json(await getApiKeyStatus());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/api-key", async (request, response, next) => {
+  try {
+    const apiKey = request.body?.apiKey;
+    if (typeof apiKey !== "string" || apiKey.trim().length < 20 || apiKey.length > 5_000) {
+      response.status(400).json({ error: "Enter a valid OpenAI API key." });
+      return;
+    }
+    response.json(await saveApiKey(apiKey));
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/state", async (_request, response, next) => {

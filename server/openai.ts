@@ -1,19 +1,63 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import OpenAI from "openai";
 import type { ContextNode, HighlightAnchor, ReasoningEffort } from "../src/types.ts";
 
 let client: OpenAI | null = null;
+const SAVED_API_KEY_FILE = path.resolve("data", "openai-api-key.txt");
+const PROJECT_API_KEY_FILE = path.resolve("OPENAI_API_KEY.txt");
+
+export interface ApiKeyStatus {
+  configured: boolean;
+  source: "saved" | "project-file" | null;
+}
+
+function normalizeApiKey(raw: string): string {
+  const value = raw.trim();
+  const assignment = value.match(/^OPENAI_API_KEY\s*=\s*([\s\S]+)$/);
+  return (assignment?.[1] ?? value).trim().replace(/^['"]|['"]$/g, "");
+}
+
+async function readKeyFile(file: string): Promise<string | null> {
+  try {
+    return normalizeApiKey(await readFile(file, "utf8")) || null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
 
 async function readApiKey(): Promise<string> {
-  const raw = await readFile(path.resolve("OPENAI_API_KEY.txt"), "utf8");
-  const value = raw.trim();
-  const key = value.includes("=")
-    ? value.slice(value.indexOf("=") + 1).trim().replace(/^['\"]|['\"]$/g, "")
-    : value;
+  const savedKey = await readKeyFile(SAVED_API_KEY_FILE);
+  if (savedKey) return savedKey;
 
-  if (!key) throw new Error("OPENAI_API_KEY.txt is empty");
-  return key;
+  const projectKey = await readKeyFile(PROJECT_API_KEY_FILE);
+  if (projectKey) return projectKey;
+
+  throw new Error("No OpenAI API key is configured. Add one in Settings or OPENAI_API_KEY.txt.");
+}
+
+export async function getApiKeyStatus(): Promise<ApiKeyStatus> {
+  if (await readKeyFile(SAVED_API_KEY_FILE)) {
+    return { configured: true, source: "saved" };
+  }
+  if (await readKeyFile(PROJECT_API_KEY_FILE)) {
+    return { configured: true, source: "project-file" };
+  }
+  return { configured: false, source: null };
+}
+
+export async function saveApiKey(raw: string): Promise<ApiKeyStatus> {
+  const apiKey = normalizeApiKey(raw);
+  if (apiKey.length < 20) throw new Error("Enter a valid OpenAI API key.");
+
+  await mkdir(path.dirname(SAVED_API_KEY_FILE), { recursive: true });
+  const temporaryFile =
+    SAVED_API_KEY_FILE + "." + process.pid + "." + Date.now() + ".tmp";
+  await writeFile(temporaryFile, apiKey + "\n", { encoding: "utf8", mode: 0o600 });
+  await rename(temporaryFile, SAVED_API_KEY_FILE);
+  client = null;
+  return { configured: true, source: "saved" };
 }
 
 async function getClient(): Promise<OpenAI> {

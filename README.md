@@ -13,6 +13,7 @@ A local-first chat UI for studying difficult technical material without blowing 
 - Prior elaborations stay attached to their source passage; click anywhere in the marked
   source block to reopen the branch.
 - Stream model responses into the thread as they are generated.
+- Paste an OpenAI API key in the sidebar, or keep using `OPENAI_API_KEY.txt`.
 - Add optional custom instructions that supplement the built-in tutoring prompt.
 - Paste Markdown (including LaTeX) into a new study without making a model request.
 - Recover LaTeX from ChatGPT rendered-copy imports where `\[` / `\(` delimiters were
@@ -21,7 +22,7 @@ A local-first chat UI for studying difficult technical material without blowing 
 
 ## Run it
 
-Requirements: Node.js 20+ and add an `OPENAI_API_KEY.txt` file in this directory.
+Requirement: Node.js 20+.
 
 ```bash
 npm install
@@ -29,7 +30,8 @@ npm run dev
 ```
 
 Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The web app runs on port 5173 and
-proxies API requests to the local server on port 8787.
+proxies API requests to the local server on port 8787. Paste an API key from the sidebar,
+or add an `OPENAI_API_KEY.txt` file in this directory.
 
 For a production-style local run:
 
@@ -56,6 +58,8 @@ to the model.
 ## Notes
 
 - The server binds to `127.0.0.1` by default so the API key is not exposed on the LAN.
+- Keys pasted in the UI are written to the gitignored `data/openai-api-key.txt` with
+  owner-only permissions and take precedence over `OPENAI_API_KEY.txt`.
 - The default model is `gpt-5.6-sol` with `max` reasoning effort. Both model and reasoning
   effort are configurable in the sidebar.
 - Custom instructions are stored locally with the workspace and appended to, rather than

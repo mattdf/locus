@@ -1,6 +1,7 @@
 node_modules/
 dist/
 data/chats.json
+data/openai-api-key.txt
 data/*.tmp
 OPENAI_API_KEY.txt
 .env*

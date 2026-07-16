@@ -2009,6 +2009,48 @@ body.resizing-drawer {
   box-shadow: 0 0 0 3px rgba(13, 112, 101, 0.08);
 }
 
+.settings-modal--api-key {
+  width: min(500px, 100%);
+}
+
+.settings-modal--api-key > input {
+  display: block;
+  width: 100%;
+  min-height: 42px;
+  padding: 0 12px;
+  color: #27332f;
+  background: white;
+  border: 1px solid #d8d5cc;
+  border-radius: 7px;
+  outline: 0;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+}
+
+.settings-modal--api-key > input:focus {
+  border-color: rgba(13, 112, 101, 0.55);
+  box-shadow: 0 0 0 3px rgba(13, 112, 101, 0.08);
+}
+
+.settings-modal--api-key > .api-key-storage-note {
+  margin: 8px 1px 0;
+  color: #8b938f;
+  font-size: 9px;
+}
+
+.settings-modal--api-key > .api-key-error {
+  padding: 8px 10px;
+  margin: 10px 0 0;
+  color: var(--danger);
+  background: #f6e9e6;
+  border-radius: 6px;
+  font-size: 10px;
+}
+
+.settings-modal--api-key > footer {
+  justify-content: flex-end;
+}
+
 .settings-modal > footer {
   display: flex;
   align-items: center;
@@ -2689,7 +2731,8 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .composer textarea,
 .app-shell[data-theme="dark"] .title-input,
 .app-shell[data-theme="dark"] .start-card > textarea,
-.app-shell[data-theme="dark"] .settings-modal textarea {
+.app-shell[data-theme="dark"] .settings-modal textarea,
+.app-shell[data-theme="dark"] .settings-modal--api-key > input {
   color: #dce4e0;
 }
 
@@ -2833,9 +2876,19 @@ body.resizing-drawer {
   color: #9ba59f;
 }
 
-.app-shell[data-theme="dark"] .settings-modal textarea {
+.app-shell[data-theme="dark"] .settings-modal textarea,
+.app-shell[data-theme="dark"] .settings-modal--api-key > input {
   background: #131816;
   border-color: #3a433f;
+}
+
+.app-shell[data-theme="dark"] .settings-modal--api-key > .api-key-storage-note {
+  color: #818b86;
+}
+
+.app-shell[data-theme="dark"] .settings-modal--api-key > .api-key-error {
+  color: #f0a093;
+  background: #382522;
 }
 
 .app-shell[data-theme="dark"] .new-chat__mobile-header {
