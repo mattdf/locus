@@ -31,6 +31,7 @@ import type {
 import { Composer } from "./components/Composer";
 import { ThreadView } from "./components/ThreadView";
 import {
+  childThreads,
   contextFor,
   makeMessage,
   newId,
@@ -80,6 +81,49 @@ const REASONING_OPTIONS: Array<{ value: ReasoningEffort; label: string }> = [
 
 interface ApiError {
   error?: string;
+}
+
+function BranchTree({
+  chat,
+  parentId,
+  activeNodeId,
+  onOpen,
+  root = false,
+}: {
+  chat: ChatTree;
+  parentId: string;
+  activeNodeId: string | null;
+  onOpen: (nodeId: string) => void;
+  root?: boolean;
+}) {
+  const children = childThreads(chat, parentId).sort((left, right) =>
+    left.createdAt.localeCompare(right.createdAt),
+  );
+  if (!children.length) return null;
+
+  return (
+    <ul className={`branch-tree ${root ? "branch-tree--root" : ""}`}>
+      {children.map((node) => (
+        <li key={node.id}>
+          <button
+            type="button"
+            className={node.id === activeNodeId ? "active" : ""}
+            aria-label={`Open branch: ${node.title}`}
+            onClick={() => onOpen(node.id)}
+          >
+            <GitBranch size={13} />
+            <span>{node.title}</span>
+          </button>
+          <BranchTree
+            chat={chat}
+            parentId={node.id}
+            activeNodeId={activeNodeId}
+            onOpen={onOpen}
+          />
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 async function modelRequest(
@@ -332,6 +376,7 @@ export default function App() {
   const [customInstructionsDraft, setCustomInstructionsDraft] = useState("");
   const [drawerWidth, setDrawerWidth] = useState(440);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
+  const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [renamingChat, setRenamingChat] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
   const [focusMaximized, setFocusMaximized] = useState(false);
@@ -386,6 +431,7 @@ export default function App() {
         setDraft(null);
         setCustomInstructionsOpen(false);
         setChatMenuOpen(false);
+        setBranchMenuOpen(false);
         setRenamingChat(false);
       }
     };
@@ -667,6 +713,22 @@ export default function App() {
     setChatMenuOpen(false);
   };
 
+  const deleteActiveChat = () => {
+    if (!activeChat || !window.confirm(`Delete “${activeChat.title}”?`)) return;
+    setWorkspace((current) => ({
+      ...current,
+      activeChatId: null,
+      chats: current.chats.filter((chat) => chat.id !== activeChat.id),
+    }));
+    setActiveNodeId(null);
+    setDraft(null);
+    setSelection(null);
+    setChatMenuOpen(false);
+    setBranchMenuOpen(false);
+    setRenamingChat(false);
+    setFocusMaximized(false);
+  };
+
   const filteredChats = useMemo(() => {
     const query = search.trim().toLowerCase();
     return workspace.chats
@@ -681,6 +743,7 @@ export default function App() {
     setSelection(null);
     setSidebarOpen(false);
     setChatMenuOpen(false);
+    setBranchMenuOpen(false);
     setRenamingChat(false);
     setFocusMaximized(false);
   };
@@ -692,6 +755,7 @@ export default function App() {
     setDraft(null);
     setSidebarOpen(false);
     setChatMenuOpen(false);
+    setBranchMenuOpen(false);
     setRenamingChat(false);
     setFocusMaximized(false);
   };
@@ -706,6 +770,7 @@ export default function App() {
   }
 
   const drawerOpen = Boolean(activeChat && (draft || sideNode));
+  const activeBranchCount = activeChat ? Object.keys(activeChat.nodes).length - 1 : 0;
   const activePath = activeChat && sideNode ? threadPath(activeChat, sideNode.id) : [];
   const draftPath = activeChat && draft ? threadPath(activeChat, draft.sourceNodeId) : [];
   const drawerResizeHandle = (
@@ -903,13 +968,14 @@ export default function App() {
         />
       ) : (
         <main className="main-pane">
-          {chatMenuOpen && (
+          {(chatMenuOpen || branchMenuOpen) && (
             <button
               className="chat-menu-scrim"
               type="button"
-              aria-label="Close chat options"
+              aria-label="Close header menu"
               onClick={() => {
                 setChatMenuOpen(false);
+                setBranchMenuOpen(false);
                 setRenamingChat(false);
               }}
             />
@@ -923,27 +989,49 @@ export default function App() {
               <h1>{activeChat.title}</h1>
             </div>
             <div className="pane-header__actions">
-              <span className="branch-stat">
-                <GitBranch size={14} /> {Object.keys(activeChat.nodes).length - 1}
-              </span>
-              <button
-                type="button"
-                className="icon-button danger"
-                title="Delete study"
-                aria-label="Delete study"
-                onClick={() => {
-                  if (!window.confirm(`Delete “${activeChat.title}”?`)) return;
-                  setWorkspace((current) => ({
-                    ...current,
-                    activeChatId: null,
-                    chats: current.chats.filter((chat) => chat.id !== activeChat.id),
-                  }));
-                  setActiveNodeId(null);
-                  setChatMenuOpen(false);
-                }}
-              >
-                <Trash2 size={16} />
-              </button>
+              <div className="header-popover-anchor">
+                <button
+                  className="branch-stat branch-stat--button"
+                  type="button"
+                  aria-label="Show branches"
+                  aria-haspopup="true"
+                  aria-expanded={branchMenuOpen}
+                  onClick={() => {
+                    setBranchMenuOpen((open) => !open);
+                    setChatMenuOpen(false);
+                    setRenamingChat(false);
+                  }}
+                >
+                  <GitBranch size={14} /> {activeBranchCount}
+                </button>
+                {branchMenuOpen && (
+                  <section className="branch-menu" aria-label="Branch tree">
+                    <header>
+                      <span>Branches</span>
+                      <strong>{activeBranchCount}</strong>
+                    </header>
+                    <div className="branch-menu__body">
+                      {activeBranchCount ? (
+                        <BranchTree
+                          chat={activeChat}
+                          parentId={activeChat.rootId}
+                          activeNodeId={activeNodeId}
+                          root
+                          onOpen={(nodeId) => {
+                            setActiveNodeId(nodeId);
+                            setDraft(null);
+                            setSelection(null);
+                            setFocusMaximized(false);
+                            setBranchMenuOpen(false);
+                          }}
+                        />
+                      ) : (
+                        <p>No branches yet.</p>
+                      )}
+                    </div>
+                  </section>
+                )}
+              </div>
               <button
                 className="icon-button"
                 type="button"
@@ -952,6 +1040,7 @@ export default function App() {
                 aria-expanded={chatMenuOpen}
                 onClick={() => {
                   setChatMenuOpen((open) => !open);
+                  setBranchMenuOpen(false);
                   setRenamingChat(false);
                 }}
               >
@@ -992,6 +1081,10 @@ export default function App() {
                       </button>
                       <button type="button" onClick={toggleChatPin}>
                         <Pin size={15} /> {activeChat.pinned ? "Unpin from top" : "Pin to top"}
+                      </button>
+                      <div className="chat-menu__divider" />
+                      <button className="chat-menu__danger" type="button" onClick={deleteActiveChat}>
+                        <Trash2 size={15} /> Delete chat
                       </button>
                     </>
                   )}

@@ -678,6 +678,25 @@ a:focus-visible {
   cursor: default;
 }
 
+.chat-menu__divider {
+  height: 1px;
+  margin: 4px 6px;
+  background: #e5e1d8;
+}
+
+.chat-menu > button.chat-menu__danger {
+  color: var(--danger);
+}
+
+.chat-menu > button.chat-menu__danger:hover {
+  color: var(--danger);
+  background: #f6e9e6;
+}
+
+.header-popover-anchor {
+  position: relative;
+}
+
 .branch-stat {
   display: flex;
   align-items: center;
@@ -689,6 +708,136 @@ a:focus-visible {
   border-radius: 6px;
   font-size: 10px;
   font-weight: 700;
+}
+
+.branch-stat--button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.branch-stat--button:hover,
+.branch-stat--button[aria-expanded="true"] {
+  color: var(--ink);
+  background: #e9e7e0;
+  border-color: #d4d0c7;
+}
+
+.branch-menu {
+  position: absolute;
+  z-index: 1;
+  top: calc(100% + 7px);
+  right: 0;
+  display: flex;
+  width: min(320px, calc(100vw - 24px));
+  max-height: min(470px, calc(100vh - 88px));
+  flex-direction: column;
+  overflow: hidden;
+  color: #34403c;
+  background: #fffefb;
+  border: 1px solid #d8d5cc;
+  border-radius: 9px;
+  box-shadow: 0 12px 30px rgba(35, 44, 41, 0.14), 0 2px 7px rgba(35, 44, 41, 0.08);
+}
+
+.branch-menu > header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 10px 11px 8px;
+  border-bottom: 1px solid #e5e1d8;
+}
+
+.branch-menu > header span {
+  color: #737c78;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.branch-menu > header strong {
+  display: grid;
+  min-width: 20px;
+  height: 20px;
+  margin-left: auto;
+  place-items: center;
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+  border-radius: 10px;
+  font-size: 9px;
+}
+
+.branch-menu__body {
+  min-height: 0;
+  padding: 6px;
+  overflow-y: auto;
+}
+
+.branch-menu__body > p {
+  margin: 0;
+  padding: 14px 10px;
+  color: #7a837f;
+  font-size: 11px;
+  text-align: center;
+}
+
+.branch-tree {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.branch-tree .branch-tree {
+  margin-left: 14px;
+  padding-left: 12px;
+  border-left: 1px solid #ddd9cf;
+}
+
+.branch-tree li {
+  position: relative;
+  margin: 2px 0;
+}
+
+.branch-tree .branch-tree > li::before {
+  position: absolute;
+  top: 16px;
+  left: -12px;
+  width: 9px;
+  border-top: 1px solid #ddd9cf;
+  content: "";
+}
+
+.branch-tree button {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 15px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 8px;
+  color: #5d6863;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.branch-tree button:hover {
+  color: var(--ink);
+  background: #f1efe8;
+}
+
+.branch-tree button.active {
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+}
+
+.branch-tree button span {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .icon-button,
@@ -2232,6 +2381,51 @@ body.resizing-drawer {
   border-color: #343d39;
 }
 
+.app-shell[data-theme="dark"] .branch-stat--button:hover,
+.app-shell[data-theme="dark"] .branch-stat--button[aria-expanded="true"] {
+  color: var(--ink);
+  background: #2a322e;
+  border-color: #3d4742;
+}
+
+.app-shell[data-theme="dark"] .branch-menu {
+  color: #d5ddd9;
+  background: #202623;
+  border-color: #3a433f;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.36);
+}
+
+.app-shell[data-theme="dark"] .branch-menu > header {
+  border-bottom-color: #343d39;
+}
+
+.app-shell[data-theme="dark"] .branch-menu > header span,
+.app-shell[data-theme="dark"] .branch-menu__body > p {
+  color: #929c97;
+}
+
+.app-shell[data-theme="dark"] .branch-tree .branch-tree {
+  border-left-color: #39413d;
+}
+
+.app-shell[data-theme="dark"] .branch-tree .branch-tree > li::before {
+  border-top-color: #39413d;
+}
+
+.app-shell[data-theme="dark"] .branch-tree button {
+  color: #aeb8b3;
+}
+
+.app-shell[data-theme="dark"] .branch-tree button:hover {
+  color: var(--ink);
+  background: #2a322e;
+}
+
+.app-shell[data-theme="dark"] .branch-tree button.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .app-shell[data-theme="dark"] .icon-button,
 .app-shell[data-theme="dark"] .menu-button,
 .app-shell[data-theme="dark"] .mobile-close {
@@ -2274,6 +2468,19 @@ body.resizing-drawer {
   color: var(--ink);
   background: #161b19;
   border-color: #3b4540;
+}
+
+.app-shell[data-theme="dark"] .chat-menu__divider {
+  background: #343d39;
+}
+
+.app-shell[data-theme="dark"] .chat-menu > button.chat-menu__danger,
+.app-shell[data-theme="dark"] .chat-menu > button.chat-menu__danger:hover {
+  color: #f0a093;
+}
+
+.app-shell[data-theme="dark"] .chat-menu > button.chat-menu__danger:hover {
+  background: #382522;
 }
 
 .app-shell[data-theme="dark"] .thread-messages {
