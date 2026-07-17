@@ -84,6 +84,7 @@ export interface WorkspaceState {
     customInstructions: string;
     focusDrawerWidth: number;
     sidebarCollapsed: boolean;
+    collapsedCategoryIds: string[];
     theme: "light" | "dark";
   };
 }

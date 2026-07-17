@@ -72,6 +72,8 @@ import type {
 } from "./types";
 import type { ReasoningEffort } from "./types";
 
+const UNCATEGORIZED_CATEGORY_ID = "__uncategorized__";
+
 const DEFAULT_STATE: WorkspaceState = {
   version: 1,
   categories: [],
@@ -84,6 +86,7 @@ const DEFAULT_STATE: WorkspaceState = {
     customInstructions: "",
     focusDrawerWidth: 440,
     sidebarCollapsed: false,
+    collapsedCategoryIds: [],
     theme: "light",
   },
 };
@@ -1431,6 +1434,12 @@ export default function App() {
       chats: current.chats.map((chat) =>
         chat.categoryId === category.id ? { ...chat, categoryId: null } : chat,
       ),
+      settings: {
+        ...current.settings,
+        collapsedCategoryIds: current.settings.collapsedCategoryIds.filter(
+          (id) => id !== category.id,
+        ),
+      },
     }));
     setCategoryMenuId(null);
   };
@@ -1458,6 +1467,34 @@ export default function App() {
       }),
       `locus-${category.name}`,
     );
+    setCategoryMenuId(null);
+  };
+
+  const exportUncategorized = () => {
+    downloadChatExport(
+      makeChatExport(workspace, {
+        type: "category",
+        categoryId: null,
+        name: "Uncategorized",
+      }),
+      "locus-uncategorized",
+    );
+    setCategoryMenuId(null);
+  };
+
+  const toggleCategoryCollapse = (categoryId: string) => {
+    setWorkspace((current) => {
+      const collapsed = current.settings.collapsedCategoryIds.includes(categoryId);
+      return {
+        ...current,
+        settings: {
+          ...current.settings,
+          collapsedCategoryIds: collapsed
+            ? current.settings.collapsedCategoryIds.filter((id) => id !== categoryId)
+            : [...current.settings.collapsedCategoryIds, categoryId],
+        },
+      };
+    });
     setCategoryMenuId(null);
   };
 
@@ -1752,6 +1789,9 @@ export default function App() {
       </button>
     );
   };
+  const uncategorizedCollapsed =
+    !search &&
+    workspace.settings.collapsedCategoryIds.includes(UNCATEGORIZED_CATEGORY_ID);
 
   return (
     <div
@@ -1830,13 +1870,31 @@ export default function App() {
               {workspace.categories.map((category, categoryIndex) => {
                 const chats = chatsByCategory.grouped.get(category.id) ?? [];
                 if (search && !chats.length) return null;
+                const collapsed =
+                  !search && workspace.settings.collapsedCategoryIds.includes(category.id);
                 return (
-                  <section className="category-group" key={category.id}>
+                  <section
+                    className={`category-group ${collapsed ? "category-group--collapsed" : ""}`}
+                    key={category.id}
+                  >
                     <header className="category-header">
-                      <Folder size={13} />
-                      <strong>{category.name}</strong>
-                      <span>{chats.length}</span>
                       <button
+                        className="category-toggle"
+                        type="button"
+                        aria-expanded={!collapsed}
+                        aria-label={`${collapsed ? "Expand" : "Collapse"} ${category.name}`}
+                        onClick={() => toggleCategoryCollapse(category.id)}
+                      >
+                        <ChevronRight
+                          className={`category-chevron ${collapsed ? "" : "category-chevron--open"}`}
+                          size={12}
+                        />
+                        <Folder size={13} />
+                        <strong>{category.name}</strong>
+                        <span>{chats.length}</span>
+                      </button>
+                      <button
+                        className="category-options-button"
                         type="button"
                         aria-label={`Options for ${category.name}`}
                         aria-haspopup="true"
@@ -1890,30 +1948,75 @@ export default function App() {
                         </button>
                       </div>
                     )}
-                    <div className="category-chats">
-                      {chats.length ? (
-                        chats.map(renderChatRow)
-                      ) : (
-                        <p className="category-empty">No chats</p>
-                      )}
-                    </div>
+                    {!collapsed && (
+                      <div className="category-chats">
+                        {chats.length ? (
+                          chats.map(renderChatRow)
+                        ) : (
+                          <p className="category-empty">No chats</p>
+                        )}
+                      </div>
+                    )}
                   </section>
                 );
               })}
               {(!search || chatsByCategory.uncategorized.length > 0) && (
-                <section className="category-group category-group--uncategorized">
+                <section
+                  className={`category-group category-group--uncategorized ${uncategorizedCollapsed ? "category-group--collapsed" : ""}`}
+                >
                   <header className="category-header">
-                    <Folder size={13} />
-                    <strong>Uncategorized</strong>
-                    <span>{chatsByCategory.uncategorized.length}</span>
+                    <button
+                      className="category-toggle"
+                      type="button"
+                      aria-expanded={!uncategorizedCollapsed}
+                      aria-label={`${uncategorizedCollapsed ? "Expand" : "Collapse"} Uncategorized`}
+                      onClick={() => toggleCategoryCollapse(UNCATEGORIZED_CATEGORY_ID)}
+                    >
+                      <ChevronRight
+                        className={`category-chevron ${uncategorizedCollapsed ? "" : "category-chevron--open"}`}
+                        size={12}
+                      />
+                      <Folder size={13} />
+                      <strong>Uncategorized</strong>
+                      <span>{chatsByCategory.uncategorized.length}</span>
+                    </button>
+                    <button
+                      className="category-options-button"
+                      type="button"
+                      aria-label="Options for Uncategorized"
+                      aria-haspopup="true"
+                      aria-expanded={categoryMenuId === UNCATEGORIZED_CATEGORY_ID}
+                      onClick={() =>
+                        setCategoryMenuId((open) =>
+                          open === UNCATEGORIZED_CATEGORY_ID
+                            ? null
+                            : UNCATEGORIZED_CATEGORY_ID,
+                        )
+                      }
+                    >
+                      <MoreHorizontal size={14} />
+                    </button>
                   </header>
-                  <div className="category-chats">
-                    {chatsByCategory.uncategorized.length ? (
-                      chatsByCategory.uncategorized.map(renderChatRow)
-                    ) : (
-                      <p className="category-empty">Your uncategorized chats will appear here.</p>
-                    )}
-                  </div>
+                  {categoryMenuId === UNCATEGORIZED_CATEGORY_ID && (
+                    <div className="category-menu" aria-label="Uncategorized options">
+                      <button
+                        type="button"
+                        disabled={!chatsByCategory.uncategorized.length}
+                        onClick={exportUncategorized}
+                      >
+                        <Download size={14} /> Export category
+                      </button>
+                    </div>
+                  )}
+                  {!uncategorizedCollapsed && (
+                    <div className="category-chats">
+                      {chatsByCategory.uncategorized.length ? (
+                        chatsByCategory.uncategorized.map(renderChatRow)
+                      ) : (
+                        <p className="category-empty">Your uncategorized chats will appear here.</p>
+                      )}
+                    </div>
+                  )}
                 </section>
               )}
             </>

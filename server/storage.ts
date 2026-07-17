@@ -17,6 +17,7 @@ export const emptyState = (): WorkspaceState => ({
     customInstructions: "",
     focusDrawerWidth: 440,
     sidebarCollapsed: false,
+    collapsedCategoryIds: [],
     theme: "light",
   },
 });
@@ -61,6 +62,9 @@ function normalizeState(state: WorkspaceState): WorkspaceState {
           ? Math.min(720, Math.max(320, state.settings.focusDrawerWidth))
           : 440,
       sidebarCollapsed: state.settings?.sidebarCollapsed === true,
+      collapsedCategoryIds: Array.isArray(state.settings?.collapsedCategoryIds)
+        ? [...new Set(state.settings.collapsedCategoryIds.filter((id) => typeof id === "string"))]
+        : [],
       theme: state.settings?.theme === "dark" ? "dark" : "light",
     },
   };

@@ -334,21 +334,54 @@ a:focus-visible {
   margin: 2px 0 11px;
 }
 
+.category-group--collapsed {
+  margin-bottom: 5px;
+}
+
 .category-header {
   display: grid;
-  grid-template-columns: 16px minmax(0, 1fr) auto 24px;
+  grid-template-columns: minmax(0, 1fr) 24px;
   min-height: 28px;
   align-items: center;
-  gap: 4px;
-  padding: 0 4px 0 8px;
+  gap: 2px;
+  padding: 0 4px;
   color: #727c77;
 }
 
-.category-header > svg {
+.category-toggle {
+  display: grid;
+  min-width: 0;
+  min-height: 28px;
+  grid-template-columns: 12px 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.category-toggle:hover {
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.category-toggle > svg:not(.category-chevron) {
   color: #8a928e;
 }
 
-.category-header strong {
+.category-chevron {
+  transition: transform 140ms ease;
+}
+
+.category-chevron--open {
+  transform: rotate(90deg);
+}
+
+.category-toggle strong {
   overflow: hidden;
   font-size: 10px;
   font-weight: 750;
@@ -356,13 +389,13 @@ a:focus-visible {
   white-space: nowrap;
 }
 
-.category-header > span {
+.category-toggle > span {
   color: #9aa09d;
   font-size: 8px;
   font-weight: 700;
 }
 
-.category-header > button {
+.category-options-button {
   display: grid;
   width: 24px;
   height: 24px;
@@ -375,14 +408,10 @@ a:focus-visible {
   cursor: pointer;
 }
 
-.category-header > button:hover,
-.category-header > button[aria-expanded="true"] {
+.category-options-button:hover,
+.category-options-button[aria-expanded="true"] {
   color: var(--ink);
   background: rgba(255, 255, 255, 0.5);
-}
-
-.category-group--uncategorized .category-header {
-  grid-template-columns: 16px minmax(0, 1fr) auto;
 }
 
 .category-chats {
@@ -3068,7 +3097,8 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .import-button,
 .app-shell[data-theme="dark"] .sidebar-data-actions button,
 .app-shell[data-theme="dark"] .list-heading > button,
-.app-shell[data-theme="dark"] .category-header,
+.app-shell[data-theme="dark"] .category-toggle,
+.app-shell[data-theme="dark"] .category-options-button,
 .app-shell[data-theme="dark"] .chat-row,
 .app-shell[data-theme="dark"] .model-select,
 .app-shell[data-theme="dark"] .custom-instructions-button,
@@ -3079,8 +3109,9 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .import-button:hover,
 .app-shell[data-theme="dark"] .sidebar-data-actions button:hover:not(:disabled),
 .app-shell[data-theme="dark"] .list-heading > button:hover,
-.app-shell[data-theme="dark"] .category-header > button:hover,
-.app-shell[data-theme="dark"] .category-header > button[aria-expanded="true"],
+.app-shell[data-theme="dark"] .category-toggle:hover,
+.app-shell[data-theme="dark"] .category-options-button:hover,
+.app-shell[data-theme="dark"] .category-options-button[aria-expanded="true"],
 .app-shell[data-theme="dark"] .chat-row:hover,
 .app-shell[data-theme="dark"] .custom-instructions-button:hover,
 .app-shell[data-theme="dark"] .theme-toggle-button:hover {
@@ -3092,8 +3123,8 @@ body.resizing-drawer {
   border-color: #303835;
 }
 
-.app-shell[data-theme="dark"] .category-header > svg,
-.app-shell[data-theme="dark"] .category-header > button,
+.app-shell[data-theme="dark"] .category-toggle > svg:not(.category-chevron),
+.app-shell[data-theme="dark"] .category-options-button,
 .app-shell[data-theme="dark"] .category-empty {
   color: #727d77;
 }

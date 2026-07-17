@@ -8,7 +8,7 @@ export interface ChatExport {
   exportedAt: string;
   scope:
     | { type: "all" }
-    | { type: "category"; categoryId: string; name: string }
+    | { type: "category"; categoryId: string | null; name: string }
     | { type: "chat"; chatId: string; title: string };
   categories: ChatCategory[];
   chats: ChatTree[];
@@ -148,7 +148,9 @@ export function makeChatExport(
       exportedAt: new Date().toISOString(),
       scope,
       categories: workspace.categories.filter((category) => category.id === scope.categoryId),
-      chats: workspace.chats.filter((chat) => chat.categoryId === scope.categoryId),
+      chats: workspace.chats.filter(
+        (chat) => (chat.categoryId ?? null) === scope.categoryId,
+      ),
     };
   }
 
