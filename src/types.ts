@@ -58,14 +58,23 @@ export interface ChatTree {
   id: string;
   title: string;
   pinned?: boolean;
+  categoryId?: string | null;
   rootId: string;
   nodes: Record<string, ThreadNode>;
   createdAt: string;
   updatedAt: string;
 }
 
+export interface ChatCategory {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface WorkspaceState {
   version: 1;
+  categories: ChatCategory[];
   chats: ChatTree[];
   activeChatId: string | null;
   settings: {

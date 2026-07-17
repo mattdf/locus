@@ -34,7 +34,7 @@ const allowedReasoningEfforts = new Set<ReasoningEffort>([
   "max",
 ]);
 
-app.use(express.json({ limit: "3mb" }));
+app.use(express.json({ limit: "100mb" }));
 
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true });

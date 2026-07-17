@@ -7,6 +7,7 @@ const DATA_FILE = path.join(DATA_DIR, "chats.json");
 
 export const emptyState = (): WorkspaceState => ({
   version: 1,
+  categories: [],
   chats: [],
   activeChatId: null,
   settings: {
@@ -21,6 +22,15 @@ export const emptyState = (): WorkspaceState => ({
 });
 
 function normalizeState(state: WorkspaceState): WorkspaceState {
+  const categories = Array.isArray(state.categories)
+    ? state.categories.filter(
+        (category, index, items) =>
+          typeof category?.id === "string" &&
+          typeof category?.name === "string" &&
+          items.findIndex((candidate) => candidate?.id === category.id) === index,
+      )
+    : [];
+  const categoryIds = new Set(categories.map((category) => category.id));
   const hasReasoningEffort = Boolean(state.settings?.reasoningEffort);
   const model =
     !hasReasoningEffort && state.chats.length === 0
@@ -28,6 +38,14 @@ function normalizeState(state: WorkspaceState): WorkspaceState {
       : state.settings?.model || "gpt-5.6-sol";
   return {
     ...state,
+    categories,
+    chats: (Array.isArray(state.chats) ? state.chats : []).map((chat) => ({
+      ...chat,
+      categoryId:
+        typeof chat.categoryId === "string" && categoryIds.has(chat.categoryId)
+          ? chat.categoryId
+          : null,
+    })),
     settings: {
       model,
       reasoningEffort:

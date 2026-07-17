@@ -17,6 +17,9 @@ A local-first chat UI for studying difficult technical material without blowing 
 - Edit `SYSTEM_PROMPT.md` to change the base tutoring prompt, and add optional custom
   instructions from the UI that supplement it.
 - Paste Markdown (including LaTeX) into a new study without making a model request.
+- Organize studies into reorderable sidebar categories and move chats between them.
+- Export one chat, one category, or the full library as JSON; import exports into an
+  existing, new, preserved, or uncategorized destination.
 - Recover LaTeX from ChatGPT rendered-copy imports where `\[` / `\(` delimiters were
   flattened into plain brackets and parentheses.
 - Store the complete workspace as a readable local JSON document in `data/chats.json`.
@@ -49,6 +52,7 @@ Then open [http://127.0.0.1:8787](http://127.0.0.1:8787).
 - `src/components/MarkdownMessage.tsx` renders Markdown, KaTeX, and code; captures selections
   using original TeX source; and reconnects saved anchors to rendered passages.
 - `src/lib/tree.ts` contains the small set of tree and context helpers.
+- `src/lib/chatTransfer.ts` validates and creates portable chat/category exports.
 - `server/openai.ts` is the only code that reads the API key and calls the Responses API.
 - `SYSTEM_PROMPT.md` contains the base instructions loaded fresh for every model request.
 - `server/storage.ts` persists one versioned JSON document using atomic replacement.

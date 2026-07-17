@@ -1,10 +1,15 @@
 import {
+  ArrowDown,
+  ArrowUp,
   BookOpenText,
   BrainCircuit,
   ChevronLeft,
   ChevronRight,
   CornerUpRight,
+  Download,
   FileInput,
+  Folder,
+  FolderInput,
   GitBranch,
   Hash,
   KeyRound,
@@ -24,6 +29,7 @@ import {
   Sparkles,
   Sun,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -34,6 +40,13 @@ import type {
 } from "react";
 import { Composer } from "./components/Composer";
 import { ThreadView } from "./components/ThreadView";
+import {
+  cloneChatForImport,
+  downloadChatExport,
+  makeChatExport,
+  parseChatImport,
+  type ParsedChatImport,
+} from "./lib/chatTransfer";
 import { markdownBlockquote } from "./lib/markdown";
 import {
   childThreads,
@@ -47,6 +60,7 @@ import {
   treeDepth,
 } from "./lib/tree";
 import type {
+  ChatCategory,
   ChatTree,
   GenerationMetrics,
   HighlightAnchor,
@@ -60,6 +74,7 @@ import type { ReasoningEffort } from "./types";
 
 const DEFAULT_STATE: WorkspaceState = {
   version: 1,
+  categories: [],
   chats: [],
   activeChatId: null,
   settings: {
@@ -563,6 +578,17 @@ export default function App() {
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [renamingChat, setRenamingChat] = useState(false);
   const [renameDraft, setRenameDraft] = useState("");
+  const [categoryMenuId, setCategoryMenuId] = useState<string | null>(null);
+  const [categoryEditor, setCategoryEditor] = useState<{
+    categoryId: string | null;
+    name: string;
+  } | null>(null);
+  const [jsonImportOpen, setJsonImportOpen] = useState(false);
+  const [jsonImport, setJsonImport] = useState<ParsedChatImport | null>(null);
+  const [jsonImportFilename, setJsonImportFilename] = useState("");
+  const [jsonImportError, setJsonImportError] = useState("");
+  const [jsonImportTarget, setJsonImportTarget] = useState("uncategorized");
+  const [jsonImportNewCategory, setJsonImportNewCategory] = useState("");
   const [focusMaximized, setFocusMaximized] = useState(false);
   const responseControllers = useRef(new Map<string, AbortController>());
   const workspaceRef = useRef(workspace);
@@ -693,6 +719,9 @@ export default function App() {
         setChatMenuOpen(false);
         setBranchMenuOpen(false);
         setRenamingChat(false);
+        setCategoryMenuId(null);
+        setCategoryEditor(null);
+        setJsonImportOpen(false);
       }
     };
     window.addEventListener("keydown", close);
@@ -1301,6 +1330,221 @@ export default function App() {
     setChatMenuOpen(false);
   };
 
+  const saveCategory = () => {
+    if (!categoryEditor) return;
+    const name = categoryEditor.name.trim();
+    if (!name) return;
+    if (
+      workspace.categories.some(
+        (category) =>
+          category.id !== categoryEditor.categoryId &&
+          category.name.trim().toLowerCase() === name.toLowerCase(),
+      )
+    ) {
+      return;
+    }
+    const updatedAt = timestamp();
+    setWorkspace((current) => {
+      const duplicate = current.categories.some(
+        (category) =>
+          category.id !== categoryEditor.categoryId &&
+          category.name.trim().toLowerCase() === name.toLowerCase(),
+      );
+      if (duplicate) return current;
+      if (categoryEditor.categoryId) {
+        return {
+          ...current,
+          categories: current.categories.map((category) =>
+            category.id === categoryEditor.categoryId
+              ? { ...category, name, updatedAt }
+              : category,
+          ),
+        };
+      }
+      const category: ChatCategory = {
+        id: newId(),
+        name,
+        createdAt: updatedAt,
+        updatedAt,
+      };
+      return { ...current, categories: [...current.categories, category] };
+    });
+    setCategoryEditor(null);
+    setCategoryMenuId(null);
+  };
+
+  const moveCategory = (categoryId: string, direction: -1 | 1) => {
+    setWorkspace((current) => {
+      const index = current.categories.findIndex((category) => category.id === categoryId);
+      const target = index + direction;
+      if (index < 0 || target < 0 || target >= current.categories.length) return current;
+      const categories = [...current.categories];
+      [categories[index], categories[target]] = [categories[target], categories[index]];
+      return { ...current, categories };
+    });
+    setCategoryMenuId(null);
+  };
+
+  const deleteCategory = (category: ChatCategory) => {
+    const count = workspace.chats.filter((chat) => chat.categoryId === category.id).length;
+    const detail = count
+      ? ` ${count} ${count === 1 ? "chat" : "chats"} will become uncategorized.`
+      : "";
+    if (!window.confirm(`Delete the “${category.name}” category?${detail}`)) return;
+    setWorkspace((current) => ({
+      ...current,
+      categories: current.categories.filter((candidate) => candidate.id !== category.id),
+      chats: current.chats.map((chat) =>
+        chat.categoryId === category.id ? { ...chat, categoryId: null } : chat,
+      ),
+    }));
+    setCategoryMenuId(null);
+  };
+
+  const moveActiveChat = (categoryId: string) => {
+    if (!activeChat) return;
+    updateChat(activeChat.id, (chat) => ({
+      ...chat,
+      categoryId: categoryId || null,
+      updatedAt: timestamp(),
+    }));
+    setChatMenuOpen(false);
+  };
+
+  const exportAllChats = () => {
+    downloadChatExport(makeChatExport(workspace, { type: "all" }), "locus-all-chats");
+  };
+
+  const exportCategory = (category: ChatCategory) => {
+    downloadChatExport(
+      makeChatExport(workspace, {
+        type: "category",
+        categoryId: category.id,
+        name: category.name,
+      }),
+      `locus-${category.name}`,
+    );
+    setCategoryMenuId(null);
+  };
+
+  const exportActiveChat = () => {
+    if (!activeChat) return;
+    downloadChatExport(
+      makeChatExport(workspace, {
+        type: "chat",
+        chatId: activeChat.id,
+        title: activeChat.title,
+      }),
+      `locus-${activeChat.title}`,
+    );
+    setChatMenuOpen(false);
+  };
+
+  const resetJsonImport = () => {
+    setJsonImportOpen(false);
+    setJsonImport(null);
+    setJsonImportFilename("");
+    setJsonImportError("");
+    setJsonImportTarget("uncategorized");
+    setJsonImportNewCategory("");
+  };
+
+  const readJsonImportFile = async (file: File | undefined) => {
+    setJsonImport(null);
+    setJsonImportFilename(file?.name ?? "");
+    setJsonImportError("");
+    if (!file) return;
+    try {
+      const parsed = parseChatImport(await file.text());
+      setJsonImport(parsed);
+      setJsonImportTarget(parsed.categories.length ? "preserve" : "uncategorized");
+    } catch (error) {
+      setJsonImportError(
+        error instanceof Error ? error.message : "The JSON file could not be read.",
+      );
+    }
+  };
+
+  const importJsonChats = () => {
+    if (!jsonImport) return;
+    if (jsonImportTarget === "new" && !jsonImportNewCategory.trim()) return;
+    const importedChats = jsonImport.chats.map((chat) => cloneChatForImport(chat, newId()));
+    const firstChat = importedChats[0] ?? null;
+    setWorkspace((current) => {
+      let categories = [...current.categories];
+      let commonCategoryId: string | null = null;
+      const categoryMap = new Map<string, string>();
+
+      if (jsonImportTarget === "new") {
+        const name = jsonImportNewCategory.trim();
+        const existing = categories.find(
+          (category) => category.name.trim().toLowerCase() === name.toLowerCase(),
+        );
+        if (existing) {
+          commonCategoryId = existing.id;
+        } else {
+          const createdAt = timestamp();
+          const category: ChatCategory = {
+            id: newId(),
+            name,
+            createdAt,
+            updatedAt: createdAt,
+          };
+          categories.push(category);
+          commonCategoryId = category.id;
+        }
+      } else if (jsonImportTarget === "uncategorized") {
+        commonCategoryId = null;
+      } else if (jsonImportTarget === "preserve") {
+        jsonImport.categories.forEach((importedCategory) => {
+          const existing = categories.find(
+            (category) =>
+              category.name.trim().toLowerCase() ===
+              importedCategory.name.trim().toLowerCase(),
+          );
+          if (existing) {
+            categoryMap.set(importedCategory.id, existing.id);
+            return;
+          }
+          const category = { ...importedCategory, id: newId() };
+          categories.push(category);
+          categoryMap.set(importedCategory.id, category.id);
+        });
+      } else if (categories.some((category) => category.id === jsonImportTarget)) {
+        commonCategoryId = jsonImportTarget;
+      }
+
+      const chats = importedChats.map((chat, index) => ({
+        ...chat,
+        categoryId:
+          jsonImportTarget === "preserve"
+            ? chat.categoryId
+              ? categoryMap.get(chat.categoryId) ?? null
+              : null
+            : commonCategoryId,
+        // Preserve export ordering while making equal timestamps deterministic in the sidebar.
+        updatedAt: chat.updatedAt || new Date(Date.now() - index).toISOString(),
+      }));
+      return {
+        ...current,
+        categories,
+        activeChatId: firstChat?.id ?? current.activeChatId,
+        chats: [...chats, ...current.chats],
+      };
+    });
+
+    if (firstChat) {
+      historyAction.current = "push";
+      setActiveNodeId(firstChat.rootId);
+      setDraft(null);
+      setSelection(null);
+      setFocusMaximized(false);
+      setSidebarOpen(false);
+    }
+    setSearch("");
+    resetJsonImport();
+  };
+
   const deleteActiveChat = () => {
     if (!activeChat || !window.confirm(`Delete “${activeChat.title}”?`)) return;
     historyAction.current = "push";
@@ -1325,6 +1569,18 @@ export default function App() {
       .sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)));
   }, [search, workspace.chats]);
 
+  const chatsByCategory = useMemo(() => {
+    const grouped = new Map<string, ChatTree[]>();
+    workspace.categories.forEach((category) => grouped.set(category.id, []));
+    const uncategorized: ChatTree[] = [];
+    filteredChats.forEach((chat) => {
+      const group = chat.categoryId ? grouped.get(chat.categoryId) : null;
+      if (group) group.push(chat);
+      else uncategorized.push(chat);
+    });
+    return { grouped, uncategorized };
+  }, [filteredChats, workspace.categories]);
+
   const openChat = (chat: ChatTree) => {
     historyAction.current = "push";
     setWorkspace((current) => ({ ...current, activeChatId: chat.id }));
@@ -1335,6 +1591,7 @@ export default function App() {
     setChatMenuOpen(false);
     setBranchMenuOpen(false);
     setRenamingChat(false);
+    setCategoryMenuId(null);
     setFocusMaximized(false);
   };
 
@@ -1348,6 +1605,7 @@ export default function App() {
     setChatMenuOpen(false);
     setBranchMenuOpen(false);
     setRenamingChat(false);
+    setCategoryMenuId(null);
     setFocusMaximized(false);
   };
 
@@ -1438,6 +1696,28 @@ export default function App() {
       onKeyDown={resizeDrawerWithKeyboard}
     />
   );
+  const renderChatRow = (chat: ChatTree) => {
+    const branchCount = Object.keys(chat.nodes).length - 1;
+    return (
+      <button
+        type="button"
+        className={`chat-row ${chat.id === activeChat?.id ? "active" : ""} ${chat.pinned ? "chat-row--pinned" : ""}`}
+        key={chat.id}
+        onClick={() => openChat(chat)}
+      >
+        {chat.pinned ? <Pin size={15} /> : <BookOpenText size={15} />}
+        <span>
+          <strong>{chat.title}</strong>
+          <small>
+            {branchCount
+              ? `${branchCount} elaboration${branchCount === 1 ? "" : "s"}`
+              : "Main thread only"}
+          </small>
+        </span>
+        {branchCount > 0 && <em>{treeDepth(chat)}</em>}
+      </button>
+    );
+  };
 
   return (
     <div
@@ -1446,6 +1726,14 @@ export default function App() {
       style={{ "--focus-drawer-width": `${drawerWidth}px` } as CSSProperties}
     >
       <aside className={`sidebar ${sidebarOpen ? "sidebar--open" : ""}`}>
+        {categoryMenuId && (
+          <button
+            className="category-menu-scrim"
+            type="button"
+            aria-label="Close category menu"
+            onClick={() => setCategoryMenuId(null)}
+          />
+        )}
         <div className="sidebar__top">
           <div className="brand">
             <div className="brand-mark"><GitBranch size={18} /></div>
@@ -1471,6 +1759,14 @@ export default function App() {
           <button className="import-button" type="button" onClick={() => startNew("import")}>
             <FileInput size={15} /> Import Markdown
           </button>
+          <div className="sidebar-data-actions">
+            <button type="button" disabled={!workspace.chats.length && !workspace.categories.length} onClick={exportAllChats}>
+              <Download size={14} /> Export all
+            </button>
+            <button type="button" onClick={() => setJsonImportOpen(true)}>
+              <Upload size={14} /> Import JSON
+            </button>
+          </div>
           <label className="search-box">
             <Search size={14} />
             <input
@@ -1482,30 +1778,111 @@ export default function App() {
         </div>
 
         <div className="chat-list">
-          <p className="list-label">Studies</p>
-          {filteredChats.length ? (
-            filteredChats.map((chat) => {
-              const branchCount = Object.keys(chat.nodes).length - 1;
-              return (
-                <button
-                  type="button"
-                  className={`chat-row ${chat.id === activeChat?.id ? "active" : ""} ${chat.pinned ? "chat-row--pinned" : ""}`}
-                  key={chat.id}
-                  onClick={() => openChat(chat)}
-                >
-                  {chat.pinned ? <Pin size={15} /> : <BookOpenText size={15} />}
-                  <span>
-                    <strong>{chat.title}</strong>
-                    <small>
-                      {branchCount ? `${branchCount} elaboration${branchCount === 1 ? "" : "s"}` : "Main thread only"}
-                    </small>
-                  </span>
-                  {branchCount > 0 && <em>{treeDepth(chat)}</em>}
-                </button>
-              );
-            })
+          <div className="list-heading">
+            <p className="list-label">Studies</p>
+            <button
+              type="button"
+              aria-label="Create category"
+              title="Create category"
+              onClick={() => setCategoryEditor({ categoryId: null, name: "" })}
+            >
+              <Plus size={13} /> Category
+            </button>
+          </div>
+          {search && !filteredChats.length ? (
+            <p className="empty-list">No matching studies</p>
           ) : (
-            <p className="empty-list">{search ? "No matching studies" : "Your studies will appear here."}</p>
+            <>
+              {workspace.categories.map((category, categoryIndex) => {
+                const chats = chatsByCategory.grouped.get(category.id) ?? [];
+                if (search && !chats.length) return null;
+                return (
+                  <section className="category-group" key={category.id}>
+                    <header className="category-header">
+                      <Folder size={13} />
+                      <strong>{category.name}</strong>
+                      <span>{chats.length}</span>
+                      <button
+                        type="button"
+                        aria-label={`Options for ${category.name}`}
+                        aria-haspopup="true"
+                        aria-expanded={categoryMenuId === category.id}
+                        onClick={() =>
+                          setCategoryMenuId((open) =>
+                            open === category.id ? null : category.id,
+                          )
+                        }
+                      >
+                        <MoreHorizontal size={14} />
+                      </button>
+                    </header>
+                    {categoryMenuId === category.id && (
+                      <div className="category-menu" aria-label={`${category.name} options`}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCategoryEditor({
+                              categoryId: category.id,
+                              name: category.name,
+                            })
+                          }
+                        >
+                          <Pencil size={14} /> Rename
+                        </button>
+                        <button
+                          type="button"
+                          disabled={categoryIndex === 0}
+                          onClick={() => moveCategory(category.id, -1)}
+                        >
+                          <ArrowUp size={14} /> Move up
+                        </button>
+                        <button
+                          type="button"
+                          disabled={categoryIndex === workspace.categories.length - 1}
+                          onClick={() => moveCategory(category.id, 1)}
+                        >
+                          <ArrowDown size={14} /> Move down
+                        </button>
+                        <button type="button" onClick={() => exportCategory(category)}>
+                          <Download size={14} /> Export category
+                        </button>
+                        <div />
+                        <button
+                          className="category-menu__danger"
+                          type="button"
+                          onClick={() => deleteCategory(category)}
+                        >
+                          <Trash2 size={14} /> Delete category
+                        </button>
+                      </div>
+                    )}
+                    <div className="category-chats">
+                      {chats.length ? (
+                        chats.map(renderChatRow)
+                      ) : (
+                        <p className="category-empty">No chats</p>
+                      )}
+                    </div>
+                  </section>
+                );
+              })}
+              {(!search || chatsByCategory.uncategorized.length > 0) && (
+                <section className="category-group category-group--uncategorized">
+                  <header className="category-header">
+                    <Folder size={13} />
+                    <strong>Uncategorized</strong>
+                    <span>{chatsByCategory.uncategorized.length}</span>
+                  </header>
+                  <div className="category-chats">
+                    {chatsByCategory.uncategorized.length ? (
+                      chatsByCategory.uncategorized.map(renderChatRow)
+                    ) : (
+                      <p className="category-empty">Your uncategorized chats will appear here.</p>
+                    )}
+                  </div>
+                </section>
+              )}
+            </>
           )}
         </div>
 
@@ -1790,6 +2167,25 @@ export default function App() {
                       <button type="button" onClick={toggleChatPin}>
                         <Pin size={15} /> {activeChat.pinned ? "Unpin from top" : "Pin to top"}
                       </button>
+                      <label className="chat-menu__move">
+                        <FolderInput size={15} />
+                        <span>Move to</span>
+                        <select
+                          aria-label="Move chat to category"
+                          value={activeChat.categoryId ?? ""}
+                          onChange={(event) => moveActiveChat(event.target.value)}
+                        >
+                          <option value="">Uncategorized</option>
+                          {workspace.categories.map((category) => (
+                            <option value={category.id} key={category.id}>
+                              {category.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button type="button" onClick={exportActiveChat}>
+                        <Download size={15} /> Export chat as JSON
+                      </button>
                       <div className="chat-menu__divider" />
                       <button className="chat-menu__danger" type="button" onClick={deleteActiveChat}>
                         <Trash2 size={15} /> Delete chat
@@ -1979,6 +2375,202 @@ export default function App() {
             onComposerInsertionApplied={applyComposerInsertion}
           />
         </aside>
+      )}
+
+      {categoryEditor && (
+        <div
+          className="settings-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setCategoryEditor(null);
+          }}
+        >
+          <section
+            className="settings-modal settings-modal--compact"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="category-editor-title"
+          >
+            <header>
+              <div>
+                <span>Library</span>
+                <h2 id="category-editor-title">
+                  {categoryEditor.categoryId ? "Rename category" : "Create category"}
+                </h2>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="Close category editor"
+                onClick={() => setCategoryEditor(null)}
+              >
+                <X size={17} />
+              </button>
+            </header>
+            <label className="settings-field">
+              <span>Category name</span>
+              <input
+                autoFocus
+                value={categoryEditor.name}
+                onChange={(event) =>
+                  setCategoryEditor((current) =>
+                    current ? { ...current, name: event.target.value } : current,
+                  )
+                }
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") saveCategory();
+                }}
+                placeholder="e.g. Linear algebra"
+              />
+            </label>
+            {workspace.categories.some(
+              (category) =>
+                category.id !== categoryEditor.categoryId &&
+                category.name.trim().toLowerCase() ===
+                  categoryEditor.name.trim().toLowerCase(),
+            ) && <p className="settings-field-error">A category with this name already exists.</p>}
+            <footer>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => setCategoryEditor(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                disabled={
+                  !categoryEditor.name.trim() ||
+                  workspace.categories.some(
+                    (category) =>
+                      category.id !== categoryEditor.categoryId &&
+                      category.name.trim().toLowerCase() ===
+                        categoryEditor.name.trim().toLowerCase(),
+                  )
+                }
+                onClick={saveCategory}
+              >
+                {categoryEditor.categoryId ? "Save name" : "Create category"}
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
+
+      {jsonImportOpen && (
+        <div
+          className="settings-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) resetJsonImport();
+          }}
+        >
+          <section
+            className="settings-modal settings-modal--json-import"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="json-import-title"
+          >
+            <header>
+              <div>
+                <span>Data transfer</span>
+                <h2 id="json-import-title">Import chats from JSON</h2>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="Close JSON import"
+                onClick={resetJsonImport}
+              >
+                <X size={17} />
+              </button>
+            </header>
+            <p>
+              Choose a Locus export. Imported chats receive new IDs, so importing a file
+              never overwrites the chats already here.
+            </p>
+            <label className="json-file-picker">
+              <Upload size={18} />
+              <span>
+                <strong>{jsonImportFilename || "Choose a JSON file"}</strong>
+                <small>Locus exports and workspace data files are supported.</small>
+              </span>
+              <input
+                type="file"
+                accept="application/json,.json"
+                onChange={(event) => void readJsonImportFile(event.target.files?.[0])}
+              />
+            </label>
+            {jsonImportError && (
+              <p className="json-import-error" role="alert">{jsonImportError}</p>
+            )}
+            {jsonImport && (
+              <>
+                <div className="json-import-summary">
+                  <span>{jsonImport.scopeLabel}</span>
+                  <strong>
+                    {jsonImport.chats.length} {jsonImport.chats.length === 1 ? "chat" : "chats"}
+                    {" · "}
+                    {jsonImport.categories.length}{" "}
+                    {jsonImport.categories.length === 1 ? "category" : "categories"}
+                  </strong>
+                </div>
+                {jsonImport.chats.length > 0 ? (
+                  <label className="settings-field">
+                    <span>Import chats into</span>
+                    <select
+                      value={jsonImportTarget}
+                      onChange={(event) => setJsonImportTarget(event.target.value)}
+                    >
+                      {jsonImport.categories.length > 0 && (
+                        <option value="preserve">Keep exported categories</option>
+                      )}
+                      <option value="uncategorized">Uncategorized</option>
+                      {workspace.categories.map((category) => (
+                        <option value={category.id} key={category.id}>
+                          {category.name}
+                        </option>
+                      ))}
+                      <option value="new">New category…</option>
+                    </select>
+                  </label>
+                ) : (
+                  <p className="json-category-only-note">
+                    The exported categories will be recreated and merged with matching names.
+                  </p>
+                )}
+                {jsonImportTarget === "new" && jsonImport.chats.length > 0 && (
+                  <label className="settings-field">
+                    <span>New category name</span>
+                    <input
+                      autoFocus
+                      value={jsonImportNewCategory}
+                      onChange={(event) => setJsonImportNewCategory(event.target.value)}
+                      placeholder="Category name"
+                    />
+                  </label>
+                )}
+              </>
+            )}
+            <footer>
+              <button className="secondary-button" type="button" onClick={resetJsonImport}>
+                Cancel
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                disabled={
+                  !jsonImport ||
+                  (jsonImportTarget === "new" && !jsonImportNewCategory.trim())
+                }
+                onClick={importJsonChats}
+              >
+                Import
+              </button>
+            </footer>
+          </section>
+        </div>
       )}
 
       {customInstructionsOpen && (
