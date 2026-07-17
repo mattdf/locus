@@ -8,10 +8,19 @@ import {
   getGeneration,
 } from "./generations.ts";
 import { getApiKeyStatus, saveApiKey } from "./openai.ts";
+import {
+  clearProviderApiKey,
+  getProviderStatuses,
+  listProviderModels,
+  normalizeLocalBaseUrl,
+  saveProviderApiKey,
+} from "./providers.ts";
 import { readState, writeState } from "./storage.ts";
+import { isProviderId } from "../src/lib/providers.ts";
 import type {
   ContextNode,
   HighlightAnchor,
+  ProviderId,
   ReasoningEffort,
   WorkspaceState,
 } from "../src/types.ts";
@@ -19,12 +28,6 @@ import type {
 const app = express();
 const PORT = Number(process.env.PORT ?? 8787);
 const HOST = process.env.HOST ?? "127.0.0.1";
-const allowedModels = new Set([
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.4",
-  "gpt-5.4-mini",
-]);
 const allowedReasoningEfforts = new Set<ReasoningEffort>([
   "none",
   "low",
@@ -56,6 +59,66 @@ app.put("/api/api-key", async (request, response, next) => {
       return;
     }
     response.json(await saveApiKey(apiKey));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/providers", async (_request, response, next) => {
+  try {
+    response.json(await getProviderStatuses());
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put("/api/providers/:provider/api-key", async (request, response, next) => {
+  try {
+    const provider = request.params.provider;
+    const apiKey = request.body?.apiKey;
+    if (!isProviderId(provider)) {
+      response.status(404).json({ error: "Unknown provider" });
+      return;
+    }
+    if (typeof apiKey !== "string" || !apiKey.trim() || apiKey.length > 5_000) {
+      response.status(400).json({ error: "Enter an API key" });
+      return;
+    }
+    response.json(await saveProviderApiKey(provider, apiKey));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/providers/:provider/api-key", async (request, response, next) => {
+  try {
+    const provider = request.params.provider;
+    if (!isProviderId(provider)) {
+      response.status(404).json({ error: "Unknown provider" });
+      return;
+    }
+    response.json(await clearProviderApiKey(provider));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/providers/:provider/models", async (request, response, next) => {
+  try {
+    const provider = request.params.provider;
+    if (!isProviderId(provider)) {
+      response.status(404).json({ error: "Unknown provider" });
+      return;
+    }
+    if (provider === "openai") {
+      response.status(400).json({ error: "OpenAI models are built into the model picker" });
+      return;
+    }
+    const localBaseUrl =
+      provider === "local"
+        ? normalizeLocalBaseUrl(String(request.query.baseUrl ?? ""))
+        : undefined;
+    response.json({ models: await listProviderModels(provider, localBaseUrl) });
   } catch (error) {
     next(error);
   }
@@ -110,6 +173,8 @@ app.post("/api/respond", (request, response, next) => {
   try {
     const body = request.body as {
       requestId?: string;
+      provider?: ProviderId;
+      localBaseUrl?: string;
       model?: string;
       reasoningEffort?: ReasoningEffort;
       maxOutputTokens?: number;
@@ -118,20 +183,25 @@ app.post("/api/respond", (request, response, next) => {
       message?: string;
       anchor?: HighlightAnchor;
     };
-    const model = body.model ?? "gpt-5.6-sol";
+    const provider = body.provider ?? "openai";
+    const model = body.model?.trim() ?? "gpt-5.6-sol";
     const reasoningEffort = body.reasoningEffort ?? (model.startsWith("gpt-5.6") ? "max" : "xhigh");
     const maxOutputTokens = body.maxOutputTokens ?? 50_000;
     if (!body.requestId || !/^[a-zA-Z0-9_-]{16,128}$/.test(body.requestId)) {
       response.status(400).json({ error: "A valid request ID is required" });
       return;
     }
-    if (!allowedModels.has(model)) {
-      response.status(400).json({ error: "Unsupported model" });
+    if (!isProviderId(provider)) {
+      response.status(400).json({ error: "Unsupported provider" });
+      return;
+    }
+    if (!model || model.length > 300 || /[\r\n]/.test(model)) {
+      response.status(400).json({ error: "Enter a valid model ID" });
       return;
     }
     if (
       !allowedReasoningEfforts.has(reasoningEffort) ||
-      (reasoningEffort === "max" && !model.startsWith("gpt-5.6"))
+      (provider === "openai" && reasoningEffort === "max" && !model.startsWith("gpt-5.6"))
     ) {
       response.status(400).json({ error: "Unsupported reasoning effort for this model" });
       return;
@@ -155,6 +225,11 @@ app.post("/api/respond", (request, response, next) => {
     }
 
     const job = createGeneration(body.requestId, {
+      provider,
+      localBaseUrl:
+        provider === "local"
+          ? normalizeLocalBaseUrl(body.localBaseUrl ?? "")
+          : undefined,
       model,
       context: body.context,
       message: body.message,

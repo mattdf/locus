@@ -2,7 +2,12 @@ import { ArrowUp, CornerDownLeft } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ModelPicker } from "./ModelPicker";
 import { applyMarkdownShortcut, isSendShortcut, sendShortcutLabel } from "../lib/textarea";
-import type { ReasoningEffort, SendShortcut } from "../types";
+import type {
+  ProviderId,
+  ProviderModelOption,
+  ReasoningEffort,
+  SendShortcut,
+} from "../types";
 
 interface ComposerProps {
   onSend: (message: string) => void;
@@ -13,6 +18,8 @@ interface ComposerProps {
   initialValue?: string;
   insertion?: { id: string; value: string };
   onInsertionApplied?: (id: string) => void;
+  provider: ProviderId;
+  modelOptions?: ProviderModelOption[];
   model: string;
   onModelChange: (model: string) => void;
   reasoningEffort: ReasoningEffort;
@@ -29,6 +36,8 @@ export function Composer({
   initialValue = "",
   insertion,
   onInsertionApplied,
+  provider,
+  modelOptions,
   model,
   onModelChange,
   reasoningEffort,
@@ -82,7 +91,7 @@ export function Composer({
   }, [compact, value]);
 
   const submit = () => {
-    if (!value.trim() || disabled) return;
+    if (!value.trim() || !model.trim() || disabled) return;
     onSend(value.trim());
     setValue("");
   };
@@ -108,6 +117,8 @@ export function Composer({
       <div className="composer__footer">
         <ModelPicker
           className="composer__model-picker"
+          provider={provider}
+          modelOptions={modelOptions}
           value={model}
           onChange={onModelChange}
           reasoningEffort={reasoningEffort}
@@ -121,7 +132,7 @@ export function Composer({
         <button
           className="send-button"
           type="button"
-          disabled={disabled || !value.trim()}
+          disabled={disabled || !value.trim() || !model.trim()}
           aria-label={submitLabel}
           onClick={submit}
         >

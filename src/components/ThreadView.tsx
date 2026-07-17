@@ -21,9 +21,12 @@ import type {
   ThreadNode,
   ReasoningEffort,
   SendShortcut,
+  ProviderId,
+  ProviderModelOption,
 } from "../types";
 import { childThreads, messagesForNode } from "../lib/tree";
 import { applyMarkdownShortcut } from "../lib/textarea";
+import { providerLabel } from "../lib/providers";
 import { Composer } from "./Composer";
 import { MarkdownMessage } from "./MarkdownMessage";
 
@@ -37,6 +40,8 @@ interface ThreadViewProps {
   onStop: (assistantId: string) => void;
   onEditMessage: (revisionGroupId: string, content: string) => void;
   onSwitchMessageRevision: (revisionGroupId: string, variantId: string) => void;
+  provider: ProviderId;
+  modelOptions?: ProviderModelOption[];
   model: string;
   onModelChange: (model: string) => void;
   reasoningEffort: ReasoningEffort;
@@ -80,22 +85,28 @@ function formatDuration(durationMs: number): string {
 
 function generationDetails(generation: GenerationMetrics): string {
   const duration = formatDuration(generation.durationMs);
+  const route = [
+    generation.provider ? providerLabel(generation.provider) : null,
+    generation.model,
+  ].filter(Boolean).join(" · ");
+  const prefix = route ? `${duration} · ${route}` : duration;
   if (
     generation.totalTokens === null ||
     generation.inputTokens === null ||
     generation.outputTokens === null ||
     generation.reasoningTokens === null
   ) {
-    return `${duration} · token usage unavailable`;
+    return `${prefix} · token usage unavailable`;
   }
   const format = (value: number) => value.toLocaleString();
+  const costKind = generation.provider === "openrouter" ? "reported" : "estimated";
   const cost =
     typeof generation.totalCostUsd === "number"
       ? generation.totalCostUsd < 0.0001
-        ? "< $0.0001 estimated"
-        : `$${generation.totalCostUsd.toFixed(generation.totalCostUsd < 0.01 ? 5 : 4)} estimated`
+        ? `< $0.0001 ${costKind}`
+        : `$${generation.totalCostUsd.toFixed(generation.totalCostUsd < 0.01 ? 5 : 4)} ${costKind}`
       : "cost unavailable";
-  return `${duration} · ${format(generation.totalTokens)} tokens total · ${format(generation.inputTokens)} input · ${format(generation.outputTokens)} generated (including ${format(generation.reasoningTokens)} reasoning) · ${cost}`;
+  return `${prefix} · ${format(generation.totalTokens)} tokens total · ${format(generation.inputTokens)} input · ${format(generation.outputTokens)} generated (including ${format(generation.reasoningTokens)} reasoning) · ${cost}`;
 }
 
 function ThinkingIndicator({ startedAt }: { startedAt: string }) {
@@ -129,6 +140,8 @@ export function ThreadView({
   onStop,
   onEditMessage,
   onSwitchMessageRevision,
+  provider,
+  modelOptions,
   model,
   onModelChange,
   reasoningEffort,
@@ -506,6 +519,8 @@ export function ThreadView({
           compact={side}
           disabled={waiting}
           onSend={onSend}
+          provider={provider}
+          modelOptions={modelOptions}
           model={model}
           onModelChange={onModelChange}
           reasoningEffort={reasoningEffort}

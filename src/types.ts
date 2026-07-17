@@ -1,9 +1,16 @@
 export type MessageRole = "user" | "assistant" | "source";
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 export type SendShortcut = "enter" | "mod-enter";
+export type ProviderId = "openai" | "openrouter" | "local";
+
+export interface ProviderModelOption {
+  id: string;
+  name?: string;
+}
 
 export interface GenerationMetrics {
   durationMs: number;
+  provider?: ProviderId | null;
   model?: string | null;
   inputTokens: number | null;
   cachedInputTokens?: number | null;
@@ -84,6 +91,9 @@ export interface WorkspaceState {
   chats: ChatTree[];
   activeChatId: string | null;
   settings: {
+    provider: ProviderId;
+    providerModels: Record<ProviderId, string>;
+    localBaseUrl: string;
     model: string;
     reasoningEffort: ReasoningEffort;
     maxOutputTokens: number;

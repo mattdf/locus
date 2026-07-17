@@ -1,6 +1,11 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { WorkspaceState } from "../src/types.ts";
+import {
+  DEFAULT_LOCAL_BASE_URL,
+  DEFAULT_PROVIDER_MODELS,
+  isProviderId,
+} from "../src/lib/providers.ts";
 
 const DATA_DIR = path.resolve("data");
 const DATA_FILE = path.join(DATA_DIR, "chats.json");
@@ -11,6 +16,9 @@ export const emptyState = (): WorkspaceState => ({
   chats: [],
   activeChatId: null,
   settings: {
+    provider: "openai",
+    providerModels: { ...DEFAULT_PROVIDER_MODELS },
+    localBaseUrl: DEFAULT_LOCAL_BASE_URL,
     model: "gpt-5.6-sol",
     reasoningEffort: "max",
     maxOutputTokens: 50_000,
@@ -35,10 +43,29 @@ function normalizeState(state: WorkspaceState): WorkspaceState {
     : [];
   const categoryIds = new Set(categories.map((category) => category.id));
   const hasReasoningEffort = Boolean(state.settings?.reasoningEffort);
-  const model =
+  const provider = isProviderId(state.settings?.provider)
+    ? state.settings.provider
+    : "openai";
+  const legacyModel =
     !hasReasoningEffort && state.chats.length === 0
       ? "gpt-5.6-sol"
       : state.settings?.model || "gpt-5.6-sol";
+  const savedProviderModels = state.settings?.providerModels;
+  const providerModels = {
+    openai:
+      provider === "openai"
+        ? legacyModel
+        : savedProviderModels?.openai || DEFAULT_PROVIDER_MODELS.openai,
+    openrouter:
+      provider === "openrouter"
+        ? legacyModel
+        : savedProviderModels?.openrouter || DEFAULT_PROVIDER_MODELS.openrouter,
+    local:
+      provider === "local"
+        ? legacyModel
+        : savedProviderModels?.local || DEFAULT_PROVIDER_MODELS.local,
+  };
+  const model = providerModels[provider];
   return {
     ...state,
     categories,
@@ -50,6 +77,13 @@ function normalizeState(state: WorkspaceState): WorkspaceState {
           : null,
     })),
     settings: {
+      provider,
+      providerModels,
+      localBaseUrl:
+        typeof state.settings?.localBaseUrl === "string" &&
+        state.settings.localBaseUrl.trim()
+          ? state.settings.localBaseUrl.trim()
+          : DEFAULT_LOCAL_BASE_URL,
       model,
       reasoningEffort:
         state.settings?.reasoningEffort ?? (model.startsWith("gpt-5.6") ? "max" : "xhigh"),

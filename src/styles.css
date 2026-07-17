@@ -1917,7 +1917,8 @@ a:focus-visible {
   text-transform: uppercase;
 }
 
-.model-picker select {
+.model-picker select,
+.model-picker input {
   min-width: 0;
   max-width: 155px;
   padding: 3px 20px 3px 5px;
@@ -1930,6 +1931,11 @@ a:focus-visible {
   font-weight: 650;
 }
 
+.model-picker input {
+  width: 155px;
+  padding-right: 5px;
+}
+
 .model-picker--reasoning select {
   max-width: 92px;
 }
@@ -1939,7 +1945,8 @@ a:focus-visible {
   display: none;
 }
 
-.model-picker select:focus {
+.model-picker select:focus,
+.model-picker input:focus {
   border-color: rgba(13, 112, 101, 0.5);
 }
 
@@ -2829,6 +2836,20 @@ body.resizing-drawer {
   font-size: 10px;
 }
 
+.provider-url-control {
+  grid-column: 1 / -1;
+}
+
+.provider-catalog-status {
+  margin: 7px 1px 0;
+  color: #7f8984;
+  font-size: 8px;
+}
+
+.provider-catalog-status--error {
+  color: #a36c45;
+}
+
 .text-size-control input[type="range"] {
   width: 100%;
   accent-color: var(--accent);
@@ -3069,6 +3090,16 @@ body.resizing-drawer {
 
 .settings-modal--api-key > footer {
   justify-content: flex-end;
+}
+
+.settings-modal--api-key .api-key-clear-button {
+  margin-right: auto;
+  color: var(--danger);
+}
+
+.settings-modal--api-key .api-key-clear-button:hover {
+  color: #a43b36;
+  border-color: #d9a5a1;
 }
 
 .settings-modal > footer {
@@ -3378,7 +3409,8 @@ body.resizing-drawer {
     display: none;
   }
 
-  .model-picker select {
+  .model-picker select,
+  .model-picker input {
     max-width: 150px;
   }
 
@@ -3901,6 +3933,7 @@ body.resizing-drawer {
 }
 
 .app-shell[data-theme="dark"] .model-picker select,
+.app-shell[data-theme="dark"] .model-picker input,
 .app-shell[data-theme="dark"] .start-card__category {
   color: #cfd8d3;
   background: #151b18;
@@ -4046,6 +4079,12 @@ body.resizing-drawer {
   border-color: #47766c;
 }
 
+.app-shell[data-theme="dark"] .settings-modal--api-key .api-key-clear-button,
+.app-shell[data-theme="dark"] .settings-modal--api-key .api-key-clear-button:hover {
+  color: #d9847e;
+  border-color: #68433f;
+}
+
 .app-shell[data-theme="dark"] .settings-modal-backdrop {
   background: rgba(4, 7, 6, 0.66);
 }
@@ -4106,6 +4145,14 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .settings-select-control select,
 .app-shell[data-theme="dark"] .text-size-control strong {
   color: #d5ddd9;
+}
+
+.app-shell[data-theme="dark"] .provider-catalog-status {
+  color: #7e8883;
+}
+
+.app-shell[data-theme="dark"] .provider-catalog-status--error {
+  color: #c18b64;
 }
 
 .app-shell[data-theme="dark"] .settings-modal textarea,

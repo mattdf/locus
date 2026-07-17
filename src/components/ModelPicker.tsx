@@ -1,5 +1,11 @@
 import { BrainCircuit, Sparkles } from "lucide-react";
-import type { ReasoningEffort } from "../types";
+import { useId } from "react";
+import { providerLabel } from "../lib/providers";
+import type {
+  ProviderId,
+  ProviderModelOption,
+  ReasoningEffort,
+} from "../types";
 
 export const MODEL_OPTIONS = [
   { value: "gpt-5.6-sol", label: "GPT-5.6 Sol", note: "Frontier" },
@@ -18,6 +24,8 @@ const REASONING_OPTIONS: Array<{ value: ReasoningEffort; label: string }> = [
 ];
 
 interface ModelPickerProps {
+  provider: ProviderId;
+  modelOptions?: ProviderModelOption[];
   value: string;
   onChange: (model: string) => void;
   reasoningEffort: ReasoningEffort;
@@ -28,6 +36,8 @@ interface ModelPickerProps {
 }
 
 export function ModelPicker({
+  provider,
+  modelOptions = [],
   value,
   onChange,
   reasoningEffort,
@@ -36,22 +46,44 @@ export function ModelPicker({
   reasoningAriaLabel = "Reasoning effort",
   className = "",
 }: ModelPickerProps) {
+  const modelListId = useId();
+  const supportsMax = provider !== "openai" || value.startsWith("gpt-5.6");
   return (
     <div className={`model-controls ${className}`.trim()}>
       <label className="model-picker">
         <Sparkles size={12} />
-        <span>Model</span>
-        <select
-          aria-label={ariaLabel}
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-        >
-          {MODEL_OPTIONS.map((model) => (
-            <option value={model.value} key={model.value}>
-              {model.label} · {model.note}
-            </option>
-          ))}
-        </select>
+        <span>{provider === "openai" ? "Model" : providerLabel(provider)}</span>
+        {provider === "openai" ? (
+          <select
+            aria-label={ariaLabel}
+            value={value}
+            onChange={(event) => onChange(event.target.value)}
+          >
+            {MODEL_OPTIONS.map((model) => (
+              <option value={model.value} key={model.value}>
+                {model.label} · {model.note}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <>
+            <input
+              aria-label={ariaLabel}
+              value={value}
+              onChange={(event) => onChange(event.target.value)}
+              list={modelListId}
+              placeholder={provider === "openrouter" ? "provider/model" : "Model ID"}
+              spellCheck={false}
+            />
+            <datalist id={modelListId}>
+              {modelOptions.map((model) => (
+                <option value={model.id} key={model.id}>
+                  {model.name ?? model.id}
+                </option>
+              ))}
+            </datalist>
+          </>
+        )}
       </label>
       <label className="model-picker model-picker--reasoning">
         <BrainCircuit size={12} />
@@ -67,7 +99,7 @@ export function ModelPicker({
             <option
               value={effort.value}
               key={effort.value}
-              disabled={effort.value === "max" && !value.startsWith("gpt-5.6")}
+              disabled={effort.value === "max" && !supportsMax}
             >
               {effort.label}
             </option>

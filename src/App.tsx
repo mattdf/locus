@@ -24,6 +24,7 @@ import {
   Plus,
   Quote,
   Search,
+  ServerCog,
   Settings2,
   SlidersHorizontal,
   Sparkles,
@@ -69,11 +70,19 @@ import type {
   HighlightAnchor,
   Message,
   MessageRevisionGroup,
+  ProviderId,
+  ProviderModelOption,
+  ReasoningEffort,
   SelectionDraft,
   ThreadNode,
   WorkspaceState,
 } from "./types";
-import type { ReasoningEffort } from "./types";
+import {
+  DEFAULT_LOCAL_BASE_URL,
+  DEFAULT_PROVIDER_MODELS,
+  PROVIDER_OPTIONS,
+  providerLabel,
+} from "./lib/providers";
 
 const UNCATEGORIZED_CATEGORY_ID = "__uncategorized__";
 
@@ -83,6 +92,9 @@ const DEFAULT_STATE: WorkspaceState = {
   chats: [],
   activeChatId: null,
   settings: {
+    provider: "openai",
+    providerModels: { ...DEFAULT_PROVIDER_MODELS },
+    localBaseUrl: DEFAULT_LOCAL_BASE_URL,
     model: "gpt-5.6-sol",
     reasoningEffort: "max",
     maxOutputTokens: 50_000,
@@ -100,10 +112,13 @@ interface ApiError {
   error?: string;
 }
 
-interface ApiKeyStatus {
+interface ProviderCredentialStatus {
   configured: boolean;
+  required: boolean;
   source: "saved" | "project-file" | null;
 }
+
+type ProviderStatuses = Record<ProviderId, ProviderCredentialStatus>;
 
 interface GenerationResult {
   content: string;
@@ -459,6 +474,8 @@ function NewChatScreen({
   onCreate,
   onOpenSidebar,
   categories,
+  provider,
+  modelOptions,
   model,
   onModelChange,
   reasoningEffort,
@@ -474,6 +491,8 @@ function NewChatScreen({
   ) => void;
   onOpenSidebar: () => void;
   categories: ChatCategory[];
+  provider: ProviderId;
+  modelOptions: ProviderModelOption[];
   model: string;
   onModelChange: (model: string) => void;
   reasoningEffort: ReasoningEffort;
@@ -493,7 +512,7 @@ function NewChatScreen({
   }, [categories, categoryId]);
 
   const submitNewChat = () => {
-    if (!content.trim()) return;
+    if (!content.trim() || (mode === "ask" && !model.trim())) return;
     onCreate(mode, content.trim(), title.trim(), categoryId || null);
   };
 
@@ -595,6 +614,8 @@ function NewChatScreen({
             {mode === "ask" ? (
               <ModelPicker
                 className="start-card__model-picker"
+                provider={provider}
+                modelOptions={modelOptions}
                 value={model}
                 onChange={onModelChange}
                 reasoningEffort={reasoningEffort}
@@ -608,7 +629,7 @@ function NewChatScreen({
             <button
               className="primary-button"
               type="button"
-              disabled={!content.trim()}
+              disabled={!content.trim() || (mode === "ask" && !model.trim())}
               onClick={submitNewChat}
             >
               {mode === "import" ? "Create from Markdown" : "Start conversation"}
@@ -639,11 +660,15 @@ export default function App() {
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
   const [customInstructionsOpen, setCustomInstructionsOpen] = useState(false);
   const [customInstructionsDraft, setCustomInstructionsDraft] = useState("");
-  const [apiKeyStatus, setApiKeyStatus] = useState<ApiKeyStatus | null>(null);
+  const [providerStatuses, setProviderStatuses] = useState<ProviderStatuses | null>(null);
+  const [credentialProvider, setCredentialProvider] = useState<ProviderId>("openai");
   const [apiKeyOpen, setApiKeyOpen] = useState(false);
   const [apiKeyDraft, setApiKeyDraft] = useState("");
   const [apiKeySaving, setApiKeySaving] = useState(false);
   const [apiKeyError, setApiKeyError] = useState("");
+  const [providerModels, setProviderModels] = useState<ProviderModelOption[]>([]);
+  const [providerModelsStatus, setProviderModelsStatus] =
+    useState<"idle" | "loading" | "loaded" | "error">("idle");
   const [drawerWidth, setDrawerWidth] = useState(440);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
@@ -778,14 +803,55 @@ export default function App() {
   }, [loaded, activeChat?.id, activeChat?.title, activeNode?.id, activeNode?.title, focusMaximized]);
 
   useEffect(() => {
-    fetch("/api/api-key")
+    fetch("/api/providers")
       .then(async (response) => {
-        if (!response.ok) throw new Error("Could not check the API key");
-        return (await response.json()) as ApiKeyStatus;
+        if (!response.ok) throw new Error("Could not check provider credentials");
+        return (await response.json()) as ProviderStatuses;
       })
-      .then(setApiKeyStatus)
-      .catch(() => setApiKeyStatus({ configured: false, source: null }));
+      .then(setProviderStatuses)
+      .catch(() => setProviderStatuses(null));
   }, []);
+
+  useEffect(() => {
+    if (!loaded || workspace.settings.provider === "openai") {
+      setProviderModels([]);
+      setProviderModelsStatus("idle");
+      return;
+    }
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => {
+      setProviderModelsStatus("loading");
+      const query =
+        workspace.settings.provider === "local"
+          ? `?baseUrl=${encodeURIComponent(workspace.settings.localBaseUrl)}`
+          : "";
+      fetch(`/api/providers/${workspace.settings.provider}/models${query}`, {
+        signal: controller.signal,
+      })
+        .then(async (response) => {
+          const data = (await response.json().catch(() => ({}))) as
+            | { models: ProviderModelOption[] }
+            | ApiError;
+          if (!response.ok || !("models" in data)) {
+            throw new Error("error" in data ? data.error : "Could not load models");
+          }
+          return data.models;
+        })
+        .then((models) => {
+          setProviderModels(models);
+          setProviderModelsStatus("loaded");
+        })
+        .catch((error) => {
+          if (error instanceof DOMException && error.name === "AbortError") return;
+          setProviderModels([]);
+          setProviderModelsStatus("error");
+        });
+    }, 450);
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [loaded, workspace.settings.provider, workspace.settings.localBaseUrl]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -965,6 +1031,8 @@ export default function App() {
       const result = await modelRequest(
         requestId,
         {
+          provider: workspace.settings.provider,
+          localBaseUrl: workspace.settings.localBaseUrl,
           model: workspace.settings.model,
           reasoningEffort: workspace.settings.reasoningEffort,
           maxOutputTokens: workspace.settings.maxOutputTokens,
@@ -1039,6 +1107,8 @@ export default function App() {
       const result = await modelRequest(
         assistantMessage.requestId,
         {
+          provider: workspace.settings.provider,
+          localBaseUrl: workspace.settings.localBaseUrl,
           model: workspace.settings.model,
           reasoningEffort: workspace.settings.reasoningEffort,
           maxOutputTokens: workspace.settings.maxOutputTokens,
@@ -1780,12 +1850,48 @@ export default function App() {
   const selectModel = (model: string) => {
     setWorkspace((current) => {
       const reasoningEffort =
-        current.settings.reasoningEffort === "max" && !model.startsWith("gpt-5.6")
+        current.settings.provider === "openai" &&
+        current.settings.reasoningEffort === "max" &&
+        !model.startsWith("gpt-5.6")
           ? "xhigh"
           : current.settings.reasoningEffort;
       return {
         ...current,
-        settings: { ...current.settings, model, reasoningEffort },
+        settings: {
+          ...current.settings,
+          model,
+          reasoningEffort,
+          providerModels: {
+            ...current.settings.providerModels,
+            [current.settings.provider]: model,
+          },
+        },
+      };
+    });
+  };
+
+  const selectProvider = (provider: ProviderId) => {
+    setWorkspace((current) => {
+      const providerModels = {
+        ...current.settings.providerModels,
+        [current.settings.provider]: current.settings.model,
+      };
+      const model = providerModels[provider] || DEFAULT_PROVIDER_MODELS[provider];
+      const reasoningEffort =
+        provider === "openai" &&
+        current.settings.reasoningEffort === "max" &&
+        !model.startsWith("gpt-5.6")
+          ? "xhigh"
+          : current.settings.reasoningEffort;
+      return {
+        ...current,
+        settings: {
+          ...current.settings,
+          provider,
+          providerModels,
+          model,
+          reasoningEffort,
+        },
       };
     });
   };
@@ -1817,17 +1923,39 @@ export default function App() {
     setApiKeySaving(true);
     setApiKeyError("");
     try {
-      const response = await fetch("/api/api-key", {
+      const response = await fetch(`/api/providers/${credentialProvider}/api-key`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ apiKey: apiKeyDraft }),
       });
-      const result = (await response.json()) as ApiKeyStatus & ApiError;
+      const result = (await response.json()) as ProviderCredentialStatus & ApiError;
       if (!response.ok) throw new Error(result.error || "Could not save the API key");
-      setApiKeyStatus(result);
+      setProviderStatuses((current) =>
+        current ? { ...current, [credentialProvider]: result } : current,
+      );
       closeApiKeyModal();
     } catch (error) {
       setApiKeyError(error instanceof Error ? error.message : "Could not save the API key");
+    } finally {
+      setApiKeySaving(false);
+    }
+  };
+
+  const clearSavedApiKey = async () => {
+    setApiKeySaving(true);
+    setApiKeyError("");
+    try {
+      const response = await fetch(`/api/providers/${credentialProvider}/api-key`, {
+        method: "DELETE",
+      });
+      const result = (await response.json()) as ProviderCredentialStatus & ApiError;
+      if (!response.ok) throw new Error(result.error || "Could not clear the API key");
+      setProviderStatuses((current) =>
+        current ? { ...current, [credentialProvider]: result } : current,
+      );
+      closeApiKeyModal();
+    } catch (error) {
+      setApiKeyError(error instanceof Error ? error.message : "Could not clear the API key");
     } finally {
       setApiKeySaving(false);
     }
@@ -2181,6 +2309,8 @@ export default function App() {
           onCreate={createChat}
           onOpenSidebar={openSidebar}
           categories={workspace.categories}
+          provider={workspace.settings.provider}
+          modelOptions={providerModels}
           model={workspace.settings.model}
           onModelChange={selectModel}
           reasoningEffort={workspace.settings.reasoningEffort}
@@ -2341,6 +2471,8 @@ export default function App() {
           <ThreadView
             chat={activeChat}
             node={rootNode}
+            provider={workspace.settings.provider}
+            modelOptions={providerModels}
             onSelect={setSelection}
             onOpenElaboration={(id) => {
               historyAction.current = "push";
@@ -2430,6 +2562,8 @@ export default function App() {
                 placeholder="e.g. Show every algebraic step between these two lines…"
                 submitLabel="Start elaboration"
                 onSend={beginElaboration}
+                provider={workspace.settings.provider}
+                modelOptions={providerModels}
                 model={workspace.settings.model}
                 onModelChange={selectModel}
                 reasoningEffort={workspace.settings.reasoningEffort}
@@ -2551,6 +2685,8 @@ export default function App() {
             chat={activeChat}
             node={sideNode}
             side
+            provider={workspace.settings.provider}
+            modelOptions={providerModels}
             onSelect={setSelection}
             onOpenElaboration={(id) => {
               historyAction.current = "push";
@@ -2623,7 +2759,26 @@ export default function App() {
                   <h3>Generation</h3>
                   <p>Model and reasoning effort are selected together in each chat box.</p>
                 </header>
-                <div className="settings-view__grid settings-view__grid--single">
+                <div className="settings-view__grid">
+                  <label className="settings-select-control">
+                    <ServerCog size={15} />
+                    <span>
+                      <small>Provider</small>
+                      <select
+                        aria-label="Model provider"
+                        value={workspace.settings.provider}
+                        onChange={(event) =>
+                          selectProvider(event.target.value as ProviderId)
+                        }
+                      >
+                        {PROVIDER_OPTIONS.map((provider) => (
+                          <option value={provider.id} key={provider.id}>
+                            {provider.label} · {provider.note}
+                          </option>
+                        ))}
+                      </select>
+                    </span>
+                  </label>
                   <label className="model-select">
                     <Hash size={15} />
                     <span>
@@ -2652,7 +2807,42 @@ export default function App() {
                       />
                     </span>
                   </label>
+                  {workspace.settings.provider === "local" && (
+                    <label className="model-select provider-url-control">
+                      <ServerCog size={15} />
+                      <span>
+                        <small>OpenAI-compatible base URL</small>
+                        <input
+                          type="url"
+                          value={workspace.settings.localBaseUrl}
+                          onChange={(event) =>
+                            setWorkspace((current) => ({
+                              ...current,
+                              settings: {
+                                ...current.settings,
+                                localBaseUrl: event.target.value,
+                              },
+                            }))
+                          }
+                          placeholder={DEFAULT_LOCAL_BASE_URL}
+                          aria-label="Local OpenAI-compatible base URL"
+                          spellCheck={false}
+                        />
+                      </span>
+                    </label>
+                  )}
                 </div>
+                {workspace.settings.provider !== "openai" && (
+                  <p className={`provider-catalog-status provider-catalog-status--${providerModelsStatus}`}>
+                    {providerModelsStatus === "loading"
+                      ? "Loading model IDs…"
+                      : providerModelsStatus === "loaded"
+                        ? `${providerModels.length.toLocaleString()} model IDs available in the chat model field.`
+                        : providerModelsStatus === "error"
+                          ? "The model catalog is unavailable; you can still enter a model ID manually."
+                          : "Enter a model ID in the chat box."}
+                  </p>
+                )}
               </section>
 
               <section className="settings-view__section">
@@ -2665,6 +2855,7 @@ export default function App() {
                     type="button"
                     onClick={() => {
                       setSettingsOpen(false);
+                      setCredentialProvider(workspace.settings.provider);
                       setApiKeyDraft("");
                       setApiKeyError("");
                       setApiKeyOpen(true);
@@ -2672,15 +2863,20 @@ export default function App() {
                   >
                     <KeyRound size={15} />
                     <span>
-                      <small>OpenAI API key</small>
+                      <small>
+                        {providerLabel(workspace.settings.provider)} API key
+                        {workspace.settings.provider === "local" ? " · optional" : ""}
+                      </small>
                       <strong>
-                        {!apiKeyStatus
+                        {!providerStatuses
                           ? "Checking…"
-                          : apiKeyStatus.source === "saved"
+                          : providerStatuses[workspace.settings.provider].source === "saved"
                             ? "Saved in Locus"
-                            : apiKeyStatus.source === "project-file"
+                            : providerStatuses[workspace.settings.provider].source === "project-file"
                               ? "Project file"
-                              : "Not configured"}
+                              : workspace.settings.provider === "local"
+                                ? "No key"
+                                : "Not configured"}
                       </strong>
                     </span>
                     <ChevronRight size={13} />
@@ -3131,7 +3327,7 @@ export default function App() {
             <header>
               <div>
                 <span>Connection</span>
-                <h2 id="api-key-title">OpenAI API key</h2>
+                <h2 id="api-key-title">{providerLabel(credentialProvider)} API key</h2>
               </div>
               <button
                 className="icon-button"
@@ -3144,8 +3340,10 @@ export default function App() {
             </header>
             <p>
               Paste a key here to store it in a private local file. Locus never returns the
-              saved value to the browser or includes it in your chat data. A pasted key takes
-              precedence over <code>OPENAI_API_KEY.txt</code>.
+              saved value to the browser or includes it in your chat data.
+              {credentialProvider === "local"
+                ? " Local endpoints that do not require authentication can leave this unset."
+                : " A pasted key takes precedence over the matching project key file."}
             </p>
             <input
               autoFocus
@@ -3153,27 +3351,49 @@ export default function App() {
               value={apiKeyDraft}
               onChange={(event) => setApiKeyDraft(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Enter" && apiKeyDraft.trim().length >= 20 && !apiKeySaving) {
+                if (event.key === "Enter" && apiKeyDraft.trim() && !apiKeySaving) {
                   void savePastedApiKey();
                 }
               }}
-              placeholder="sk-… or OPENAI_API_KEY=sk-…"
-              aria-label="OpenAI API key"
+              placeholder={
+                credentialProvider === "openai"
+                  ? "sk-… or OPENAI_API_KEY=sk-…"
+                  : credentialProvider === "openrouter"
+                    ? "sk-or-… or OPENROUTER_API_KEY=sk-or-…"
+                    : "Optional bearer token"
+              }
+              aria-label={`${providerLabel(credentialProvider)} API key`}
               autoComplete="off"
               spellCheck={false}
             />
             <p className="api-key-storage-note">
-              Stored at <code>data/openai-api-key.txt</code> with owner-only permissions.
+              Stored at <code>
+                {credentialProvider === "openai"
+                  ? "data/openai-api-key.txt"
+                  : credentialProvider === "openrouter"
+                    ? "data/openrouter-api-key.txt"
+                    : "data/local-api-key.txt"}
+              </code> with owner-only permissions.
             </p>
             {apiKeyError && <p className="api-key-error" role="alert">{apiKeyError}</p>}
             <footer>
+              {providerStatuses?.[credentialProvider].source === "saved" && (
+                <button
+                  className="secondary-button api-key-clear-button"
+                  type="button"
+                  disabled={apiKeySaving}
+                  onClick={() => void clearSavedApiKey()}
+                >
+                  Clear saved key
+                </button>
+              )}
               <button className="secondary-button" type="button" onClick={closeApiKeyModal}>
                 Cancel
               </button>
               <button
                 className="primary-button"
                 type="button"
-                disabled={apiKeyDraft.trim().length < 20 || apiKeySaving}
+                disabled={!apiKeyDraft.trim() || apiKeySaving}
                 onClick={() => void savePastedApiKey()}
               >
                 {apiKeySaving ? "Saving…" : "Save API key"}

@@ -18,6 +18,7 @@ export interface GenerationJob {
   content: string;
   status: GenerationStatus;
   startedAt: number;
+  provider: RespondInput["provider"];
   model: string;
   generation?: GenerationMetrics;
   error?: string;
@@ -60,18 +61,21 @@ function finish(
   if (job.status !== "running") return;
   job.status = status;
   job.error = error;
-  const cost = calculateGenerationCost(job.model, usage);
+  const estimatedCost =
+    job.provider === "openai" ? calculateGenerationCost(job.model, usage) : null;
+  const reportedCost = usage?.costUsd;
   job.generation = {
     durationMs: Date.now() - job.startedAt,
+    provider: job.provider,
     model: job.model,
     inputTokens: usage?.inputTokens ?? null,
     cachedInputTokens: usage?.cachedInputTokens ?? null,
     outputTokens: usage?.outputTokens ?? null,
     reasoningTokens: usage?.reasoningTokens ?? null,
     totalTokens: usage?.totalTokens ?? null,
-    inputCostUsd: cost?.inputCostUsd ?? null,
-    outputCostUsd: cost?.outputCostUsd ?? null,
-    totalCostUsd: cost?.totalCostUsd ?? null,
+    inputCostUsd: estimatedCost?.inputCostUsd ?? null,
+    outputCostUsd: estimatedCost?.outputCostUsd ?? null,
+    totalCostUsd: reportedCost ?? estimatedCost?.totalCostUsd ?? null,
   };
   const event = terminalEvent(job);
   job.subscribers.forEach((response) => {
@@ -125,6 +129,7 @@ export function createGeneration(id: string, input: RespondInput): GenerationJob
     content: "",
     status: "running",
     startedAt: Date.now(),
+    provider: input.provider,
     model: input.model,
     subscribers: new Set(),
   };

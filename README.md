@@ -21,7 +21,8 @@ A local-first chat UI for studying difficult technical material without blowing 
 - Use `Cmd/Ctrl+B` and `Cmd/Ctrl+I` in any textarea, and choose whether Enter or
   `Cmd/Ctrl+Enter` sends messages.
 - Scale chat text independently from browser zoom with the text-size setting.
-- Paste an OpenAI API key in Settings, or keep using `OPENAI_API_KEY.txt`.
+- Choose OpenAI, OpenRouter, or a local OpenAI-compatible endpoint in Settings. Provider
+  keys stay server-side, while OpenRouter and local model IDs are selectable from the chat box.
 - Edit `SYSTEM_PROMPT.md` to change the base tutoring prompt, and add optional custom
   instructions from the UI that supplement it.
 - Paste Markdown (including LaTeX) into a new study without making a model request.
@@ -46,8 +47,9 @@ npm run dev
 ```
 
 Open [http://127.0.0.1:5173](http://127.0.0.1:5173). The web app runs on port 5173 and
-proxies API requests to the local server on port 8787. Paste an API key from the sidebar,
-or add an `OPENAI_API_KEY.txt` file in this directory.
+proxies API requests to the local server on port 8787. Configure the provider in Settings,
+then paste its API key or add `OPENAI_API_KEY.txt` / `OPENROUTER_API_KEY.txt` in this directory.
+Local endpoints default to `http://127.0.0.1:1234/v1` and can run without a key.
 
 For a production-style local run:
 
@@ -65,7 +67,9 @@ Then open [http://127.0.0.1:8787](http://127.0.0.1:8787).
   using original TeX source; and reconnects saved anchors to rendered passages.
 - `src/lib/tree.ts` contains the small set of tree and context helpers.
 - `src/lib/chatTransfer.ts` validates and creates portable chat/category exports.
-- `server/openai.ts` is the only code that reads the API key and calls the Responses API.
+- `server/openai.ts` builds prompts and streams either the OpenAI Responses API or an
+  OpenAI-compatible Chat Completions endpoint.
+- `server/providers.ts` owns provider credentials, base URLs, and model discovery.
 - `SYSTEM_PROMPT.md` contains the base instructions loaded fresh for every model request.
 - `server/storage.ts` persists one versioned JSON document using atomic replacement.
 
@@ -76,8 +80,8 @@ to the model.
 ## Notes
 
 - The server binds to `127.0.0.1` by default so the API key is not exposed on the LAN.
-- Keys pasted in the UI are written to the gitignored `data/openai-api-key.txt` with
-  owner-only permissions and take precedence over `OPENAI_API_KEY.txt`.
+- Keys pasted in the UI are written to provider-specific gitignored files under `data/`
+  with owner-only permissions and take precedence over matching project key files.
 - The default model is `gpt-5.6-sol` with `max` reasoning effort. Model and reasoning
   effort stay together in each chat composer.
 - Custom instructions are stored locally with the workspace and appended to, rather than

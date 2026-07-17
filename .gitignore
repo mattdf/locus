@@ -2,8 +2,12 @@ node_modules/
 dist/
 data/chats.json
 data/openai-api-key.txt
+data/openrouter-api-key.txt
+data/local-api-key.txt
 data/*.tmp
 OPENAI_API_KEY.txt
+OPENROUTER_API_KEY.txt
+LOCAL_API_KEY.txt
 .env*
 .DS_Store
 *.log

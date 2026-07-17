@@ -1,69 +1,26 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
-import OpenAI from "openai";
-import type { ContextNode, HighlightAnchor, ReasoningEffort } from "../src/types.ts";
+import type {
+  ContextNode,
+  HighlightAnchor,
+  ProviderId,
+  ReasoningEffort,
+} from "../src/types.ts";
+import {
+  createProviderClient,
+  getProviderStatus,
+  saveProviderApiKey,
+  type ProviderCredentialStatus,
+} from "./providers.ts";
 
-let client: OpenAI | null = null;
-const SAVED_API_KEY_FILE = path.resolve("data", "openai-api-key.txt");
-const PROJECT_API_KEY_FILE = path.resolve("OPENAI_API_KEY.txt");
 const SYSTEM_PROMPT_FILE = path.resolve("SYSTEM_PROMPT.md");
 
-export interface ApiKeyStatus {
-  configured: boolean;
-  source: "saved" | "project-file" | null;
+export async function getApiKeyStatus(): Promise<ProviderCredentialStatus> {
+  return getProviderStatus("openai");
 }
 
-function normalizeApiKey(raw: string): string {
-  const value = raw.trim();
-  const assignment = value.match(/^OPENAI_API_KEY\s*=\s*([\s\S]+)$/);
-  return (assignment?.[1] ?? value).trim().replace(/^['"]|['"]$/g, "");
-}
-
-async function readKeyFile(file: string): Promise<string | null> {
-  try {
-    return normalizeApiKey(await readFile(file, "utf8")) || null;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-}
-
-async function readApiKey(): Promise<string> {
-  const savedKey = await readKeyFile(SAVED_API_KEY_FILE);
-  if (savedKey) return savedKey;
-
-  const projectKey = await readKeyFile(PROJECT_API_KEY_FILE);
-  if (projectKey) return projectKey;
-
-  throw new Error("No OpenAI API key is configured. Add one in Settings or OPENAI_API_KEY.txt.");
-}
-
-export async function getApiKeyStatus(): Promise<ApiKeyStatus> {
-  if (await readKeyFile(SAVED_API_KEY_FILE)) {
-    return { configured: true, source: "saved" };
-  }
-  if (await readKeyFile(PROJECT_API_KEY_FILE)) {
-    return { configured: true, source: "project-file" };
-  }
-  return { configured: false, source: null };
-}
-
-export async function saveApiKey(raw: string): Promise<ApiKeyStatus> {
-  const apiKey = normalizeApiKey(raw);
-  if (apiKey.length < 20) throw new Error("Enter a valid OpenAI API key.");
-
-  await mkdir(path.dirname(SAVED_API_KEY_FILE), { recursive: true });
-  const temporaryFile =
-    SAVED_API_KEY_FILE + "." + process.pid + "." + Date.now() + ".tmp";
-  await writeFile(temporaryFile, apiKey + "\n", { encoding: "utf8", mode: 0o600 });
-  await rename(temporaryFile, SAVED_API_KEY_FILE);
-  client = null;
-  return { configured: true, source: "saved" };
-}
-
-async function getClient(): Promise<OpenAI> {
-  if (!client) client = new OpenAI({ apiKey: await readApiKey() });
-  return client;
+export async function saveApiKey(raw: string): Promise<ProviderCredentialStatus> {
+  return saveProviderApiKey("openai", raw);
 }
 
 async function readSystemPrompt(): Promise<string> {
@@ -85,6 +42,8 @@ function formatContext(context: ContextNode[]): string {
 }
 
 export interface RespondInput {
+  provider: ProviderId;
+  localBaseUrl?: string;
   model: string;
   context: ContextNode[];
   message: string;
@@ -100,26 +59,49 @@ export interface TokenUsage {
   outputTokens: number;
   reasoningTokens: number;
   totalTokens: number;
+  costUsd?: number;
 }
 
-export async function streamResponse(
-  input: RespondInput,
-  onDelta: (delta: string) => void,
-  signal?: AbortSignal,
-): Promise<TokenUsage | null> {
-  const [openai, systemPrompt] = await Promise.all([getClient(), readSystemPrompt()]);
+function buildPrompt(input: RespondInput, systemPrompt: string) {
   const highlighted = input.anchor
     ? `\n\nThe learner selected this exact passage:\n<highlighted_passage>\n${input.anchor.quote}\n</highlighted_passage>`
     : "";
-
   const customInstructions = input.customInstructions.trim()
     ? `\n\nThe learner also supplied these additional behavior preferences. Follow them where compatible with the tutoring instructions above; they supplement rather than replace the tutoring role:\n<custom_instructions>\n${input.customInstructions.trim()}\n</custom_instructions>`
     : "";
+  return {
+    instructions: systemPrompt + customInstructions,
+    request: `Here is the complete path of conversation context:\n\n${formatContext(input.context)}${highlighted}\n\n<learner_request>\n${input.message}\n</learner_request>`,
+  };
+}
+
+function ensureVisibleText(
+  receivedText: boolean,
+  incompleteReason: "max_output_tokens" | "length" | "content_filter" | null,
+): void {
+  if (receivedText) return;
+  if (incompleteReason === "max_output_tokens" || incompleteReason === "length") {
+    throw new Error("The model exhausted the output-token limit before producing visible text");
+  }
+  if (incompleteReason === "content_filter") {
+    throw new Error("The model returned no text because the response was filtered");
+  }
+  throw new Error("The model returned no text");
+}
+
+async function streamOpenAIResponse(
+  input: RespondInput,
+  instructions: string,
+  request: string,
+  onDelta: (delta: string) => void,
+  signal?: AbortSignal,
+): Promise<TokenUsage | null> {
+  const openai = await createProviderClient("openai");
   const stream = await openai.responses.create(
     {
       model: input.model,
-      instructions: systemPrompt + customInstructions,
-      input: `Here is the complete path of conversation context:\n\n${formatContext(input.context)}${highlighted}\n\n<learner_request>\n${input.message}\n</learner_request>`,
+      instructions,
+      input: request,
       reasoning: { effort: input.reasoningEffort },
       ...(input.maxOutputTokens === 0
         ? {}
@@ -162,14 +144,92 @@ export async function streamResponse(
     }
   }
   if (terminalError) throw new Error(terminalError);
-  if (!receivedText) {
-    if (incompleteReason === "max_output_tokens") {
-      throw new Error("The model exhausted the output-token limit before producing visible text");
-    }
-    if (incompleteReason === "content_filter") {
-      throw new Error("The model returned no text because the response was filtered");
-    }
-    throw new Error("The model returned no text");
-  }
+  ensureVisibleText(receivedText, incompleteReason);
   return usage;
+}
+
+async function streamCompatibleChat(
+  input: RespondInput,
+  instructions: string,
+  request: string,
+  onDelta: (delta: string) => void,
+  signal?: AbortSignal,
+): Promise<TokenUsage | null> {
+  const client = await createProviderClient(input.provider, input.localBaseUrl);
+  const messages = [
+    { role: "system" as const, content: instructions },
+    { role: "user" as const, content: request },
+  ];
+  const createStream = (minimalLocalRequest = false) =>
+    client.chat.completions.create(
+      {
+        model: input.model,
+        messages,
+        ...(minimalLocalRequest ? {} : { reasoning_effort: input.reasoningEffort }),
+        ...(input.maxOutputTokens === 0
+          ? {}
+          : input.provider === "local"
+            ? { max_tokens: input.maxOutputTokens }
+            : { max_completion_tokens: input.maxOutputTokens }),
+        stream: true,
+        ...(minimalLocalRequest ? {} : { stream_options: { include_usage: true } }),
+      },
+      { signal },
+    );
+  let stream;
+  try {
+    stream = await createStream();
+  } catch (error) {
+    const status =
+      typeof error === "object" && error && "status" in error
+        ? (error as { status?: unknown }).status
+        : null;
+    if (input.provider !== "local" || status !== 400) throw error;
+    // Older local servers often implement the core OpenAI chat schema but reject
+    // newer optional fields such as reasoning_effort or stream_options.
+    stream = await createStream(true);
+  }
+
+  let receivedText = false;
+  let usage: TokenUsage | null = null;
+  let finishReason: "length" | "content_filter" | null = null;
+  for await (const chunk of stream) {
+    const delta = chunk.choices[0]?.delta?.content;
+    if (delta) {
+      receivedText = true;
+      onDelta(delta);
+    }
+    const nextFinishReason = chunk.choices[0]?.finish_reason;
+    if (nextFinishReason === "length" || nextFinishReason === "content_filter") {
+      finishReason = nextFinishReason;
+    }
+    if (chunk.usage) {
+      const providerUsage = chunk.usage as typeof chunk.usage & { cost?: number };
+      usage = {
+        inputTokens: providerUsage.prompt_tokens,
+        cachedInputTokens: providerUsage.prompt_tokens_details?.cached_tokens ?? 0,
+        outputTokens: providerUsage.completion_tokens,
+        reasoningTokens:
+          providerUsage.completion_tokens_details?.reasoning_tokens ?? 0,
+        totalTokens: providerUsage.total_tokens,
+        ...(typeof providerUsage.cost === "number"
+          ? { costUsd: providerUsage.cost }
+          : {}),
+      };
+    }
+  }
+  ensureVisibleText(receivedText, finishReason);
+  return usage;
+}
+
+export async function streamResponse(
+  input: RespondInput,
+  onDelta: (delta: string) => void,
+  signal?: AbortSignal,
+): Promise<TokenUsage | null> {
+  const systemPrompt = await readSystemPrompt();
+  const prompt = buildPrompt(input, systemPrompt);
+  return input.provider === "openai"
+    ? streamOpenAIResponse(input, prompt.instructions, prompt.request, onDelta, signal)
+    : streamCompatibleChat(input, prompt.instructions, prompt.request, onDelta, signal);
 }
