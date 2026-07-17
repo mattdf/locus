@@ -138,6 +138,12 @@ interface ViewLocation {
   maximized: boolean;
 }
 
+interface ThreadScrollRequest {
+  id: string;
+  nodeId: string;
+  anchor: HighlightAnchor;
+}
+
 function readViewLocation(): ViewLocation {
   const params = new URLSearchParams(window.location.search);
   return {
@@ -589,11 +595,15 @@ export default function App() {
   const [jsonImportError, setJsonImportError] = useState("");
   const [jsonImportTarget, setJsonImportTarget] = useState("uncategorized");
   const [jsonImportNewCategory, setJsonImportNewCategory] = useState("");
+  const [threadScrollRequest, setThreadScrollRequest] =
+    useState<ThreadScrollRequest | null>(null);
   const [focusMaximized, setFocusMaximized] = useState(false);
   const responseControllers = useRef(new Map<string, AbortController>());
   const workspaceRef = useRef(workspace);
+  const activeNodeIdRef = useRef(activeNodeId);
   const historyAction = useRef<"push" | "replace">("replace");
   workspaceRef.current = workspace;
+  activeNodeIdRef.current = activeNodeId;
 
   const activeChat = workspace.chats.find((chat) => chat.id === workspace.activeChatId) ?? null;
   const rootNode = activeChat ? activeChat.nodes[activeChat.rootId] : null;
@@ -623,6 +633,18 @@ export default function App() {
         setWorkspace(nextState);
         setDrawerWidth(state.settings.focusDrawerWidth ?? 440);
         setActiveNodeId(requestedNode);
+        const requestedThread = requestedNode ? chat?.nodes[requestedNode] : null;
+        if (
+          chat &&
+          requestedThread?.parentId === chat.rootId &&
+          requestedThread.anchor
+        ) {
+          setThreadScrollRequest({
+            id: newId(),
+            nodeId: chat.rootId,
+            anchor: requestedThread.anchor,
+          });
+        }
         setFocusMaximized(
           Boolean(chat && requestedNode !== chat.rootId && requestedView.maximized),
         );
@@ -643,6 +665,18 @@ export default function App() {
         chat && requestedView.nodeId && chat.nodes[requestedView.nodeId]
           ? requestedView.nodeId
           : chat?.rootId ?? null;
+      const previousNodeId = activeNodeIdRef.current;
+      const previousNode =
+        chat && state.activeChatId === chat.id && previousNodeId
+          ? chat.nodes[previousNodeId]
+          : null;
+      if (previousNode?.parentId === nodeId && previousNode.anchor && nodeId) {
+        setThreadScrollRequest({
+          id: newId(),
+          nodeId,
+          anchor: previousNode.anchor,
+        });
+      }
       historyAction.current = "replace";
       setWorkspace((current) => ({ ...current, activeChatId: chat?.id ?? null }));
       setActiveNodeId(nodeId);
@@ -2218,6 +2252,16 @@ export default function App() {
               composerInsertion?.nodeId === rootNode.id ? composerInsertion : undefined
             }
             onComposerInsertionApplied={applyComposerInsertion}
+            scrollRequest={
+              threadScrollRequest?.nodeId === rootNode.id
+                ? threadScrollRequest
+                : undefined
+            }
+            onScrollRequestHandled={(id) =>
+              setThreadScrollRequest((current) =>
+                current?.id === id ? null : current,
+              )
+            }
           />
         </main>
       )}
@@ -2373,6 +2417,16 @@ export default function App() {
               composerInsertion?.nodeId === sideNode.id ? composerInsertion : undefined
             }
             onComposerInsertionApplied={applyComposerInsertion}
+            scrollRequest={
+              threadScrollRequest?.nodeId === sideNode.id
+                ? threadScrollRequest
+                : undefined
+            }
+            onScrollRequestHandled={(id) =>
+              setThreadScrollRequest((current) =>
+                current?.id === id ? null : current,
+              )
+            }
           />
         </aside>
       )}

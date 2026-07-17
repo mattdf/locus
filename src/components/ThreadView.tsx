@@ -1,8 +1,10 @@
 import {
+  ChevronDown,
   BookOpen,
   Check,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
   Clock3,
   Copy,
   MessageSquareText,
@@ -11,7 +13,13 @@ import {
   Square,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import type { ChatTree, GenerationMetrics, SelectionDraft, ThreadNode } from "../types";
+import type {
+  ChatTree,
+  GenerationMetrics,
+  HighlightAnchor,
+  SelectionDraft,
+  ThreadNode,
+} from "../types";
 import { childThreads, messagesForNode } from "../lib/tree";
 import { Composer } from "./Composer";
 import { MarkdownMessage } from "./MarkdownMessage";
@@ -28,6 +36,8 @@ interface ThreadViewProps {
   onSwitchMessageRevision: (revisionGroupId: string, variantId: string) => void;
   composerInsertion?: { id: string; value: string };
   onComposerInsertionApplied?: (id: string) => void;
+  scrollRequest?: { id: string; anchor: HighlightAnchor };
+  onScrollRequestHandled?: (id: string) => void;
 }
 
 async function writeMarkdownToClipboard(markdown: string): Promise<void> {
@@ -86,11 +96,17 @@ export function ThreadView({
   onSwitchMessageRevision,
   composerInsertion,
   onComposerInsertionApplied,
+  scrollRequest,
+  onScrollRequestHandled,
 }: ThreadViewProps) {
+  const messagesRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const copyResetTimer = useRef<number | null>(null);
+  const scrollFrame = useRef<number | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [currentMessageIndex, setCurrentMessageIndex] = useState(0);
+  const [messageNavigationVisible, setMessageNavigationVisible] = useState(false);
   const [copyState, setCopyState] = useState<{
     messageId: string;
     status: "copied" | "failed";
@@ -110,7 +126,82 @@ export function ThreadView({
     setEditingMessageId(null);
     setEditValue("");
     setCopyState(null);
+    setCurrentMessageIndex(0);
+    setMessageNavigationVisible(false);
   }, [node.id]);
+
+  useEffect(() => {
+    const container = messagesRef.current;
+    if (!container || messages.length < 2) return;
+    let frame: number | null = null;
+    const syncCurrentMessage = () => {
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        const articles = Array.from(
+          container.querySelectorAll<HTMLElement>("[data-message-id]"),
+        );
+        const marker = container.getBoundingClientRect().top + 24;
+        let index = 0;
+        articles.forEach((article, candidate) => {
+          if (article.getBoundingClientRect().top <= marker) index = candidate;
+        });
+        if (
+          container.scrollTop + container.clientHeight >=
+          container.scrollHeight - 4
+        ) {
+          index = articles.length - 1;
+        }
+        setMessageNavigationVisible(
+          container.scrollHeight - container.clientHeight > 120,
+        );
+        setCurrentMessageIndex(Math.max(0, index));
+      });
+    };
+    const resizeObserver = new ResizeObserver(syncCurrentMessage);
+    resizeObserver.observe(container);
+    container
+      .querySelectorAll<HTMLElement>("[data-message-id]")
+      .forEach((article) => resizeObserver.observe(article));
+    syncCurrentMessage();
+    container.addEventListener("scroll", syncCurrentMessage, { passive: true });
+    window.addEventListener("resize", syncCurrentMessage);
+    return () => {
+      container.removeEventListener("scroll", syncCurrentMessage);
+      window.removeEventListener("resize", syncCurrentMessage);
+      resizeObserver.disconnect();
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, [node.id, messages.length]);
+
+  useEffect(() => {
+    if (!scrollRequest || scrollRequest.anchor.sourceNodeId !== node.id) return;
+    let attempts = 0;
+    const scrollToAnchor = () => {
+      const container = messagesRef.current;
+      if (!container) return;
+      const article = Array.from(
+        container.querySelectorAll<HTMLElement>("[data-message-id]"),
+      ).find((candidate) => candidate.dataset.messageId === scrollRequest.anchor.sourceMessageId);
+      const markdown = article?.querySelector<HTMLElement>(".markdown-message");
+      const block = markdown?.children.item(scrollRequest.anchor.blockIndex) as HTMLElement | null;
+      const target = block ?? article;
+      if (target) {
+        target.scrollIntoView({ behavior: "auto", block: "center" });
+        onScrollRequestHandled?.(scrollRequest.id);
+        scrollFrame.current = null;
+        return;
+      }
+      attempts += 1;
+      if (attempts < 6) scrollFrame.current = window.requestAnimationFrame(scrollToAnchor);
+      else scrollFrame.current = null;
+    };
+    scrollFrame.current = window.requestAnimationFrame(scrollToAnchor);
+    return () => {
+      if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current);
+      scrollFrame.current = null;
+    };
+  }, [node.id, scrollRequest?.id]);
 
   useEffect(
     () => () => {
@@ -137,9 +228,38 @@ export function ThreadView({
     }, 1800);
   };
 
+  const jumpToMessage = (index: number) => {
+    const container = messagesRef.current;
+    const article = container?.querySelectorAll<HTMLElement>("[data-message-id]").item(index);
+    article?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   return (
     <div className={`thread-view ${side ? "thread-view--side" : ""}`}>
-      <div className="thread-messages">
+      {messages.length > 1 && messageNavigationVisible && (
+        <nav className="message-jump-nav" aria-label="Message navigation">
+          <button
+            type="button"
+            aria-label="Previous message"
+            disabled={currentMessageIndex === 0}
+            onClick={() => jumpToMessage(currentMessageIndex - 1)}
+          >
+            <ChevronUp size={14} />
+          </button>
+          <span aria-label={`Message ${currentMessageIndex + 1} of ${messages.length}`}>
+            {currentMessageIndex + 1}<i>/</i>{messages.length}
+          </span>
+          <button
+            type="button"
+            aria-label="Next message"
+            disabled={currentMessageIndex === messages.length - 1}
+            onClick={() => jumpToMessage(currentMessageIndex + 1)}
+          >
+            <ChevronDown size={14} />
+          </button>
+        </nav>
+      )}
+      <div className="thread-messages" ref={messagesRef}>
         {messages.map((message) => {
           const revisionGroupId =
             message.role === "user" ? message.revisionGroupId ?? message.id : null;
@@ -166,6 +286,7 @@ export function ThreadView({
           return (
             <article
               className={`message message--${message.role} ${message.error ? "message--error" : ""}`}
+              data-message-id={message.id}
               key={message.id}
             >
               <div className="message__meta">

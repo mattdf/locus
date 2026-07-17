@@ -12,6 +12,8 @@ A local-first chat UI for studying difficult technical material without blowing 
 - Repeat the same action inside a focused thread to create arbitrarily deep branches.
 - Prior elaborations stay attached to their source passage; click anywhere in the marked
   source block to reopen the branch.
+- Refresh or navigate back through nested focuses without losing the relevant source
+  position, and use the floating message navigator in long conversations.
 - Stream model responses into the thread as they are generated.
 - Paste an OpenAI API key in the sidebar, or keep using `OPENAI_API_KEY.txt`.
 - Edit `SYSTEM_PROMPT.md` to change the base tutoring prompt, and add optional custom
