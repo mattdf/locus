@@ -1,5 +1,7 @@
 import { ArrowUp, CornerDownLeft } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { ModelPicker } from "./ModelPicker";
+import type { ReasoningEffort } from "../types";
 
 interface ComposerProps {
   onSend: (message: string) => void;
@@ -10,6 +12,10 @@ interface ComposerProps {
   initialValue?: string;
   insertion?: { id: string; value: string };
   onInsertionApplied?: (id: string) => void;
+  model: string;
+  onModelChange: (model: string) => void;
+  reasoningEffort: ReasoningEffort;
+  onReasoningEffortChange: (effort: ReasoningEffort) => void;
 }
 
 export function Composer({
@@ -21,6 +27,10 @@ export function Composer({
   initialValue = "",
   insertion,
   onInsertionApplied,
+  model,
+  onModelChange,
+  reasoningEffort,
+  onReasoningEffortChange,
 }: ComposerProps) {
   const [value, setValue] = useState(initialValue);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -92,6 +102,15 @@ export function Composer({
         }}
       />
       <div className="composer__footer">
+        <ModelPicker
+          className="composer__model-picker"
+          value={model}
+          onChange={onModelChange}
+          reasoningEffort={reasoningEffort}
+          onReasoningEffortChange={onReasoningEffortChange}
+          ariaLabel="Model for the next response"
+          reasoningAriaLabel="Reasoning effort for the next response"
+        />
         <span className="composer__hint">
           <CornerDownLeft size={12} /> Enter to send
         </span>

@@ -19,6 +19,9 @@ A local-first chat UI for studying difficult technical material without blowing 
 - Edit `SYSTEM_PROMPT.md` to change the base tutoring prompt, and add optional custom
   instructions from the UI that supplement it.
 - Paste Markdown (including LaTeX) into a new study without making a model request.
+- Choose a destination category while creating a new study or importing Markdown.
+- Select the model and reasoning effort together from the active chat box; configure output
+  limits, appearance, API access, custom instructions, and JSON transfers from Settings.
 - Organize studies into collapsible, reorderable sidebar categories and move chats between them.
 - Export one chat, any category (including Uncategorized), or the full library as JSON; import exports into an
   existing, new, preserved, or uncategorized destination.

@@ -19,6 +19,7 @@ import type {
   HighlightAnchor,
   SelectionDraft,
   ThreadNode,
+  ReasoningEffort,
 } from "../types";
 import { childThreads, messagesForNode } from "../lib/tree";
 import { Composer } from "./Composer";
@@ -34,6 +35,10 @@ interface ThreadViewProps {
   onStop: (assistantId: string) => void;
   onEditMessage: (revisionGroupId: string, content: string) => void;
   onSwitchMessageRevision: (revisionGroupId: string, variantId: string) => void;
+  model: string;
+  onModelChange: (model: string) => void;
+  reasoningEffort: ReasoningEffort;
+  onReasoningEffortChange: (effort: ReasoningEffort) => void;
   composerInsertion?: { id: string; value: string };
   onComposerInsertionApplied?: (id: string) => void;
   scrollRequest?: { id: string; anchor: HighlightAnchor };
@@ -94,6 +99,10 @@ export function ThreadView({
   onStop,
   onEditMessage,
   onSwitchMessageRevision,
+  model,
+  onModelChange,
+  reasoningEffort,
+  onReasoningEffortChange,
   composerInsertion,
   onComposerInsertionApplied,
   scrollRequest,
@@ -468,6 +477,10 @@ export function ThreadView({
           compact={side}
           disabled={waiting}
           onSend={onSend}
+          model={model}
+          onModelChange={onModelChange}
+          reasoningEffort={reasoningEffort}
+          onReasoningEffortChange={onReasoningEffortChange}
           insertion={composerInsertion}
           onInsertionApplied={onComposerInsertionApplied}
           placeholder={side ? "Continue this line of thought…" : "Ask about this topic…"}

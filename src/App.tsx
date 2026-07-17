@@ -2,7 +2,6 @@ import {
   ArrowDown,
   ArrowUp,
   BookOpenText,
-  BrainCircuit,
   ChevronLeft,
   ChevronRight,
   CornerUpRight,
@@ -39,6 +38,7 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import { Composer } from "./components/Composer";
+import { ModelPicker } from "./components/ModelPicker";
 import { ThreadView } from "./components/ThreadView";
 import {
   cloneChatForImport,
@@ -90,22 +90,6 @@ const DEFAULT_STATE: WorkspaceState = {
     theme: "light",
   },
 };
-
-const MODEL_OPTIONS = [
-  { value: "gpt-5.6-sol", label: "GPT-5.6 Sol", note: "Frontier" },
-  { value: "gpt-5.6-terra", label: "GPT-5.6 Terra", note: "Balanced" },
-  { value: "gpt-5.4-mini", label: "GPT-5.4 mini", note: "Fast" },
-  { value: "gpt-5.4", label: "GPT-5.4", note: "Deep" },
-];
-
-const REASONING_OPTIONS: Array<{ value: ReasoningEffort; label: string }> = [
-  { value: "none", label: "None" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" },
-  { value: "xhigh", label: "Extra high" },
-  { value: "max", label: "Max" },
-];
 
 interface ApiError {
   error?: string;
@@ -457,16 +441,37 @@ function NewChatScreen({
   initialMode,
   onCreate,
   onOpenSidebar,
+  categories,
+  model,
+  onModelChange,
+  reasoningEffort,
+  onReasoningEffortChange,
 }: {
   initialMode: "ask" | "import";
-  onCreate: (mode: "ask" | "import", content: string, title: string) => void;
+  onCreate: (
+    mode: "ask" | "import",
+    content: string,
+    title: string,
+    categoryId: string | null,
+  ) => void;
   onOpenSidebar: () => void;
+  categories: ChatCategory[];
+  model: string;
+  onModelChange: (model: string) => void;
+  reasoningEffort: ReasoningEffort;
+  onReasoningEffortChange: (effort: ReasoningEffort) => void;
 }) {
   const [mode, setMode] = useState(initialMode);
   const [content, setContent] = useState("");
   const [title, setTitle] = useState("");
+  const [categoryId, setCategoryId] = useState("");
 
   useEffect(() => setMode(initialMode), [initialMode]);
+  useEffect(() => {
+    if (categoryId && !categories.some((category) => category.id === categoryId)) {
+      setCategoryId("");
+    }
+  }, [categories, categoryId]);
 
   return (
     <main className="new-chat">
@@ -493,8 +498,8 @@ function NewChatScreen({
         <div className="new-chat__mark">
           <GitBranch size={25} />
         </div>
-        <p className="eyebrow">Recursive learning chat</p>
-        <h1>Recursive, branchable chat.</h1>
+        <p className="eyebrow">Locus Chat</p>
+        <h1>Dive deep into any topic</h1>
         <p className="new-chat__lede">
           Select any passage or equation to open a child thread. Child threads can branch
           again at any depth.
@@ -521,13 +526,28 @@ function NewChatScreen({
               <FileInput size={15} /> Import Markdown
             </button>
           </div>
-          <input
-            className="title-input"
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="Title (optional)"
-            aria-label="Chat title"
-          />
+          <div className="start-card__meta">
+            <input
+              className="title-input"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
+              placeholder="Title (optional)"
+              aria-label="Chat title"
+            />
+            <select
+              className="start-card__category"
+              aria-label="Category for new chat"
+              value={categoryId}
+              onChange={(event) => setCategoryId(event.target.value)}
+            >
+              <option value="">Uncategorized</option>
+              {categories.map((category) => (
+                <option value={category.id} key={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+          </div>
           <textarea
             autoFocus
             value={content}
@@ -541,14 +561,26 @@ function NewChatScreen({
             aria-label={mode === "import" ? "Markdown to import" : "Question for Locus"}
           />
           <div className="start-card__footer">
-            <span>
-              {mode === "import" ? "Saved locally · no model call" : "Uses the selected model"}
-            </span>
+            {mode === "ask" ? (
+              <ModelPicker
+                className="start-card__model-picker"
+                value={model}
+                onChange={onModelChange}
+                reasoningEffort={reasoningEffort}
+                onReasoningEffortChange={onReasoningEffortChange}
+                ariaLabel="Model for new chat"
+                reasoningAriaLabel="Reasoning effort for new chat"
+              />
+            ) : (
+              <span>Saved locally · no model call</span>
+            )}
             <button
               className="primary-button"
               type="button"
               disabled={!content.trim()}
-              onClick={() => onCreate(mode, content.trim(), title.trim())}
+              onClick={() =>
+                onCreate(mode, content.trim(), title.trim(), categoryId || null)
+              }
             >
               {mode === "import" ? "Create from Markdown" : "Start conversation"}
               <ChevronRight size={16} />
@@ -574,6 +606,7 @@ export default function App() {
   } | null>(null);
   const [newMode, setNewMode] = useState<"ask" | "import">("ask");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
   const [customInstructionsOpen, setCustomInstructionsOpen] = useState(false);
   const [customInstructionsDraft, setCustomInstructionsDraft] = useState("");
@@ -749,6 +782,7 @@ export default function App() {
         setSelection(null);
         window.getSelection()?.removeAllRanges();
         setDraft(null);
+        setSettingsOpen(false);
         setCustomInstructionsOpen(false);
         setApiKeyOpen(false);
         setApiKeyDraft("");
@@ -1163,7 +1197,12 @@ export default function App() {
     });
   };
 
-  const createChat = (mode: "ask" | "import", content: string, suppliedTitle: string) => {
+  const createChat = (
+    mode: "ask" | "import",
+    content: string,
+    suppliedTitle: string,
+    categoryId: string | null,
+  ) => {
     historyAction.current = "push";
     const createdAt = timestamp();
     const rootId = newId();
@@ -1186,6 +1225,7 @@ export default function App() {
       id: chatId,
       title,
       rootId,
+      categoryId,
       nodes: { [rootId]: root },
       createdAt,
       updatedAt: createdAt,
@@ -1699,6 +1739,36 @@ export default function App() {
     }));
   };
 
+  const selectModel = (model: string) => {
+    setWorkspace((current) => {
+      const reasoningEffort =
+        current.settings.reasoningEffort === "max" && !model.startsWith("gpt-5.6")
+          ? "xhigh"
+          : current.settings.reasoningEffort;
+      return {
+        ...current,
+        settings: { ...current.settings, model, reasoningEffort },
+      };
+    });
+  };
+
+  const selectReasoningEffort = (reasoningEffort: ReasoningEffort) => {
+    setWorkspace((current) => ({
+      ...current,
+      settings: { ...current.settings, reasoningEffort },
+    }));
+  };
+
+  const toggleTheme = () => {
+    setWorkspace((current) => ({
+      ...current,
+      settings: {
+        ...current.settings,
+        theme: current.settings.theme === "dark" ? "light" : "dark",
+      },
+    }));
+  };
+
   const closeApiKeyModal = () => {
     setApiKeyOpen(false);
     setApiKeyDraft("");
@@ -1833,14 +1903,6 @@ export default function App() {
           <button className="import-button" type="button" onClick={() => startNew("import")}>
             <FileInput size={15} /> Import Markdown
           </button>
-          <div className="sidebar-data-actions">
-            <button type="button" disabled={!workspace.chats.length && !workspace.categories.length} onClick={exportAllChats}>
-              <Download size={14} /> Export all
-            </button>
-            <button type="button" onClick={() => setJsonImportOpen(true)}>
-              <Upload size={14} /> Import JSON
-            </button>
-          </div>
           <label className="search-box">
             <Search size={14} />
             <input
@@ -2024,157 +2086,46 @@ export default function App() {
         </div>
 
         <div className="sidebar__footer">
-          <div className="settings-panel">
-            <label className="model-select">
-              <Settings2 size={15} />
-              <span>
-                <small>Model</small>
-                <select
-                  value={workspace.settings.model}
-                  onChange={(event) =>
-                    setWorkspace((current) => {
-                      const model = event.target.value;
-                      const reasoningEffort =
-                        current.settings.reasoningEffort === "max" && !model.startsWith("gpt-5.6")
-                          ? "xhigh"
-                          : current.settings.reasoningEffort;
-                      return {
-                        ...current,
-                        settings: { ...current.settings, model, reasoningEffort },
-                      };
-                    })
-                  }
-                >
-                  {MODEL_OPTIONS.map((model) => (
-                    <option value={model.value} key={model.value}>
-                      {model.label} · {model.note}
-                    </option>
-                  ))}
-                </select>
-              </span>
-            </label>
-            <label className="model-select">
-              <BrainCircuit size={15} />
-              <span>
-                <small>Reasoning effort</small>
-                <select
-                  value={workspace.settings.reasoningEffort}
-                  onChange={(event) =>
-                    setWorkspace((current) => ({
-                      ...current,
-                      settings: {
-                        ...current.settings,
-                        reasoningEffort: event.target.value as ReasoningEffort,
-                      },
-                    }))
-                  }
-                >
-                  {REASONING_OPTIONS.map((effort) => (
-                    <option
-                      value={effort.value}
-                      key={effort.value}
-                      disabled={effort.value === "max" && !workspace.settings.model.startsWith("gpt-5.6")}
-                    >
-                      {effort.label}
-                    </option>
-                  ))}
-                </select>
-              </span>
-            </label>
-            <label className="model-select">
-              <Hash size={15} />
-              <span>
-                <small>Output-token limit · 0 = model maximum</small>
-                <input
-                  type="number"
-                  min={0}
-                  step={1_000}
-                  inputMode="numeric"
-                  aria-label="Maximum output tokens"
-                  title="Includes reasoning and visible output tokens; 0 removes Locus's limit"
-                  value={workspace.settings.maxOutputTokens}
-                  onChange={(event) => {
-                    const maxOutputTokens = event.currentTarget.valueAsNumber;
-                    if (!Number.isSafeInteger(maxOutputTokens) || maxOutputTokens < 0) return;
-                    setWorkspace((current) => ({
-                      ...current,
-                      settings: { ...current.settings, maxOutputTokens },
-                    }));
-                  }}
-                />
-              </span>
-            </label>
-            <button
-              className="custom-instructions-button api-key-button"
-              type="button"
-              onClick={() => {
-                setApiKeyDraft("");
-                setApiKeyError("");
-                setApiKeyOpen(true);
-              }}
-            >
-              <KeyRound size={15} />
-              <span>
-                <small>OpenAI API key</small>
-                <strong>
-                  {!apiKeyStatus
-                    ? "Checking…"
-                    : apiKeyStatus.source === "saved"
-                      ? "Saved in Locus"
-                      : apiKeyStatus.source === "project-file"
-                        ? "Project file"
-                        : "Not configured"}
-                </strong>
-              </span>
-              <ChevronRight size={13} />
-            </button>
-            <button
-              className="custom-instructions-button"
-              type="button"
-              onClick={() => {
-                setCustomInstructionsDraft(workspace.settings.customInstructions);
-                setCustomInstructionsOpen(true);
-              }}
-            >
-              <SlidersHorizontal size={15} />
-              <span>
-                <small>Custom instructions</small>
-                <strong>
-                  {workspace.settings.customInstructions.trim()
-                    ? `${workspace.settings.customInstructions.trim().length} characters`
-                    : "Not set"}
-                </strong>
-              </span>
-              <ChevronRight size={13} />
-            </button>
-            <button
-              className="theme-toggle-button"
-              type="button"
-              aria-label={
-                workspace.settings.theme === "dark" ? "Use light mode" : "Use dark mode"
-              }
-              aria-pressed={workspace.settings.theme === "dark"}
-              onClick={() =>
-                setWorkspace((current) => ({
-                  ...current,
-                  settings: {
-                    ...current.settings,
-                    theme: current.settings.theme === "dark" ? "light" : "dark",
-                  },
-                }))
-              }
-            >
-              {workspace.settings.theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
-              <span>
-                <small>Appearance</small>
-                <strong>{workspace.settings.theme === "dark" ? "Dark mode" : "Light mode"}</strong>
-              </span>
-              <i className="theme-switch" aria-hidden="true"><span /></i>
-            </button>
-          </div>
+          <button
+            className="settings-launcher"
+            type="button"
+            onClick={() => {
+              setSettingsOpen(true);
+              setSidebarOpen(false);
+            }}
+          >
+            <Settings2 size={16} />
+            <span>
+              <strong>Settings</strong>
+              <small>Workspace preferences</small>
+            </span>
+            <ChevronRight size={14} />
+          </button>
+          <button
+            className="theme-toggle-button sidebar-theme-toggle"
+            type="button"
+            aria-label={
+              workspace.settings.theme === "dark" ? "Use light mode" : "Use dark mode"
+            }
+            aria-pressed={workspace.settings.theme === "dark"}
+            onClick={toggleTheme}
+          >
+            {workspace.settings.theme === "dark" ? <Sun size={15} /> : <Moon size={15} />}
+            <span>
+              <small>Appearance</small>
+              <strong>
+                {workspace.settings.theme === "dark" ? "Dark mode" : "Light mode"}
+              </strong>
+            </span>
+            <i className="theme-switch" aria-hidden="true"><span /></i>
+          </button>
           <div className={`save-status save-status--${saveState}`}>
             <i />
-            {saveState === "saved" ? "Saved locally" : saveState === "saving" ? "Saving…" : "Save failed"}
+            {saveState === "saved"
+              ? "Saved locally"
+              : saveState === "saving"
+                ? "Saving…"
+                : "Save failed"}
           </div>
         </div>
       </aside>
@@ -2186,6 +2137,11 @@ export default function App() {
           initialMode={newMode}
           onCreate={createChat}
           onOpenSidebar={openSidebar}
+          categories={workspace.categories}
+          model={workspace.settings.model}
+          onModelChange={selectModel}
+          reasoningEffort={workspace.settings.reasoningEffort}
+          onReasoningEffortChange={selectReasoningEffort}
         />
       ) : (
         <main className="main-pane">
@@ -2351,6 +2307,10 @@ export default function App() {
             onSwitchMessageRevision={(revisionGroupId, variantId) =>
               switchMessageRevision(rootNode.id, revisionGroupId, variantId)
             }
+            model={workspace.settings.model}
+            onModelChange={selectModel}
+            reasoningEffort={workspace.settings.reasoningEffort}
+            onReasoningEffortChange={selectReasoningEffort}
             composerInsertion={
               composerInsertion?.nodeId === rootNode.id ? composerInsertion : undefined
             }
@@ -2420,6 +2380,10 @@ export default function App() {
                 placeholder="e.g. Show every algebraic step between these two lines…"
                 submitLabel="Start elaboration"
                 onSend={beginElaboration}
+                model={workspace.settings.model}
+                onModelChange={selectModel}
+                reasoningEffort={workspace.settings.reasoningEffort}
+                onReasoningEffortChange={selectReasoningEffort}
               />
               <div className="prompt-suggestions">
                 <button type="button" onClick={() => beginElaboration("Show every missing algebraic step in this passage.")}>Missing algebra</button>
@@ -2516,6 +2480,10 @@ export default function App() {
             onSwitchMessageRevision={(revisionGroupId, variantId) =>
               switchMessageRevision(sideNode.id, revisionGroupId, variantId)
             }
+            model={workspace.settings.model}
+            onModelChange={selectModel}
+            reasoningEffort={workspace.settings.reasoningEffort}
+            onReasoningEffortChange={selectReasoningEffort}
             composerInsertion={
               composerInsertion?.nodeId === sideNode.id ? composerInsertion : undefined
             }
@@ -2532,6 +2500,211 @@ export default function App() {
             }
           />
         </aside>
+      )}
+
+      {settingsOpen && (
+        <div
+          className="settings-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setSettingsOpen(false);
+          }}
+        >
+          <section
+            className="settings-modal settings-modal--workspace"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="workspace-settings-title"
+          >
+            <header>
+              <div>
+                <span>Workspace</span>
+                <h2 id="workspace-settings-title">Settings</h2>
+              </div>
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="Close settings"
+                onClick={() => setSettingsOpen(false)}
+              >
+                <X size={17} />
+              </button>
+            </header>
+
+            <div className="settings-view">
+              <section className="settings-view__section">
+                <header>
+                  <h3>Generation</h3>
+                  <p>Model and reasoning effort are selected together in each chat box.</p>
+                </header>
+                <div className="settings-view__grid settings-view__grid--single">
+                  <label className="model-select">
+                    <Hash size={15} />
+                    <span>
+                      <small>Output-token limit · 0 = model maximum</small>
+                      <input
+                        type="number"
+                        min={0}
+                        step={1_000}
+                        inputMode="numeric"
+                        aria-label="Maximum output tokens"
+                        title="Includes reasoning and visible output tokens; 0 removes Locus's limit"
+                        value={workspace.settings.maxOutputTokens}
+                        onChange={(event) => {
+                          const maxOutputTokens = event.currentTarget.valueAsNumber;
+                          if (
+                            !Number.isSafeInteger(maxOutputTokens) ||
+                            maxOutputTokens < 0
+                          ) {
+                            return;
+                          }
+                          setWorkspace((current) => ({
+                            ...current,
+                            settings: { ...current.settings, maxOutputTokens },
+                          }));
+                        }}
+                      />
+                    </span>
+                  </label>
+                </div>
+              </section>
+
+              <section className="settings-view__section">
+                <header>
+                  <h3>Behavior and connection</h3>
+                </header>
+                <div className="settings-view__actions">
+                  <button
+                    className="custom-instructions-button api-key-button"
+                    type="button"
+                    onClick={() => {
+                      setSettingsOpen(false);
+                      setApiKeyDraft("");
+                      setApiKeyError("");
+                      setApiKeyOpen(true);
+                    }}
+                  >
+                    <KeyRound size={15} />
+                    <span>
+                      <small>OpenAI API key</small>
+                      <strong>
+                        {!apiKeyStatus
+                          ? "Checking…"
+                          : apiKeyStatus.source === "saved"
+                            ? "Saved in Locus"
+                            : apiKeyStatus.source === "project-file"
+                              ? "Project file"
+                              : "Not configured"}
+                      </strong>
+                    </span>
+                    <ChevronRight size={13} />
+                  </button>
+                  <button
+                    className="custom-instructions-button"
+                    type="button"
+                    onClick={() => {
+                      setSettingsOpen(false);
+                      setCustomInstructionsDraft(workspace.settings.customInstructions);
+                      setCustomInstructionsOpen(true);
+                    }}
+                  >
+                    <SlidersHorizontal size={15} />
+                    <span>
+                      <small>Custom instructions</small>
+                      <strong>
+                        {workspace.settings.customInstructions.trim()
+                          ? `${workspace.settings.customInstructions.trim().length} characters`
+                          : "Not set"}
+                      </strong>
+                    </span>
+                    <ChevronRight size={13} />
+                  </button>
+                </div>
+              </section>
+
+              <section className="settings-view__section">
+                <header>
+                  <h3>Appearance</h3>
+                </header>
+                <button
+                  className="theme-toggle-button"
+                  type="button"
+                  aria-label={
+                    workspace.settings.theme === "dark"
+                      ? "Use light mode"
+                      : "Use dark mode"
+                  }
+                  aria-pressed={workspace.settings.theme === "dark"}
+                  onClick={toggleTheme}
+                >
+                  {workspace.settings.theme === "dark" ? (
+                    <Sun size={15} />
+                  ) : (
+                    <Moon size={15} />
+                  )}
+                  <span>
+                    <small>Color theme</small>
+                    <strong>
+                      {workspace.settings.theme === "dark" ? "Dark mode" : "Light mode"}
+                    </strong>
+                  </span>
+                  <i className="theme-switch" aria-hidden="true"><span /></i>
+                </button>
+              </section>
+
+              <section className="settings-view__section">
+                <header>
+                  <h3>Data</h3>
+                  <p>Transfer chats without changing the local originals.</p>
+                </header>
+                <div className="settings-view__data-actions">
+                  <button
+                    type="button"
+                    disabled={!workspace.chats.length && !workspace.categories.length}
+                    onClick={exportAllChats}
+                  >
+                    <Download size={15} />
+                    <span>
+                      <strong>Export all</strong>
+                      <small>Download the full library as JSON</small>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSettingsOpen(false);
+                      setJsonImportOpen(true);
+                    }}
+                  >
+                    <Upload size={15} />
+                    <span>
+                      <strong>Import JSON</strong>
+                      <small>Add a Locus export to this workspace</small>
+                    </span>
+                  </button>
+                </div>
+              </section>
+            </div>
+
+            <footer className="settings-view__footer">
+              <div className={`save-status save-status--${saveState}`}>
+                <i />
+                {saveState === "saved"
+                  ? "Saved locally"
+                  : saveState === "saving"
+                    ? "Saving…"
+                    : "Save failed"}
+              </div>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => setSettingsOpen(false)}
+              >
+                Done
+              </button>
+            </footer>
+          </section>
+        </div>
       )}
 
       {categoryEditor && (
