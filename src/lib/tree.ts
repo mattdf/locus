@@ -98,11 +98,25 @@ export function treeDepth(chat: ChatTree): number {
 
 export function titleFrom(text: string, fallback = "Untitled thread"): string {
   const cleaned = text
-    .replace(/[#*_`$>\[\]()]/g, "")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^\s{0,3}(?:#{1,6}|>)\s*/gm, "")
+    .replace(/[*_`]/g, "")
     .replace(/\s+/g, " ")
     .trim();
   if (!cleaned) return fallback;
-  return cleaned.length > 58 ? `${cleaned.slice(0, 57).trim()}…` : cleaned;
+  if (cleaned.length <= 58) return cleaned;
+
+  let shortened = cleaned.slice(0, 57).trim();
+  const displayDelimiters = shortened.match(/(?<!\\)\$\$/g)?.length ?? 0;
+  if (displayDelimiters % 2) shortened += "$$";
+  else {
+    const withoutDisplayMath = shortened.replace(/(?<!\\)\$\$/g, "");
+    const inlineDelimiters = withoutDisplayMath.match(/(?<!\\)\$/g)?.length ?? 0;
+    if (inlineDelimiters % 2) shortened += "$";
+  }
+  if (shortened.lastIndexOf("\\(") > shortened.lastIndexOf("\\)")) shortened += "\\)";
+  if (shortened.lastIndexOf("\\[") > shortened.lastIndexOf("\\]")) shortened += "\\]";
+  return `${shortened}…`;
 }
 
 export function makeMessage(role: Message["role"], content: string): Message {

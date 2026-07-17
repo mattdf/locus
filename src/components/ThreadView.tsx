@@ -20,8 +20,10 @@ import type {
   SelectionDraft,
   ThreadNode,
   ReasoningEffort,
+  SendShortcut,
 } from "../types";
 import { childThreads, messagesForNode } from "../lib/tree";
+import { applyMarkdownShortcut } from "../lib/textarea";
 import { Composer } from "./Composer";
 import { MarkdownMessage } from "./MarkdownMessage";
 
@@ -39,6 +41,7 @@ interface ThreadViewProps {
   onModelChange: (model: string) => void;
   reasoningEffort: ReasoningEffort;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
+  sendShortcut: SendShortcut;
   composerInsertion?: { id: string; value: string };
   onComposerInsertionApplied?: (id: string) => void;
   scrollRequest?: { id: string; anchor: HighlightAnchor };
@@ -86,7 +89,34 @@ function generationDetails(generation: GenerationMetrics): string {
     return `${duration} · token usage unavailable`;
   }
   const format = (value: number) => value.toLocaleString();
-  return `${duration} · ${format(generation.totalTokens)} tokens total · ${format(generation.inputTokens)} input · ${format(generation.outputTokens)} generated (including ${format(generation.reasoningTokens)} reasoning)`;
+  const cost =
+    typeof generation.totalCostUsd === "number"
+      ? generation.totalCostUsd < 0.0001
+        ? "< $0.0001 estimated"
+        : `$${generation.totalCostUsd.toFixed(generation.totalCostUsd < 0.01 ? 5 : 4)} estimated`
+      : "cost unavailable";
+  return `${duration} · ${format(generation.totalTokens)} tokens total · ${format(generation.inputTokens)} input · ${format(generation.outputTokens)} generated (including ${format(generation.reasoningTokens)} reasoning) · ${cost}`;
+}
+
+function ThinkingIndicator({ startedAt }: { startedAt: string }) {
+  const started = Number.isFinite(Date.parse(startedAt)) ? Date.parse(startedAt) : Date.now();
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const interval = window.setInterval(() => setNow(Date.now()), 100);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  const elapsed = formatDuration(Math.max(0, now - started));
+  return (
+    <div className="thinking" aria-label={`Locus is thinking, ${elapsed} elapsed`}>
+      <span />
+      <span />
+      <span />
+      <em>Working through the steps…</em>
+      <time>{elapsed}</time>
+    </div>
+  );
 }
 
 export function ThreadView({
@@ -103,6 +133,7 @@ export function ThreadView({
   onModelChange,
   reasoningEffort,
   onReasoningEffortChange,
+  sendShortcut,
   composerInsertion,
   onComposerInsertionApplied,
   scrollRequest,
@@ -401,6 +432,9 @@ export function ThreadView({
                     value={editValue}
                     aria-label="Edit previous message"
                     onChange={(event) => setEditValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      applyMarkdownShortcut(event, editValue, setEditValue);
+                    }}
                   />
                   <div>
                     <button
@@ -427,12 +461,7 @@ export function ThreadView({
                   </div>
                 </div>
               ) : message.pending && !message.content ? (
-                <div className="thinking" aria-label="Locus is thinking">
-                  <span />
-                  <span />
-                  <span />
-                  <em>Working through the steps…</em>
-                </div>
+                <ThinkingIndicator startedAt={message.createdAt} />
               ) : (
                 <>
                 <MarkdownMessage
@@ -481,6 +510,7 @@ export function ThreadView({
           onModelChange={onModelChange}
           reasoningEffort={reasoningEffort}
           onReasoningEffortChange={onReasoningEffortChange}
+          sendShortcut={sendShortcut}
           insertion={composerInsertion}
           onInsertionApplied={onComposerInsertionApplied}
           placeholder={side ? "Continue this line of thought…" : "Ask about this topic…"}

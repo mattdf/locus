@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { normalizeMathDelimiters } from "../lib/markdown";
 import type { HighlightAnchor, Message, SelectionDraft } from "../types";
+import { InlineMath } from "./MathText";
 
 interface LinkedAnchor {
   childId: string;
@@ -277,7 +278,7 @@ export function MarkdownMessage({
               title={linked.anchor.quote.trim()}
             >
               <CornerUpRight size={12} />
-              {linked.title}
+              <InlineMath source={linked.title} />
             </button>
           ))}
         </div>

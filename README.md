@@ -15,7 +15,13 @@ A local-first chat UI for studying difficult technical material without blowing 
 - Refresh or navigate back through nested focuses without losing the relevant source
   position, and use the floating message navigator in long conversations.
 - Stream model responses into the thread as they are generated.
-- Paste an OpenAI API key in the sidebar, or keep using `OPENAI_API_KEY.txt`.
+- Stop an in-flight response explicitly, see elapsed thinking time, and review duration,
+  token usage, reasoning tokens, and estimated API cost on completed responses.
+- Rename main threads and recursive branches inline from their pencil controls.
+- Use `Cmd/Ctrl+B` and `Cmd/Ctrl+I` in any textarea, and choose whether Enter or
+  `Cmd/Ctrl+Enter` sends messages.
+- Scale chat text independently from browser zoom with the text-size setting.
+- Paste an OpenAI API key in Settings, or keep using `OPENAI_API_KEY.txt`.
 - Edit `SYSTEM_PROMPT.md` to change the base tutoring prompt, and add optional custom
   instructions from the UI that supplement it.
 - Paste Markdown (including LaTeX) into a new study without making a model request.
@@ -27,6 +33,7 @@ A local-first chat UI for studying difficult technical material without blowing 
   existing, new, preserved, or uncategorized destination.
 - Recover LaTeX from ChatGPT rendered-copy imports where `\[` / `\(` delimiters were
   flattened into plain brackets and parentheses.
+- Render LaTeX in chat titles, branch titles, saved elaboration labels, and selected quotes.
 - Store the complete workspace as a readable local JSON document in `data/chats.json`.
 
 ## Run it
@@ -71,8 +78,8 @@ to the model.
 - The server binds to `127.0.0.1` by default so the API key is not exposed on the LAN.
 - Keys pasted in the UI are written to the gitignored `data/openai-api-key.txt` with
   owner-only permissions and take precedence over `OPENAI_API_KEY.txt`.
-- The default model is `gpt-5.6-sol` with `max` reasoning effort. Both model and reasoning
-  effort are configurable in the sidebar.
+- The default model is `gpt-5.6-sol` with `max` reasoning effort. Model and reasoning
+  effort stay together in each chat composer.
 - Custom instructions are stored locally with the workspace and appended to, rather than
   substituted for, `SYSTEM_PROMPT.md`.
 - Set `PORT` or `HOST` when starting the server if you need different local bindings.

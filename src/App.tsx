@@ -4,6 +4,7 @@ import {
   BookOpenText,
   ChevronLeft,
   ChevronRight,
+  CornerDownLeft,
   CornerUpRight,
   Download,
   FileInput,
@@ -38,6 +39,7 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import { Composer } from "./components/Composer";
+import { InlineMath, MathBlock } from "./components/MathText";
 import { ModelPicker } from "./components/ModelPicker";
 import { ThreadView } from "./components/ThreadView";
 import {
@@ -48,6 +50,7 @@ import {
   type ParsedChatImport,
 } from "./lib/chatTransfer";
 import { markdownBlockquote } from "./lib/markdown";
+import { applyMarkdownShortcut, isSendShortcut } from "./lib/textarea";
 import {
   childThreads,
   contextBeforeMessage,
@@ -88,6 +91,8 @@ const DEFAULT_STATE: WorkspaceState = {
     sidebarCollapsed: false,
     collapsedCategoryIds: [],
     theme: "light",
+    textScale: 100,
+    sendShortcut: "enter",
   },
 };
 
@@ -202,12 +207,14 @@ function BranchTree({
   parentId,
   activeNodeId,
   onOpen,
+  onRename,
   root = false,
 }: {
   chat: ChatTree;
   parentId: string;
   activeNodeId: string | null;
   onOpen: (nodeId: string) => void;
+  onRename: (nodeId: string) => void;
   root?: boolean;
 }) {
   const children = childThreads(chat, parentId).sort((left, right) =>
@@ -219,20 +226,31 @@ function BranchTree({
     <ul className={`branch-tree ${root ? "branch-tree--root" : ""}`}>
       {children.map((node) => (
         <li key={node.id}>
-          <button
-            type="button"
-            className={node.id === activeNodeId ? "active" : ""}
-            aria-label={`Open branch: ${node.title}`}
-            onClick={() => onOpen(node.id)}
-          >
-            <GitBranch size={13} />
-            <span>{node.title}</span>
-          </button>
+          <div className="branch-tree__row">
+            <button
+              type="button"
+              className={`branch-tree__open ${node.id === activeNodeId ? "active" : ""}`}
+              aria-label={`Open branch: ${node.title}`}
+              onClick={() => onOpen(node.id)}
+            >
+              <GitBranch size={13} />
+              <InlineMath source={node.title} />
+            </button>
+            <button
+              className="branch-tree__rename"
+              type="button"
+              aria-label={`Rename branch: ${node.title}`}
+              onClick={() => onRename(node.id)}
+            >
+              <Pencil size={11} />
+            </button>
+          </div>
           <BranchTree
             chat={chat}
             parentId={node.id}
             activeNodeId={activeNodeId}
             onOpen={onOpen}
+            onRename={onRename}
           />
         </li>
       ))}
@@ -412,9 +430,8 @@ function SelectionToolbar({
       }}
       onMouseDown={(event) => event.preventDefault()}
     >
-      <span>
-        “{selection.quote.replace(/\s+/g, " ").trim().slice(0, 42)}
-        {selection.quote.trim().length > 42 ? "…" : ""}”
+      <span className="selection-toolbar__quote">
+        “<InlineMath source={selection.quote} />”
       </span>
       <button type="button" onClick={onElaborate}>
         <CornerUpRight size={14} /> Elaborate
@@ -446,6 +463,7 @@ function NewChatScreen({
   onModelChange,
   reasoningEffort,
   onReasoningEffortChange,
+  sendShortcut,
 }: {
   initialMode: "ask" | "import";
   onCreate: (
@@ -460,6 +478,7 @@ function NewChatScreen({
   onModelChange: (model: string) => void;
   reasoningEffort: ReasoningEffort;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
+  sendShortcut: WorkspaceState["settings"]["sendShortcut"];
 }) {
   const [mode, setMode] = useState(initialMode);
   const [content, setContent] = useState("");
@@ -472,6 +491,11 @@ function NewChatScreen({
       setCategoryId("");
     }
   }, [categories, categoryId]);
+
+  const submitNewChat = () => {
+    if (!content.trim()) return;
+    onCreate(mode, content.trim(), title.trim(), categoryId || null);
+  };
 
   return (
     <main className="new-chat">
@@ -552,6 +576,13 @@ function NewChatScreen({
             autoFocus
             value={content}
             onChange={(event) => setContent(event.target.value)}
+            onKeyDown={(event) => {
+              if (applyMarkdownShortcut(event, content, setContent)) return;
+              if (isSendShortcut(event, sendShortcut)) {
+                event.preventDefault();
+                submitNewChat();
+              }
+            }}
             rows={9}
             placeholder={
               mode === "import"
@@ -578,9 +609,7 @@ function NewChatScreen({
               className="primary-button"
               type="button"
               disabled={!content.trim()}
-              onClick={() =>
-                onCreate(mode, content.trim(), title.trim(), categoryId || null)
-              }
+              onClick={submitNewChat}
             >
               {mode === "import" ? "Create from Markdown" : "Start conversation"}
               <ChevronRight size={16} />
@@ -618,7 +647,7 @@ export default function App() {
   const [drawerWidth, setDrawerWidth] = useState(440);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
-  const [renamingChat, setRenamingChat] = useState(false);
+  const [renamingNodeId, setRenamingNodeId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [categoryMenuId, setCategoryMenuId] = useState<string | null>(null);
   const [categoryEditor, setCategoryEditor] = useState<{
@@ -789,7 +818,7 @@ export default function App() {
         setApiKeyError("");
         setChatMenuOpen(false);
         setBranchMenuOpen(false);
-        setRenamingChat(false);
+        setRenamingNodeId(null);
         setCategoryMenuId(null);
         setCategoryEditor(null);
         setJsonImportOpen(false);
@@ -1373,27 +1402,36 @@ export default function App() {
     saveDrawerWidth(currentWidth + (event.key === "ArrowLeft" ? 24 : -24));
   };
 
-  const openRenameChat = () => {
+  const openRenameNode = (nodeId: string) => {
     if (!activeChat) return;
-    setRenameDraft(activeChat.title);
-    setRenamingChat(true);
+    const node = activeChat.nodes[nodeId];
+    if (!node) return;
+    setRenameDraft(node.title);
+    setRenamingNodeId(nodeId);
+    setChatMenuOpen(false);
+    setBranchMenuOpen(false);
+    if (nodeId !== activeChat.rootId) {
+      historyAction.current = "push";
+      setActiveNodeId(nodeId);
+      setFocusMaximized(false);
+    }
   };
 
-  const saveChatName = () => {
-    if (!activeChat) return;
+  const saveNodeName = () => {
+    if (!activeChat || !renamingNodeId) return;
     const title = renameDraft.trim();
     if (!title) return;
     const updatedAt = timestamp();
     updateChat(activeChat.id, (chat) => ({
       ...chat,
-      title,
+      title: renamingNodeId === chat.rootId ? title : chat.title,
       updatedAt,
       nodes: {
         ...chat.nodes,
-        [chat.rootId]: { ...chat.nodes[chat.rootId], title, updatedAt },
+        [renamingNodeId]: { ...chat.nodes[renamingNodeId], title, updatedAt },
       },
     }));
-    setRenamingChat(false);
+    setRenamingNodeId(null);
     setChatMenuOpen(false);
   };
 
@@ -1669,7 +1707,7 @@ export default function App() {
     setSelection(null);
     setChatMenuOpen(false);
     setBranchMenuOpen(false);
-    setRenamingChat(false);
+    setRenamingNodeId(null);
     setFocusMaximized(false);
   };
 
@@ -1701,7 +1739,7 @@ export default function App() {
     setSidebarOpen(false);
     setChatMenuOpen(false);
     setBranchMenuOpen(false);
-    setRenamingChat(false);
+    setRenamingNodeId(null);
     setCategoryMenuId(null);
     setFocusMaximized(false);
   };
@@ -1715,7 +1753,7 @@ export default function App() {
     setSidebarOpen(false);
     setChatMenuOpen(false);
     setBranchMenuOpen(false);
-    setRenamingChat(false);
+    setRenamingNodeId(null);
     setCategoryMenuId(null);
     setFocusMaximized(false);
   };
@@ -1848,7 +1886,7 @@ export default function App() {
       >
         {chat.pinned ? <Pin size={15} /> : <BookOpenText size={15} />}
         <span>
-          <strong>{chat.title}</strong>
+          <strong><InlineMath source={chat.title} /></strong>
           <small>
             {branchCount
               ? `${branchCount} elaboration${branchCount === 1 ? "" : "s"}`
@@ -1867,7 +1905,12 @@ export default function App() {
     <div
       className={`app-shell ${workspace.settings.sidebarCollapsed ? "app-shell--sidebar-collapsed" : ""} ${drawerOpen ? "app-shell--drawer" : ""} ${focusMaximized && sideNode ? "app-shell--focus-maximized" : ""}`}
       data-theme={workspace.settings.theme}
-      style={{ "--focus-drawer-width": `${drawerWidth}px` } as CSSProperties}
+      style={
+        {
+          "--focus-drawer-width": `${drawerWidth}px`,
+          "--text-scale": workspace.settings.textScale / 100,
+        } as CSSProperties
+      }
     >
       <aside className={`sidebar ${sidebarOpen ? "sidebar--open" : ""}`}>
         {categoryMenuId && (
@@ -2142,6 +2185,7 @@ export default function App() {
           onModelChange={selectModel}
           reasoningEffort={workspace.settings.reasoningEffort}
           onReasoningEffortChange={selectReasoningEffort}
+          sendShortcut={workspace.settings.sendShortcut}
         />
       ) : (
         <main className="main-pane">
@@ -2153,7 +2197,7 @@ export default function App() {
               onClick={() => {
                 setChatMenuOpen(false);
                 setBranchMenuOpen(false);
-                setRenamingChat(false);
+                setRenamingNodeId(null);
               }}
             />
           )}
@@ -2163,7 +2207,41 @@ export default function App() {
             </button>
             <div className="pane-header__title">
               <span>Main thread</span>
-              <h1>{activeChat.title}</h1>
+              {renamingNodeId === rootNode.id ? (
+                <form
+                  className="inline-title-editor"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    saveNodeName();
+                  }}
+                >
+                  <input
+                    autoFocus
+                    aria-label="Rename main thread"
+                    value={renameDraft}
+                    onChange={(event) => setRenameDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        event.stopPropagation();
+                        setRenamingNodeId(null);
+                      }
+                    }}
+                  />
+                  <button type="submit" disabled={!renameDraft.trim()}>Save</button>
+                </form>
+              ) : (
+                <div className="inline-title-row">
+                  <h1><InlineMath source={activeChat.title} /></h1>
+                  <button
+                    className="inline-rename-button"
+                    type="button"
+                    aria-label="Rename main thread"
+                    onClick={() => openRenameNode(rootNode.id)}
+                  >
+                    <Pencil size={11} />
+                  </button>
+                </div>
+              )}
             </div>
             <div className="pane-header__actions">
               <div className="header-popover-anchor">
@@ -2176,7 +2254,7 @@ export default function App() {
                   onClick={() => {
                     setBranchMenuOpen((open) => !open);
                     setChatMenuOpen(false);
-                    setRenamingChat(false);
+                    setRenamingNodeId(null);
                   }}
                 >
                   <GitBranch size={14} /> {activeBranchCount}
@@ -2194,6 +2272,7 @@ export default function App() {
                           parentId={activeChat.rootId}
                           activeNodeId={activeNodeId}
                           root
+                          onRename={openRenameNode}
                           onOpen={(nodeId) => {
                             historyAction.current = "push";
                             setActiveNodeId(nodeId);
@@ -2219,72 +2298,42 @@ export default function App() {
                 onClick={() => {
                   setChatMenuOpen((open) => !open);
                   setBranchMenuOpen(false);
-                  setRenamingChat(false);
+                  setRenamingNodeId(null);
                 }}
               >
                 <MoreHorizontal size={17} />
               </button>
               {chatMenuOpen && (
                 <div className="chat-menu" aria-label="Chat options">
-                  {renamingChat ? (
-                    <form
-                      className="chat-menu__rename"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        saveChatName();
-                      }}
+                  <button type="button" onClick={() => openRenameNode(rootNode.id)}>
+                    <Pencil size={15} /> Rename chat
+                  </button>
+                  <button type="button" onClick={toggleChatPin}>
+                    <Pin size={15} /> {activeChat.pinned ? "Unpin from top" : "Pin to top"}
+                  </button>
+                  <label className="chat-menu__move">
+                    <FolderInput size={15} />
+                    <span>Move to</span>
+                    <select
+                      aria-label="Move chat to category"
+                      value={activeChat.categoryId ?? ""}
+                      onChange={(event) => moveActiveChat(event.target.value)}
                     >
-                      <label htmlFor="rename-chat">Chat name</label>
-                      <input
-                        id="rename-chat"
-                        autoFocus
-                        value={renameDraft}
-                        onChange={(event) => setRenameDraft(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Escape") {
-                            event.stopPropagation();
-                            setRenamingChat(false);
-                          }
-                        }}
-                      />
-                      <div>
-                        <button type="button" onClick={() => setRenamingChat(false)}>Cancel</button>
-                        <button className="chat-menu__save" type="submit" disabled={!renameDraft.trim()}>Save</button>
-                      </div>
-                    </form>
-                  ) : (
-                    <>
-                      <button type="button" onClick={openRenameChat}>
-                        <Pencil size={15} /> Rename chat
-                      </button>
-                      <button type="button" onClick={toggleChatPin}>
-                        <Pin size={15} /> {activeChat.pinned ? "Unpin from top" : "Pin to top"}
-                      </button>
-                      <label className="chat-menu__move">
-                        <FolderInput size={15} />
-                        <span>Move to</span>
-                        <select
-                          aria-label="Move chat to category"
-                          value={activeChat.categoryId ?? ""}
-                          onChange={(event) => moveActiveChat(event.target.value)}
-                        >
-                          <option value="">Uncategorized</option>
-                          {workspace.categories.map((category) => (
-                            <option value={category.id} key={category.id}>
-                              {category.name}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <button type="button" onClick={exportActiveChat}>
-                        <Download size={15} /> Export chat as JSON
-                      </button>
-                      <div className="chat-menu__divider" />
-                      <button className="chat-menu__danger" type="button" onClick={deleteActiveChat}>
-                        <Trash2 size={15} /> Delete chat
-                      </button>
-                    </>
-                  )}
+                      <option value="">Uncategorized</option>
+                      {workspace.categories.map((category) => (
+                        <option value={category.id} key={category.id}>
+                          {category.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <button type="button" onClick={exportActiveChat}>
+                    <Download size={15} /> Export chat as JSON
+                  </button>
+                  <div className="chat-menu__divider" />
+                  <button className="chat-menu__danger" type="button" onClick={deleteActiveChat}>
+                    <Trash2 size={15} /> Delete chat
+                  </button>
                 </div>
               )}
             </div>
@@ -2311,6 +2360,7 @@ export default function App() {
             onModelChange={selectModel}
             reasoningEffort={workspace.settings.reasoningEffort}
             onReasoningEffortChange={selectReasoningEffort}
+            sendShortcut={workspace.settings.sendShortcut}
             composerInsertion={
               composerInsertion?.nodeId === rootNode.id ? composerInsertion : undefined
             }
@@ -2360,7 +2410,7 @@ export default function App() {
                   setActiveNodeId(node.id);
                   setDraft(null);
                 }}>
-                  {index === 0 ? "Main" : node.title}
+                  {index === 0 ? "Main" : <InlineMath source={node.title} />}
                 </button>
               </span>
             ))}
@@ -2369,7 +2419,7 @@ export default function App() {
           <div className="draft-body">
             <div className="quoted-passage">
               <span>Selected passage</span>
-              <blockquote>{draft.quote}</blockquote>
+              <blockquote><MathBlock source={draft.quote} /></blockquote>
             </div>
             <div className="draft-prompt">
               <h3>What should Locus unpack?</h3>
@@ -2384,6 +2434,7 @@ export default function App() {
                 onModelChange={selectModel}
                 reasoningEffort={workspace.settings.reasoningEffort}
                 onReasoningEffortChange={selectReasoningEffort}
+                sendShortcut={workspace.settings.sendShortcut}
               />
               <div className="prompt-suggestions">
                 <button type="button" onClick={() => beginElaboration("Show every missing algebraic step in this passage.")}>Missing algebra</button>
@@ -2409,7 +2460,41 @@ export default function App() {
             </button>
             <div className="focus-header__title">
               <span className="focus-kicker"><GitBranch size={13} /> Focus · depth {activePath.length - 1}</span>
-              <h2>{sideNode.title}</h2>
+              {renamingNodeId === sideNode.id ? (
+                <form
+                  className="inline-title-editor"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    saveNodeName();
+                  }}
+                >
+                  <input
+                    autoFocus
+                    aria-label="Rename branch"
+                    value={renameDraft}
+                    onChange={(event) => setRenameDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape") {
+                        event.stopPropagation();
+                        setRenamingNodeId(null);
+                      }
+                    }}
+                  />
+                  <button type="submit" disabled={!renameDraft.trim()}>Save</button>
+                </form>
+              ) : (
+                <div className="inline-title-row">
+                  <h2><InlineMath source={sideNode.title} /></h2>
+                  <button
+                    className="inline-rename-button"
+                    type="button"
+                    aria-label="Rename branch"
+                    onClick={() => openRenameNode(sideNode.id)}
+                  >
+                    <Pencil size={11} />
+                  </button>
+                </div>
+              )}
             </div>
             <div className="focus-header__actions">
               <button
@@ -2443,14 +2528,14 @@ export default function App() {
               <span key={node.id}>
                 {index > 0 && <ChevronRight size={12} />}
                 {node.id === sideNode.id ? (
-                  <strong>{node.title}</strong>
+                  <strong><InlineMath source={node.title} /></strong>
                 ) : (
                   <button type="button" onClick={() => {
                     historyAction.current = "push";
                     setActiveNodeId(node.id);
                     setFocusMaximized(false);
                   }}>
-                    {index === 0 ? "Main" : node.title}
+                    {index === 0 ? "Main" : <InlineMath source={node.title} />}
                   </button>
                 )}
               </span>
@@ -2459,7 +2544,7 @@ export default function App() {
           {sideNode.anchor && (
             <div className="focus-quote">
               <span>Elaborating on</span>
-              <p>“{sideNode.anchor.quote}”</p>
+              <MathBlock source={sideNode.anchor.quote} />
             </div>
           )}
           <ThreadView
@@ -2484,6 +2569,7 @@ export default function App() {
             onModelChange={selectModel}
             reasoningEffort={workspace.settings.reasoningEffort}
             onReasoningEffortChange={selectReasoningEffort}
+            sendShortcut={workspace.settings.sendShortcut}
             composerInsertion={
               composerInsertion?.nodeId === sideNode.id ? composerInsertion : undefined
             }
@@ -2619,6 +2705,31 @@ export default function App() {
                     </span>
                     <ChevronRight size={13} />
                   </button>
+                  <label className="settings-select-control">
+                    <CornerDownLeft size={15} />
+                    <span>
+                      <small>Send messages with</small>
+                      <select
+                        aria-label="Keyboard shortcut for sending messages"
+                        value={workspace.settings.sendShortcut}
+                        onChange={(event) =>
+                          setWorkspace((current) => ({
+                            ...current,
+                            settings: {
+                              ...current.settings,
+                              sendShortcut:
+                                event.target.value === "mod-enter"
+                                  ? "mod-enter"
+                                  : "enter",
+                            },
+                          }))
+                        }
+                      >
+                        <option value="enter">Enter</option>
+                        <option value="mod-enter">⌘/Ctrl + Enter</option>
+                      </select>
+                    </span>
+                  </label>
                 </div>
               </section>
 
@@ -2650,6 +2761,28 @@ export default function App() {
                   </span>
                   <i className="theme-switch" aria-hidden="true"><span /></i>
                 </button>
+                <label className="text-size-control">
+                  <SlidersHorizontal size={15} />
+                  <span>
+                    <small>Chat text size</small>
+                    <strong>{workspace.settings.textScale}%</strong>
+                  </span>
+                  <input
+                    type="range"
+                    min={80}
+                    max={140}
+                    step={5}
+                    value={workspace.settings.textScale}
+                    aria-label="Chat text size"
+                    onChange={(event) => {
+                      const textScale = Number(event.target.value);
+                      setWorkspace((current) => ({
+                        ...current,
+                        settings: { ...current.settings, textScale },
+                      }));
+                    }}
+                  />
+                </label>
               </section>
 
               <section className="settings-view__section">
@@ -2940,6 +3073,13 @@ export default function App() {
               rows={13}
               value={customInstructionsDraft}
               onChange={(event) => setCustomInstructionsDraft(event.target.value)}
+              onKeyDown={(event) => {
+                applyMarkdownShortcut(
+                  event,
+                  customInstructionsDraft,
+                  setCustomInstructionsDraft,
+                );
+              }}
               placeholder="Paste your ChatGPT custom instructions here…"
               aria-label="Custom instructions"
             />

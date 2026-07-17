@@ -19,6 +19,8 @@ export const emptyState = (): WorkspaceState => ({
     sidebarCollapsed: false,
     collapsedCategoryIds: [],
     theme: "light",
+    textScale: 100,
+    sendShortcut: "enter",
   },
 });
 
@@ -66,6 +68,12 @@ function normalizeState(state: WorkspaceState): WorkspaceState {
         ? [...new Set(state.settings.collapsedCategoryIds.filter((id) => typeof id === "string"))]
         : [],
       theme: state.settings?.theme === "dark" ? "dark" : "light",
+      textScale:
+        typeof state.settings?.textScale === "number"
+          ? Math.min(140, Math.max(80, Math.round(state.settings.textScale / 5) * 5))
+          : 100,
+      sendShortcut:
+        state.settings?.sendShortcut === "mod-enter" ? "mod-enter" : "enter",
     },
   };
 }

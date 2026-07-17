@@ -1,7 +1,8 @@
 import { ArrowUp, CornerDownLeft } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ModelPicker } from "./ModelPicker";
-import type { ReasoningEffort } from "../types";
+import { applyMarkdownShortcut, isSendShortcut, sendShortcutLabel } from "../lib/textarea";
+import type { ReasoningEffort, SendShortcut } from "../types";
 
 interface ComposerProps {
   onSend: (message: string) => void;
@@ -16,6 +17,7 @@ interface ComposerProps {
   onModelChange: (model: string) => void;
   reasoningEffort: ReasoningEffort;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
+  sendShortcut: SendShortcut;
 }
 
 export function Composer({
@@ -31,6 +33,7 @@ export function Composer({
   onModelChange,
   reasoningEffort,
   onReasoningEffortChange,
+  sendShortcut,
 }: ComposerProps) {
   const [value, setValue] = useState(initialValue);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -95,7 +98,8 @@ export function Composer({
         aria-label={placeholder}
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key === "Enter" && !event.shiftKey) {
+          if (applyMarkdownShortcut(event, value, setValue)) return;
+          if (isSendShortcut(event, sendShortcut)) {
             event.preventDefault();
             submit();
           }
@@ -112,7 +116,7 @@ export function Composer({
           reasoningAriaLabel="Reasoning effort for the next response"
         />
         <span className="composer__hint">
-          <CornerDownLeft size={12} /> Enter to send
+          <CornerDownLeft size={12} /> {sendShortcutLabel(sendShortcut)}
         </span>
         <button
           className="send-button"

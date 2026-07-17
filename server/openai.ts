@@ -96,6 +96,7 @@ export interface RespondInput {
 
 export interface TokenUsage {
   inputTokens: number;
+  cachedInputTokens: number;
   outputTokens: number;
   reasoningTokens: number;
   totalTokens: number;
@@ -145,8 +146,9 @@ export async function streamResponse(
       if (responseUsage) {
         usage = {
           inputTokens: responseUsage.input_tokens,
+          cachedInputTokens: responseUsage.input_tokens_details?.cached_tokens ?? 0,
           outputTokens: responseUsage.output_tokens,
-          reasoningTokens: responseUsage.output_tokens_details.reasoning_tokens,
+          reasoningTokens: responseUsage.output_tokens_details?.reasoning_tokens ?? 0,
           totalTokens: responseUsage.total_tokens,
         };
       }

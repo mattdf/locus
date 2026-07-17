@@ -1,12 +1,18 @@
 export type MessageRole = "user" | "assistant" | "source";
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
+export type SendShortcut = "enter" | "mod-enter";
 
 export interface GenerationMetrics {
   durationMs: number;
+  model?: string | null;
   inputTokens: number | null;
+  cachedInputTokens?: number | null;
   outputTokens: number | null;
   reasoningTokens: number | null;
   totalTokens: number | null;
+  inputCostUsd?: number | null;
+  outputCostUsd?: number | null;
+  totalCostUsd?: number | null;
 }
 
 export interface Message {
@@ -86,6 +92,8 @@ export interface WorkspaceState {
     sidebarCollapsed: boolean;
     collapsedCategoryIds: string[];
     theme: "light" | "dark";
+    textScale: number;
+    sendShortcut: SendShortcut;
   };
 }
 

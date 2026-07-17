@@ -1,6 +1,7 @@
 import type { Response } from "express";
 import type { GenerationMetrics } from "../src/types.ts";
 import { streamResponse, type RespondInput, type TokenUsage } from "./openai.ts";
+import { calculateGenerationCost } from "./pricing.ts";
 
 type GenerationStatus = "running" | "completed" | "stopped" | "failed";
 
@@ -17,6 +18,7 @@ export interface GenerationJob {
   content: string;
   status: GenerationStatus;
   startedAt: number;
+  model: string;
   generation?: GenerationMetrics;
   error?: string;
   subscribers: Set<Response>;
@@ -58,12 +60,18 @@ function finish(
   if (job.status !== "running") return;
   job.status = status;
   job.error = error;
+  const cost = calculateGenerationCost(job.model, usage);
   job.generation = {
     durationMs: Date.now() - job.startedAt,
+    model: job.model,
     inputTokens: usage?.inputTokens ?? null,
+    cachedInputTokens: usage?.cachedInputTokens ?? null,
     outputTokens: usage?.outputTokens ?? null,
     reasoningTokens: usage?.reasoningTokens ?? null,
     totalTokens: usage?.totalTokens ?? null,
+    inputCostUsd: cost?.inputCostUsd ?? null,
+    outputCostUsd: cost?.outputCostUsd ?? null,
+    totalCostUsd: cost?.totalCostUsd ?? null,
   };
   const event = terminalEvent(job);
   job.subscribers.forEach((response) => {
@@ -117,6 +125,7 @@ export function createGeneration(id: string, input: RespondInput): GenerationJob
     content: "",
     status: "running",
     startedAt: Date.now(),
+    model: input.model,
     subscribers: new Set(),
   };
   generations.set(id, job);
