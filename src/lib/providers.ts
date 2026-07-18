@@ -1,4 +1,4 @@
-import type { ProviderId } from "../types";
+import type { ProviderId, ReasoningEffort } from "../types";
 
 export const PROVIDER_OPTIONS: Array<{
   id: ProviderId;
@@ -24,4 +24,14 @@ export function providerLabel(provider: ProviderId): string {
 
 export function isProviderId(value: unknown): value is ProviderId {
   return value === "openai" || value === "openrouter" || value === "local";
+}
+
+export function compatibleReasoningEffort(
+  provider: ProviderId,
+  model: string,
+  effort: ReasoningEffort,
+): ReasoningEffort {
+  return provider === "openai" && effort === "max" && !model.startsWith("gpt-5.6")
+    ? "xhigh"
+    : effort;
 }

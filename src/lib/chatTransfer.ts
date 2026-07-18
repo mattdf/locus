@@ -1,4 +1,5 @@
 import type { ChatCategory, ChatTree, Message, WorkspaceState } from "../types";
+import { normalizeChatRevisions } from "./revisions";
 
 export const CHAT_EXPORT_FORMAT = "locus-chat-export" as const;
 
@@ -205,12 +206,13 @@ function importedMessage(message: Message): Message {
 }
 
 export function cloneChatForImport(chat: ChatTree, id: string): ChatTree {
+  const normalizedChat = normalizeChatRevisions(chat);
   return {
-    ...chat,
+    ...normalizedChat,
     id,
     pinned: false,
     nodes: Object.fromEntries(
-      Object.entries(chat.nodes).map(([nodeId, node]) => [
+      Object.entries(normalizedChat.nodes).map(([nodeId, node]) => [
         nodeId,
         {
           ...node,
@@ -226,6 +228,17 @@ export function cloneChatForImport(chat: ChatTree, id: string): ChatTree {
                       userMessage: importedMessage(variant.userMessage),
                       assistantMessage: importedMessage(variant.assistantMessage),
                     })),
+                  },
+                ]),
+              )
+            : undefined,
+          responseRevisions: node.responseRevisions
+            ? Object.fromEntries(
+                Object.entries(node.responseRevisions).map(([groupId, group]) => [
+                  groupId,
+                  {
+                    ...group,
+                    responses: group.responses.map(importedMessage),
                   },
                 ]),
               )

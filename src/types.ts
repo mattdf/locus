@@ -34,6 +34,7 @@ export interface Message {
   generation?: GenerationMetrics;
   revisionGroupId?: string;
   revisionVariantId?: string;
+  responseRevisionGroupId?: string;
 }
 
 export interface MessageRevisionVariant {
@@ -47,6 +48,12 @@ export interface MessageRevisionGroup {
   assistantMessageId: string;
   activeVariantId: string;
   variants: MessageRevisionVariant[];
+}
+
+export interface ResponseRevisionGroup {
+  assistantMessageId: string;
+  activeResponseId: string;
+  responses: Message[];
 }
 
 export interface HighlightAnchor {
@@ -63,6 +70,7 @@ export interface ThreadNode {
   anchor?: HighlightAnchor;
   messages: Message[];
   messageRevisions?: Record<string, MessageRevisionGroup>;
+  responseRevisions?: Record<string, ResponseRevisionGroup>;
   createdAt: string;
   updatedAt: string;
 }

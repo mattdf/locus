@@ -38,29 +38,43 @@ export function contextFor(
 
 export function messagesForNode(node: ThreadNode): Message[] {
   const groups = Object.values(node.messageRevisions ?? {});
-  if (!groups.length) return node.messages;
-
   return node.messages.map((message) => {
     const group = groups.find(
       (candidate) =>
         candidate.userMessageId === message.id || candidate.assistantMessageId === message.id,
     );
-    if (!group) return message;
-    const active =
-      group.variants.find((variant) => variant.id === group.activeVariantId) ??
-      group.variants[0];
-    if (!active) return message;
-    if (message.id === group.userMessageId) {
-      return {
+    const active = group
+      ? group.variants.find((variant) => variant.id === group.activeVariantId) ??
+        group.variants[0]
+      : undefined;
+    let resolved = message;
+    if (active && message.id === group?.userMessageId) {
+      resolved = {
         ...active.userMessage,
         revisionGroupId: group.userMessageId,
         revisionVariantId: active.id,
       };
+    } else if (active && message.id === group?.assistantMessageId) {
+      resolved = {
+        ...active.assistantMessage,
+        revisionGroupId: group.userMessageId,
+        revisionVariantId: active.id,
+      };
     }
+
+    if (resolved.role !== "assistant") return resolved;
+    const responseGroup = node.responseRevisions?.[resolved.id];
+    const activeResponse = responseGroup
+      ? responseGroup.responses.find(
+          (response) => response.id === responseGroup.activeResponseId,
+        ) ?? responseGroup.responses[0]
+      : undefined;
+    if (!responseGroup || !activeResponse) return resolved;
     return {
-      ...active.assistantMessage,
-      revisionGroupId: group.userMessageId,
-      revisionVariantId: active.id,
+      ...activeResponse,
+      revisionGroupId: resolved.revisionGroupId,
+      revisionVariantId: resolved.revisionVariantId,
+      responseRevisionGroupId: responseGroup.assistantMessageId,
     };
   });
 }

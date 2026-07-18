@@ -14,7 +14,7 @@ export const MODEL_OPTIONS = [
   { value: "gpt-5.4", label: "GPT-5.4", note: "Deep" },
 ] as const;
 
-const REASONING_OPTIONS: Array<{ value: ReasoningEffort; label: string }> = [
+export const REASONING_OPTIONS: Array<{ value: ReasoningEffort; label: string }> = [
   { value: "none", label: "None" },
   { value: "low", label: "Low" },
   { value: "medium", label: "Medium" },

@@ -1360,7 +1360,8 @@ a:focus-visible {
   cursor: pointer;
 }
 
-.copy-response-button {
+.copy-response-button,
+.regenerate-response-button {
   display: inline-flex;
   min-height: 23px;
   align-items: center;
@@ -1377,7 +1378,109 @@ a:focus-visible {
   text-transform: uppercase;
 }
 
+.regenerate-response-control {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  border-radius: 5px;
+}
+
+.regenerate-response-control .regenerate-response-button {
+  border-radius: 5px 0 0 5px;
+}
+
+.regenerate-model-button {
+  position: relative;
+  display: grid;
+  width: 23px;
+  min-height: 23px;
+  place-items: center;
+  color: #6d7873;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid rgba(83, 96, 90, 0.18);
+  border-radius: 0 5px 5px 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.regenerate-model-button:disabled {
+  opacity: 0.32;
+  cursor: default;
+}
+
+.regeneration-settings-popover {
+  position: absolute;
+  z-index: 45;
+  top: calc(100% + 7px);
+  right: 0;
+  display: grid;
+  width: 260px;
+  gap: 10px;
+  padding: 12px;
+  color: #34403c;
+  text-align: left;
+  text-transform: none;
+  background: #fffefb;
+  border: 1px solid #d8d5cc;
+  border-radius: 9px;
+  box-shadow: 0 12px 30px rgba(35, 44, 41, 0.14), 0 2px 7px rgba(35, 44, 41, 0.08);
+}
+
+.regeneration-settings-popover > strong {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+
+.regeneration-settings-popover > label {
+  display: grid;
+  gap: 4px;
+}
+
+.regeneration-settings-popover > label > span {
+  color: #727c77;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.regeneration-settings-popover select {
+  width: 100%;
+  min-width: 0;
+  padding: 7px 8px;
+  color: #34403c;
+  background: #f5f3ed;
+  border: 1px solid #d8d5cc;
+  border-radius: 6px;
+  font-size: 10px;
+}
+
+.regeneration-settings-popover > button {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: white;
+  background: var(--accent);
+  border: 0;
+  border-radius: 6px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.regeneration-settings-popover > button:hover {
+  background: var(--accent-dark);
+}
+
 .copy-response-button:hover,
+.regenerate-response-button:hover:not(:disabled),
+.regenerate-model-button:hover:not(:disabled),
 .copy-response-button--copied {
   color: var(--accent);
   background: rgba(255, 255, 255, 0.55);
@@ -1385,6 +1488,11 @@ a:focus-visible {
 
 .copy-response-button--failed {
   color: var(--danger);
+}
+
+.regenerate-response-button:disabled {
+  opacity: 0.32;
+  cursor: default;
 }
 
 .revision-switcher > button:hover:not(:disabled),
@@ -3795,16 +3903,37 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .revision-switcher,
 .app-shell[data-theme="dark"] .revision-switcher > button,
 .app-shell[data-theme="dark"] .edit-message-button,
-.app-shell[data-theme="dark"] .copy-response-button {
+.app-shell[data-theme="dark"] .copy-response-button,
+.app-shell[data-theme="dark"] .regenerate-response-button,
+.app-shell[data-theme="dark"] .regenerate-model-button {
   color: #92a09a;
 }
 
 .app-shell[data-theme="dark"] .revision-switcher > button:hover:not(:disabled),
 .app-shell[data-theme="dark"] .edit-message-button:hover:not(:disabled),
 .app-shell[data-theme="dark"] .copy-response-button:hover,
+.app-shell[data-theme="dark"] .regenerate-response-button:hover:not(:disabled),
+.app-shell[data-theme="dark"] .regenerate-model-button:hover:not(:disabled),
 .app-shell[data-theme="dark"] .copy-response-button--copied {
   color: var(--accent);
   background: rgba(255, 255, 255, 0.07);
+}
+
+.app-shell[data-theme="dark"] .regeneration-settings-popover {
+  color: #d5ddd9;
+  background: #202623;
+  border-color: #3a433f;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.36);
+}
+
+.app-shell[data-theme="dark"] .regeneration-settings-popover > label > span {
+  color: #929c97;
+}
+
+.app-shell[data-theme="dark"] .regeneration-settings-popover select {
+  color: #d5ddd9;
+  background: #161b19;
+  border-color: #3b4540;
 }
 
 .app-shell[data-theme="dark"] .copy-response-button--failed {

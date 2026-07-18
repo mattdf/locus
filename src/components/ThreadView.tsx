@@ -9,6 +9,7 @@ import {
   Copy,
   MessageSquareText,
   Pencil,
+  RotateCcw,
   Sparkles,
   Square,
 } from "lucide-react";
@@ -26,9 +27,10 @@ import type {
 } from "../types";
 import { childThreads, messagesForNode } from "../lib/tree";
 import { applyMarkdownShortcut } from "../lib/textarea";
-import { providerLabel } from "../lib/providers";
+import { compatibleReasoningEffort, providerLabel } from "../lib/providers";
 import { Composer } from "./Composer";
 import { MarkdownMessage, type LinkedAnchor } from "./MarkdownMessage";
+import { MODEL_OPTIONS, REASONING_OPTIONS } from "./ModelPicker";
 
 const EMPTY_LINKED_ANCHORS: LinkedAnchor[] = [];
 
@@ -41,7 +43,13 @@ interface ThreadViewProps {
   onSend: (message: string) => void;
   onStop: (assistantId: string) => void;
   onEditMessage: (revisionGroupId: string, content: string) => void;
+  onRegenerateResponse: (
+    assistantId: string,
+    modelOverride?: string,
+    reasoningEffortOverride?: ReasoningEffort,
+  ) => void;
   onSwitchMessageRevision: (revisionGroupId: string, variantId: string) => void;
+  onSwitchResponseRevision: (responseGroupId: string, responseId: string) => void;
   provider: ProviderId;
   modelOptions?: ProviderModelOption[];
   model: string;
@@ -132,6 +140,43 @@ function ThinkingIndicator({ startedAt }: { startedAt: string }) {
   );
 }
 
+function RevisionSwitcher({
+  label,
+  activeIndex,
+  variantIds,
+  disabled,
+  onSwitch,
+}: {
+  label: "message" | "response";
+  activeIndex: number;
+  variantIds: string[];
+  disabled: boolean;
+  onSwitch: (variantId: string) => void;
+}) {
+  if (variantIds.length < 2) return null;
+  return (
+    <span className="revision-switcher" aria-label={`${label} versions`}>
+      <button
+        type="button"
+        aria-label={`Previous ${label} version`}
+        disabled={disabled || activeIndex === 0}
+        onClick={() => onSwitch(variantIds[activeIndex - 1])}
+      >
+        <ChevronLeft size={12} />
+      </button>
+      <span>{activeIndex + 1} / {variantIds.length}</span>
+      <button
+        type="button"
+        aria-label={`Next ${label} version`}
+        disabled={disabled || activeIndex === variantIds.length - 1}
+        onClick={() => onSwitch(variantIds[activeIndex + 1])}
+      >
+        <ChevronRight size={12} />
+      </button>
+    </span>
+  );
+}
+
 export function ThreadView({
   chat,
   node,
@@ -141,7 +186,9 @@ export function ThreadView({
   onSend,
   onStop,
   onEditMessage,
+  onRegenerateResponse,
   onSwitchMessageRevision,
+  onSwitchResponseRevision,
   provider,
   modelOptions,
   model,
@@ -166,6 +213,11 @@ export function ThreadView({
     messageId: string;
     status: "copied" | "failed";
   } | null>(null);
+  const [regenerationSettings, setRegenerationSettings] = useState<{
+    messageId: string;
+    model: string;
+    reasoningEffort: ReasoningEffort;
+  } | null>(null);
   const children = useMemo(() => childThreads(chat, node.id), [chat, node.id]);
   const messages = useMemo(() => messagesForNode(node), [node]);
   const linkedAnchorsByMessage = useMemo(() => {
@@ -187,6 +239,22 @@ export function ThreadView({
     (message) => message.role === "assistant" && message.pending,
   );
   const waiting = Boolean(pendingAssistant);
+  const regenerationModelOptions = useMemo(() => {
+    const options =
+      provider === "openai"
+        ? MODEL_OPTIONS.map((option) => ({
+            id: option.value,
+            label: `${option.label} · ${option.note}`,
+          }))
+        : (modelOptions ?? []).map((option) => ({
+            id: option.id,
+            label: option.name ?? option.id,
+          }));
+    if (model && !options.some((option) => option.id === model)) {
+      options.unshift({ id: model, label: model });
+    }
+    return options;
+  }, [model, modelOptions, provider]);
 
   useEffect(() => {
     if (waiting) endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
@@ -196,9 +264,31 @@ export function ThreadView({
     setEditingMessageId(null);
     setEditValue("");
     setCopyState(null);
+    setRegenerationSettings(null);
     setCurrentMessageIndex(0);
     setMessageNavigationVisible(false);
   }, [node.id]);
+
+  useEffect(() => {
+    if (!regenerationSettings) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const control =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>(".regenerate-response-control")
+          : null;
+      if (control?.dataset.messageId === regenerationSettings.messageId) return;
+      setRegenerationSettings(null);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setRegenerationSettings(null);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [regenerationSettings?.messageId]);
 
   useEffect(() => {
     const container = messagesRef.current;
@@ -332,7 +422,7 @@ export function ThreadView({
       <div className="thread-messages" ref={messagesRef}>
         {messages.map((message) => {
           const revisionGroupId =
-            message.role === "user" ? message.revisionGroupId ?? message.id : null;
+            message.revisionGroupId ?? (message.role === "user" ? message.id : null);
           const revisionGroup = revisionGroupId
             ? node.messageRevisions?.[revisionGroupId]
             : undefined;
@@ -341,6 +431,18 @@ export function ThreadView({
                 0,
                 revisionGroup.variants.findIndex(
                   (variant) => variant.id === revisionGroup.activeVariantId,
+                ),
+              )
+            : 0;
+          const responseRevisionGroupId = message.responseRevisionGroupId;
+          const responseRevisionGroup = responseRevisionGroupId
+            ? node.responseRevisions?.[responseRevisionGroupId]
+            : undefined;
+          const activeResponseIndex = responseRevisionGroup
+            ? Math.max(
+                0,
+                responseRevisionGroup.responses.findIndex(
+                  (response) => response.id === responseRevisionGroup.activeResponseId,
                 ),
               )
             : 0;
@@ -373,38 +475,16 @@ export function ThreadView({
                 </span>
                 {message.role === "user" && revisionGroupId && (
                   <span className="message__controls">
-                    {revisionGroup && revisionGroup.variants.length > 1 && (
-                      <span className="revision-switcher" aria-label="Message versions">
-                        <button
-                          type="button"
-                          aria-label="Previous message version"
-                          disabled={waiting || activeRevisionIndex === 0}
-                          onClick={() =>
-                            onSwitchMessageRevision(
-                              revisionGroupId,
-                              revisionGroup.variants[activeRevisionIndex - 1].id,
-                            )
-                          }
-                        >
-                          <ChevronLeft size={12} />
-                        </button>
-                        <span>{activeRevisionIndex + 1} / {revisionGroup.variants.length}</span>
-                        <button
-                          type="button"
-                          aria-label="Next message version"
-                          disabled={
-                            waiting || activeRevisionIndex === revisionGroup.variants.length - 1
-                          }
-                          onClick={() =>
-                            onSwitchMessageRevision(
-                              revisionGroupId,
-                              revisionGroup.variants[activeRevisionIndex + 1].id,
-                            )
-                          }
-                        >
-                          <ChevronRight size={12} />
-                        </button>
-                      </span>
+                    {revisionGroup && (
+                      <RevisionSwitcher
+                        label="message"
+                        activeIndex={activeRevisionIndex}
+                        variantIds={revisionGroup.variants.map((variant) => variant.id)}
+                        disabled={waiting}
+                        onSwitch={(variantId) =>
+                          onSwitchMessageRevision(revisionGroupId, variantId)
+                        }
+                      />
                     )}
                     <button
                       className="edit-message-button"
@@ -420,37 +500,175 @@ export function ThreadView({
                     </button>
                   </span>
                 )}
-                {message.role === "assistant" && !message.pending && !message.error && message.content && (
+                {message.role === "assistant" && !message.pending && (
                   <span className="message__controls">
-                    <button
-                      className={`copy-response-button ${messageCopyStatus ? `copy-response-button--${messageCopyStatus}` : ""}`}
-                      type="button"
-                      aria-label={
-                        messageCopyStatus
-                          ? messageCopyStatus === "copied"
-                            ? "Response copied as Markdown"
-                            : "Copy failed"
-                          : "Copy response as Markdown"
-                      }
-                      onClick={() => void copyResponse(message.id, message.content)}
+                    {responseRevisionGroup && responseRevisionGroupId && (
+                      <RevisionSwitcher
+                        label="response"
+                        activeIndex={activeResponseIndex}
+                        variantIds={responseRevisionGroup.responses.map(
+                          (response) => response.id,
+                        )}
+                        disabled={waiting}
+                        onSwitch={(responseId) =>
+                          onSwitchResponseRevision(responseRevisionGroupId, responseId)
+                        }
+                      />
+                    )}
+                    {!message.error && message.content && (
+                      <button
+                        className={`copy-response-button ${messageCopyStatus ? `copy-response-button--${messageCopyStatus}` : ""}`}
+                        type="button"
+                        aria-label={
+                          messageCopyStatus
+                            ? messageCopyStatus === "copied"
+                              ? "Response copied as Markdown"
+                              : "Copy failed"
+                            : "Copy response as Markdown"
+                        }
+                        onClick={() => void copyResponse(message.id, message.content)}
+                      >
+                        {messageCopyStatus === "copied" ? (
+                          <Check size={11} />
+                        ) : (
+                          <Copy size={11} />
+                        )}
+                        <span>
+                          {messageCopyStatus
+                            ? messageCopyStatus === "copied"
+                              ? "Copied"
+                              : "Failed"
+                            : "Copy"}
+                        </span>
+                      </button>
+                    )}
+                    <span
+                      className="regenerate-response-control"
+                      data-message-id={message.id}
                     >
-                      {messageCopyStatus === "copied" ? (
-                        <Check size={11} />
-                      ) : (
-                        <Copy size={11} />
+                      <button
+                        className="regenerate-response-button"
+                        type="button"
+                        aria-label="Regenerate response"
+                        title={`Regenerate with ${model}`}
+                        disabled={waiting}
+                        onClick={() => onRegenerateResponse(message.id)}
+                      >
+                        <RotateCcw size={11} />
+                        <span>Regenerate</span>
+                      </button>
+                      <button
+                        className="regenerate-model-button"
+                        type="button"
+                        aria-label="Configure regeneration"
+                        aria-expanded={regenerationSettings?.messageId === message.id}
+                        aria-controls={`regeneration-settings-${message.id}`}
+                        title="Choose a model for this regeneration"
+                        disabled={waiting}
+                        onClick={() =>
+                          setRegenerationSettings((current) =>
+                            current?.messageId === message.id
+                              ? null
+                              : {
+                                  messageId: message.id,
+                                  model,
+                                  reasoningEffort,
+                                },
+                          )
+                        }
+                      >
+                        <ChevronDown size={11} aria-hidden="true" />
+                      </button>
+                      {regenerationSettings?.messageId === message.id && (
+                        <div
+                          className="regeneration-settings-popover"
+                          id={`regeneration-settings-${message.id}`}
+                          role="dialog"
+                          aria-label="Regeneration settings"
+                        >
+                          <strong>Regenerate response</strong>
+                          <label>
+                            <span>Model</span>
+                            <select
+                              aria-label="Model for regeneration"
+                              value={regenerationSettings.model}
+                              onChange={(event) => {
+                                const selectedModel = event.target.value;
+                                setRegenerationSettings((current) =>
+                                  current
+                                    ? {
+                                        ...current,
+                                        model: selectedModel,
+                                        reasoningEffort: compatibleReasoningEffort(
+                                          provider,
+                                          selectedModel,
+                                          current.reasoningEffort,
+                                        ),
+                                      }
+                                    : current,
+                                );
+                              }}
+                            >
+                              {regenerationModelOptions.map((option) => (
+                                <option value={option.id} key={option.id}>
+                                  {option.label}{option.id === model ? " · current" : ""}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            <span>Reasoning effort</span>
+                            <select
+                              aria-label="Reasoning effort for regeneration"
+                              value={regenerationSettings.reasoningEffort}
+                              onChange={(event) =>
+                                setRegenerationSettings((current) =>
+                                  current
+                                    ? {
+                                        ...current,
+                                        reasoningEffort: event.target.value as ReasoningEffort,
+                                      }
+                                    : current,
+                                )
+                              }
+                            >
+                              {REASONING_OPTIONS.map((effort) => (
+                                <option
+                                  value={effort.value}
+                                  key={effort.value}
+                                  disabled={
+                                    effort.value === "max" &&
+                                    provider === "openai" &&
+                                    !regenerationSettings.model.startsWith("gpt-5.6")
+                                  }
+                                >
+                                  {effort.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              onRegenerateResponse(
+                                message.id,
+                                regenerationSettings.model,
+                                regenerationSettings.reasoningEffort,
+                              );
+                              setRegenerationSettings(null);
+                            }}
+                          >
+                            <RotateCcw size={12} /> Regenerate
+                          </button>
+                        </div>
                       )}
-                      <span>
-                        {messageCopyStatus
-                          ? messageCopyStatus === "copied"
-                            ? "Copied"
-                            : "Failed"
-                          : "Copy"}
-                      </span>
-                    </button>
+                    </span>
                   </span>
                 )}
               </div>
-              {revisionGroupId && editingMessageId === revisionGroupId ? (
+              {message.role === "user" &&
+              revisionGroupId &&
+              editingMessageId === revisionGroupId ? (
                 <div className="message-editor">
                   <textarea
                     autoFocus

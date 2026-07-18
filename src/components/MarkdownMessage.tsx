@@ -305,7 +305,8 @@ function sameMessage(left: Message, right: Message): boolean {
       left.requestId === right.requestId &&
       left.generation === right.generation &&
       left.revisionGroupId === right.revisionGroupId &&
-      left.revisionVariantId === right.revisionVariantId)
+      left.revisionVariantId === right.revisionVariantId &&
+      left.responseRevisionGroupId === right.responseRevisionGroupId)
   );
 }
 

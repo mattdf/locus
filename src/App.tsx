@@ -57,6 +57,7 @@ import {
   contextBeforeMessage,
   contextFor,
   makeMessage,
+  messagesForNode,
   newId,
   threadPath,
   timestamp,
@@ -70,6 +71,7 @@ import type {
   HighlightAnchor,
   Message,
   MessageRevisionGroup,
+  ResponseRevisionGroup,
   ProviderId,
   ProviderModelOption,
   ReasoningEffort,
@@ -81,6 +83,7 @@ import {
   DEFAULT_LOCAL_BASE_URL,
   DEFAULT_PROVIDER_MODELS,
   PROVIDER_OPTIONS,
+  compatibleReasoningEffort,
   providerLabel,
 } from "./lib/providers";
 
@@ -182,6 +185,10 @@ function assistantMessageById(node: ThreadNode, assistantId: string): Message | 
     );
     if (variant) return variant.assistantMessage;
   }
+  for (const group of Object.values(node.responseRevisions ?? {})) {
+    const response = group.responses.find((candidate) => candidate.id === assistantId);
+    if (response) return response;
+  }
   return undefined;
 }
 
@@ -193,6 +200,9 @@ function pendingGenerations(workspace: WorkspaceState): PendingGeneration[] {
         ...node.messages,
         ...Object.values(node.messageRevisions ?? {}).flatMap((group) =>
           group.variants.map((variant) => variant.assistantMessage),
+        ),
+        ...Object.values(node.responseRevisions ?? {}).flatMap((group) =>
+          group.responses,
         ),
       ];
       messages.forEach((message) => {
@@ -944,6 +954,21 @@ export default function App() {
           },
         ]),
       );
+      const responseRevisions = node.responseRevisions
+        ? Object.fromEntries(
+            Object.entries(node.responseRevisions).map(([groupId, group]) => [
+              groupId,
+              {
+                ...group,
+                responses: group.responses.map((response) => {
+                  if (response.id !== assistantId) return response;
+                  changed = true;
+                  return update(response);
+                }),
+              },
+            ]),
+          )
+        : undefined;
       if (!changed) return chat;
       const updatedAt = touchChat ? timestamp() : chat.updatedAt;
       return {
@@ -956,6 +981,7 @@ export default function App() {
             updatedAt: touchChat ? updatedAt : node.updatedAt,
             messages,
             messageRevisions,
+            responseRevisions,
           },
         },
       };
@@ -1160,6 +1186,10 @@ export default function App() {
     revisionGroupId: string,
     userMessage: Message,
     assistantMessage: Message,
+    requestOptions?: {
+      model?: string;
+      reasoningEffort?: ReasoningEffort;
+    },
   ) => {
     if (!assistantMessage.requestId) return;
     const controller = new AbortController();
@@ -1170,12 +1200,14 @@ export default function App() {
         {
           provider: workspace.settings.provider,
           localBaseUrl: workspace.settings.localBaseUrl,
-          model: workspace.settings.model,
-          reasoningEffort: workspace.settings.reasoningEffort,
+          model: requestOptions?.model ?? workspace.settings.model,
+          reasoningEffort:
+            requestOptions?.reasoningEffort ?? workspace.settings.reasoningEffort,
           maxOutputTokens: workspace.settings.maxOutputTokens,
           customInstructions: workspace.settings.customInstructions,
           context: contextBeforeMessage(chat, nodeId, revisionGroupId),
           message: userMessage.content,
+          anchor: chat.nodes[nodeId]?.anchor,
         },
         (delta) => appendAssistantDelta(chat.id, nodeId, assistantMessage.id, delta),
         (content) => replaceAssistantContent(chat.id, nodeId, assistantMessage.id, content),
@@ -1335,6 +1367,109 @@ export default function App() {
     );
   };
 
+  const regenerateAssistantMessage = (
+    nodeId: string,
+    assistantId: string,
+    modelOverride?: string,
+    reasoningEffortOverride?: ReasoningEffort,
+  ) => {
+    if (!activeChat) return;
+    const node = activeChat.nodes[nodeId];
+    if (
+      !node ||
+      messagesForNode(node).some(
+        (message) => message.role === "assistant" && message.pending,
+      )
+    ) {
+      return;
+    }
+
+    const existingResponseEntry = Object.entries(node.responseRevisions ?? {}).find(
+      ([, group]) => group.responses.some((response) => response.id === assistantId),
+    );
+    const existingResponseGroup = existingResponseEntry?.[1];
+    const baseAssistantId = existingResponseGroup?.assistantMessageId ?? assistantId;
+    const baseAssistant =
+      existingResponseGroup?.responses.find(
+        (response) => response.id === baseAssistantId,
+      ) ?? assistantMessageById(node, baseAssistantId);
+    if (!baseAssistant || baseAssistant.role !== "assistant") return;
+
+    const messageRevisionEntry = Object.entries(node.messageRevisions ?? {}).find(
+      ([, group]) =>
+        group.variants.some(
+          (variant) => variant.assistantMessage.id === baseAssistantId,
+        ),
+    );
+    const messageVariant = messageRevisionEntry?.[1].variants.find(
+      (variant) => variant.assistantMessage.id === baseAssistantId,
+    );
+
+    let revisionGroupId = messageRevisionEntry?.[0];
+    let userMessage = messageVariant?.userMessage;
+    if (!revisionGroupId || !userMessage) {
+      const assistantIndex = node.messages.findIndex(
+        (message) => message.id === baseAssistantId && message.role === "assistant",
+      );
+      const candidateUser = node.messages[assistantIndex - 1];
+      if (
+        assistantIndex < 1 ||
+        candidateUser?.role !== "user"
+      ) {
+        return;
+      }
+      revisionGroupId = candidateUser.id;
+      userMessage = candidateUser;
+    }
+
+    const assistantMessage = makePendingAssistant();
+    const responseGroup: ResponseRevisionGroup = {
+      assistantMessageId: baseAssistantId,
+      activeResponseId: assistantMessage.id,
+      responses: [
+        ...(existingResponseGroup?.responses ?? [baseAssistant]),
+        assistantMessage,
+      ],
+    };
+    const updatedAt = timestamp();
+    const nextChat: ChatTree = {
+      ...activeChat,
+      updatedAt,
+      nodes: {
+        ...activeChat.nodes,
+        [nodeId]: {
+          ...node,
+          updatedAt,
+          responseRevisions: {
+            ...node.responseRevisions,
+            [baseAssistantId]: responseGroup,
+          },
+        },
+      },
+    };
+    setWorkspace((current) => ({
+      ...current,
+      chats: current.chats.map((chat) => (chat.id === nextChat.id ? nextChat : chat)),
+    }));
+    void askMessageRevision(
+      nextChat,
+      nodeId,
+      revisionGroupId,
+      userMessage,
+      assistantMessage,
+      modelOverride || reasoningEffortOverride
+        ? {
+            model: modelOverride ?? workspace.settings.model,
+            reasoningEffort: compatibleReasoningEffort(
+              workspace.settings.provider,
+              modelOverride ?? workspace.settings.model,
+              reasoningEffortOverride ?? workspace.settings.reasoningEffort,
+            ),
+          }
+        : undefined,
+    );
+  };
+
   const switchMessageRevision = (
     nodeId: string,
     revisionGroupId: string,
@@ -1357,6 +1492,35 @@ export default function App() {
             messageRevisions: {
               ...node.messageRevisions,
               [revisionGroupId]: { ...group, activeVariantId: variantId },
+            },
+          },
+        },
+      };
+    });
+  };
+
+  const switchResponseRevision = (
+    nodeId: string,
+    responseGroupId: string,
+    responseId: string,
+  ) => {
+    if (!activeChat) return;
+    updateChat(activeChat.id, (chat) => {
+      const node = chat.nodes[nodeId];
+      const group = node?.responseRevisions?.[responseGroupId];
+      if (!node || !group || !group.responses.some((response) => response.id === responseId)) {
+        return chat;
+      }
+      return {
+        ...chat,
+        updatedAt: timestamp(),
+        nodes: {
+          ...chat.nodes,
+          [nodeId]: {
+            ...node,
+            responseRevisions: {
+              ...node.responseRevisions,
+              [responseGroupId]: { ...group, activeResponseId: responseId },
             },
           },
         },
@@ -2553,8 +2717,19 @@ export default function App() {
             onEditMessage={(revisionGroupId, content) =>
               editUserMessage(rootNode.id, revisionGroupId, content)
             }
+            onRegenerateResponse={(assistantId, modelOverride, reasoningOverride) =>
+              regenerateAssistantMessage(
+                rootNode.id,
+                assistantId,
+                modelOverride,
+                reasoningOverride,
+              )
+            }
             onSwitchMessageRevision={(revisionGroupId, variantId) =>
               switchMessageRevision(rootNode.id, revisionGroupId, variantId)
+            }
+            onSwitchResponseRevision={(responseGroupId, responseId) =>
+              switchResponseRevision(rootNode.id, responseGroupId, responseId)
             }
             model={workspace.settings.model}
             onModelChange={selectModel}
@@ -2766,8 +2941,19 @@ export default function App() {
             onEditMessage={(revisionGroupId, content) =>
               editUserMessage(sideNode.id, revisionGroupId, content)
             }
+            onRegenerateResponse={(assistantId, modelOverride, reasoningOverride) =>
+              regenerateAssistantMessage(
+                sideNode.id,
+                assistantId,
+                modelOverride,
+                reasoningOverride,
+              )
+            }
             onSwitchMessageRevision={(revisionGroupId, variantId) =>
               switchMessageRevision(sideNode.id, revisionGroupId, variantId)
+            }
+            onSwitchResponseRevision={(responseGroupId, responseId) =>
+              switchResponseRevision(sideNode.id, responseGroupId, responseId)
             }
             model={workspace.settings.model}
             onModelChange={selectModel}

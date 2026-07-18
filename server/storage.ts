@@ -6,6 +6,7 @@ import {
   DEFAULT_PROVIDER_MODELS,
   isProviderId,
 } from "../src/lib/providers.ts";
+import { normalizeChatRevisions } from "../src/lib/revisions.ts";
 
 const DATA_DIR = path.resolve("data");
 const DATA_FILE = path.join(DATA_DIR, "chats.json");
@@ -69,13 +70,15 @@ function normalizeState(state: WorkspaceState): WorkspaceState {
   return {
     ...state,
     categories,
-    chats: (Array.isArray(state.chats) ? state.chats : []).map((chat) => ({
-      ...chat,
-      categoryId:
-        typeof chat.categoryId === "string" && categoryIds.has(chat.categoryId)
-          ? chat.categoryId
-          : null,
-    })),
+    chats: (Array.isArray(state.chats) ? state.chats : []).map((chat) =>
+      normalizeChatRevisions({
+        ...chat,
+        categoryId:
+          typeof chat.categoryId === "string" && categoryIds.has(chat.categoryId)
+            ? chat.categoryId
+            : null,
+      }),
+    ),
     settings: {
       provider,
       providerModels,
