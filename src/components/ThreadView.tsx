@@ -12,7 +12,7 @@ import {
   Sparkles,
   Square,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   ChatTree,
   GenerationMetrics,
@@ -28,7 +28,9 @@ import { childThreads, messagesForNode } from "../lib/tree";
 import { applyMarkdownShortcut } from "../lib/textarea";
 import { providerLabel } from "../lib/providers";
 import { Composer } from "./Composer";
-import { MarkdownMessage } from "./MarkdownMessage";
+import { MarkdownMessage, type LinkedAnchor } from "./MarkdownMessage";
+
+const EMPTY_LINKED_ANCHORS: LinkedAnchor[] = [];
 
 interface ThreadViewProps {
   chat: ChatTree;
@@ -164,8 +166,23 @@ export function ThreadView({
     messageId: string;
     status: "copied" | "failed";
   } | null>(null);
-  const children = childThreads(chat, node.id);
-  const messages = messagesForNode(node);
+  const children = useMemo(() => childThreads(chat, node.id), [chat, node.id]);
+  const messages = useMemo(() => messagesForNode(node), [node]);
+  const linkedAnchorsByMessage = useMemo(() => {
+    const anchors = new Map<string, LinkedAnchor[]>();
+    children.forEach((child) => {
+      if (!child.anchor) return;
+      const linked: LinkedAnchor = {
+        childId: child.id,
+        title: child.title,
+        anchor: child.anchor,
+      };
+      const messageAnchors = anchors.get(child.anchor.sourceMessageId);
+      if (messageAnchors) messageAnchors.push(linked);
+      else anchors.set(child.anchor.sourceMessageId, [linked]);
+    });
+    return anchors;
+  }, [children]);
   const pendingAssistant = messages.find(
     (message) => message.role === "assistant" && message.pending,
   );
@@ -329,13 +346,8 @@ export function ThreadView({
             : 0;
           const messageCopyStatus =
             copyState?.messageId === message.id ? copyState.status : null;
-          const linkedAnchors = children
-            .filter((child) => child.anchor?.sourceMessageId === message.id)
-            .map((child) => ({
-              childId: child.id,
-              title: child.title,
-              anchor: child.anchor!,
-            }));
+          const linkedAnchors =
+            linkedAnchorsByMessage.get(message.id) ?? EMPTY_LINKED_ANCHORS;
           return (
             <article
               className={`message message--${message.role} ${message.error ? "message--error" : ""}`}

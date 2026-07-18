@@ -1,6 +1,6 @@
 import { CornerUpRight, ExternalLink } from "lucide-react";
-import { useEffect, useMemo, useRef } from "react";
-import ReactMarkdown from "react-markdown";
+import { memo, useEffect, useMemo, useRef } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -9,11 +9,20 @@ import { normalizeMathDelimiters } from "../lib/markdown";
 import type { HighlightAnchor, Message, SelectionDraft } from "../types";
 import { InlineMath } from "./MathText";
 
-interface LinkedAnchor {
+export interface LinkedAnchor {
   childId: string;
   title: string;
   anchor: HighlightAnchor;
 }
+
+const MARKDOWN_COMPONENTS: Components = {
+  a: ({ href, children, ...props }) => (
+    <a href={href} target="_blank" rel="noreferrer" {...props}>
+      {children}
+      <ExternalLink size={11} aria-hidden="true" />
+    </a>
+  ),
+};
 
 interface MarkdownMessageProps {
   message: Message;
@@ -129,7 +138,7 @@ function sourceQuoteFromRange(range: Range, container: HTMLElement): string {
   return quote.trim();
 }
 
-export function MarkdownMessage({
+function MarkdownMessageComponent({
   message,
   nodeId,
   linkedAnchors,
@@ -142,6 +151,10 @@ export function MarkdownMessage({
   const highlightName = useMemo(
     () => `elaboration-${message.id.replace(/[^a-zA-Z0-9-]/g, "")}`,
     [message.id],
+  );
+  const normalizedContent = useMemo(
+    () => normalizeMathDelimiters(message.content, message.role === "source"),
+    [message.content, message.role],
   );
 
   useEffect(() => {
@@ -257,16 +270,9 @@ export function MarkdownMessage({
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[rehypeKatex, rehypeHighlight]}
-        components={{
-          a: ({ href, children, ...props }) => (
-            <a href={href} target="_blank" rel="noreferrer" {...props}>
-              {children}
-              <ExternalLink size={11} aria-hidden="true" />
-            </a>
-          ),
-        }}
+        components={MARKDOWN_COMPONENTS}
       >
-        {normalizeMathDelimiters(message.content, message.role === "source")}
+        {normalizedContent}
       </ReactMarkdown>
       {!!linkedAnchors.length && (
         <div className="elaboration-links" aria-label="Elaborations from this passage">
@@ -286,3 +292,42 @@ export function MarkdownMessage({
     </div>
   );
 }
+
+function sameMessage(left: Message, right: Message): boolean {
+  return (
+    left === right ||
+    (left.id === right.id &&
+      left.role === right.role &&
+      left.content === right.content &&
+      left.pending === right.pending &&
+      left.error === right.error &&
+      left.stopped === right.stopped &&
+      left.requestId === right.requestId &&
+      left.generation === right.generation &&
+      left.revisionGroupId === right.revisionGroupId &&
+      left.revisionVariantId === right.revisionVariantId)
+  );
+}
+
+function sameLinkedAnchors(left: LinkedAnchor[], right: LinkedAnchor[]): boolean {
+  return (
+    left === right ||
+    (left.length === right.length &&
+      left.every((anchor, index) => {
+        const candidate = right[index];
+        return (
+          anchor.childId === candidate.childId &&
+          anchor.title === candidate.title &&
+          anchor.anchor === candidate.anchor
+        );
+      }))
+  );
+}
+
+export const MarkdownMessage = memo(
+  MarkdownMessageComponent,
+  (left, right) =>
+    left.nodeId === right.nodeId &&
+    sameMessage(left.message, right.message) &&
+    sameLinkedAnchors(left.linkedAnchors, right.linkedAnchors),
+);

@@ -689,11 +689,25 @@ export default function App() {
     useState<ThreadScrollRequest | null>(null);
   const [focusMaximized, setFocusMaximized] = useState(false);
   const responseControllers = useRef(new Map<string, AbortController>());
+  const assistantDeltaBuffers = useRef(
+    new Map<string, { chatId: string; nodeId: string; delta: string }>(),
+  );
+  const assistantDeltaFrame = useRef<number | null>(null);
   const workspaceRef = useRef(workspace);
   const activeNodeIdRef = useRef(activeNodeId);
   const historyAction = useRef<"push" | "replace">("replace");
   workspaceRef.current = workspace;
   activeNodeIdRef.current = activeNodeId;
+
+  useEffect(
+    () => () => {
+      if (assistantDeltaFrame.current !== null) {
+        window.cancelAnimationFrame(assistantDeltaFrame.current);
+      }
+      assistantDeltaBuffers.current.clear();
+    },
+    [],
+  );
 
   const activeChat = workspace.chats.find((chat) => chat.id === workspace.activeChatId) ?? null;
   const rootNode = activeChat ? activeChat.nodes[activeChat.rootId] : null;
@@ -948,6 +962,37 @@ export default function App() {
     });
   };
 
+  const discardAssistantDelta = (assistantId: string) => {
+    assistantDeltaBuffers.current.delete(assistantId);
+    if (
+      assistantDeltaBuffers.current.size === 0 &&
+      assistantDeltaFrame.current !== null
+    ) {
+      window.cancelAnimationFrame(assistantDeltaFrame.current);
+      assistantDeltaFrame.current = null;
+    }
+  };
+
+  const flushAssistantDeltas = () => {
+    if (assistantDeltaFrame.current !== null) {
+      window.cancelAnimationFrame(assistantDeltaFrame.current);
+    }
+    assistantDeltaFrame.current = null;
+    const pending = Array.from(assistantDeltaBuffers.current.entries());
+    assistantDeltaBuffers.current.clear();
+    pending.forEach(([assistantId, buffered]) => {
+      updateAssistantMessage(
+        buffered.chatId,
+        buffered.nodeId,
+        assistantId,
+        (message) => ({
+          ...message,
+          content: `${message.content}${buffered.delta}`,
+        }),
+      );
+    });
+  };
+
   const finishAssistant = (
     chatId: string,
     nodeId: string,
@@ -956,6 +1001,7 @@ export default function App() {
     error = false,
     generation?: GenerationMetrics,
   ) => {
+    discardAssistantDelta(assistantId);
     updateAssistantMessage(
       chatId,
       nodeId,
@@ -978,10 +1024,12 @@ export default function App() {
     assistantId: string,
     delta: string,
   ) => {
-    updateAssistantMessage(chatId, nodeId, assistantId, (message) => ({
-      ...message,
-      content: `${message.content}${delta}`,
-    }));
+    const buffered = assistantDeltaBuffers.current.get(assistantId);
+    if (buffered) buffered.delta += delta;
+    else assistantDeltaBuffers.current.set(assistantId, { chatId, nodeId, delta });
+    if (assistantDeltaFrame.current === null) {
+      assistantDeltaFrame.current = window.requestAnimationFrame(flushAssistantDeltas);
+    }
   };
 
   const replaceAssistantContent = (
@@ -990,6 +1038,7 @@ export default function App() {
     assistantId: string,
     content: string,
   ) => {
+    discardAssistantDelta(assistantId);
     updateAssistantMessage(chatId, nodeId, assistantId, (message) => ({
       ...message,
       content,
@@ -1001,7 +1050,9 @@ export default function App() {
     nodeId: string,
     assistantId: string,
     generation?: GenerationMetrics,
+    content?: string,
   ) => {
+    discardAssistantDelta(assistantId);
     updateAssistantMessage(
       chatId,
       nodeId,
@@ -1012,6 +1063,7 @@ export default function App() {
         error: false,
         stopped: true,
         generation,
+        ...(content === undefined ? {} : { content }),
       }),
       true,
     );
@@ -1046,7 +1098,15 @@ export default function App() {
         controller.signal,
       );
       if (controller.signal.aborted) return;
-      if (result.stopped) markAssistantStopped(chat.id, nodeId, assistantId, result.generation);
+      if (result.stopped) {
+        markAssistantStopped(
+          chat.id,
+          nodeId,
+          assistantId,
+          result.generation,
+          result.content,
+        );
+      }
       else finishAssistant(chat.id, nodeId, assistantId, result.content, false, result.generation);
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -1086,6 +1146,7 @@ export default function App() {
         stopped: boolean;
         generation: GenerationMetrics;
       };
+      flushAssistantDeltas();
       responseControllers.current.get(assistantId)?.abort();
       markAssistantStopped(activeChat.id, nodeId, assistantId, data.generation);
     } catch (error) {
@@ -1122,7 +1183,13 @@ export default function App() {
       );
       if (controller.signal.aborted) return;
       if (result.stopped) {
-        markAssistantStopped(chat.id, nodeId, assistantMessage.id, result.generation);
+        markAssistantStopped(
+          chat.id,
+          nodeId,
+          assistantMessage.id,
+          result.generation,
+          result.content,
+        );
       } else {
         finishAssistant(
           chat.id,
@@ -1169,6 +1236,7 @@ export default function App() {
           pending.nodeId,
           pending.assistantId,
           result.generation,
+          result.content,
         );
       } else {
         finishAssistant(
