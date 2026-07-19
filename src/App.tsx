@@ -42,7 +42,7 @@ import type {
 } from "react";
 import { Composer } from "./components/Composer";
 import { InlineMath, MathBlock } from "./components/MathText";
-import { ModelPicker } from "./components/ModelPicker";
+import { MODEL_OPTIONS, ModelPicker } from "./components/ModelPicker";
 import { ThreadView } from "./components/ThreadView";
 import {
   cloneChatForImport,
@@ -83,6 +83,7 @@ import type {
   WorkspaceState,
 } from "./types";
 import {
+  DEFAULT_DEFINITION_MODELS,
   DEFAULT_LOCAL_BASE_URL,
   DEFAULT_PROVIDER_MODELS,
   PROVIDER_OPTIONS,
@@ -100,6 +101,7 @@ const DEFAULT_STATE: WorkspaceState = {
   settings: {
     provider: "openai",
     providerModels: { ...DEFAULT_PROVIDER_MODELS },
+    definitionModels: { ...DEFAULT_DEFINITION_MODELS },
     localBaseUrl: DEFAULT_LOCAL_BASE_URL,
     model: "gpt-5.6-sol",
     reasoningEffort: "max",
@@ -1535,13 +1537,20 @@ export default function App() {
     const controller = new AbortController();
     responseControllers.current.set(definition.id, controller);
     try {
+      const definitionModel =
+        workspace.settings.definitionModels[workspace.settings.provider]?.trim() ||
+        workspace.settings.model;
       const result = await modelRequest(
         definition.requestId,
         {
           provider: workspace.settings.provider,
           localBaseUrl: workspace.settings.localBaseUrl,
-          model: workspace.settings.model,
-          reasoningEffort: workspace.settings.reasoningEffort,
+          model: definitionModel,
+          reasoningEffort: compatibleReasoningEffort(
+            workspace.settings.provider,
+            definitionModel,
+            workspace.settings.reasoningEffort,
+          ),
           maxOutputTokens: workspace.settings.maxOutputTokens,
           customInstructions: workspace.settings.customInstructions,
           context: [
@@ -2624,6 +2633,19 @@ export default function App() {
         },
       };
     });
+  };
+
+  const selectDefinitionModel = (model: string) => {
+    setWorkspace((current) => ({
+      ...current,
+      settings: {
+        ...current.settings,
+        definitionModels: {
+          ...current.settings.definitionModels,
+          [current.settings.provider]: model,
+        },
+      },
+    }));
   };
 
   const selectProvider = (provider: ProviderId) => {
@@ -3724,6 +3746,59 @@ export default function App() {
                       />
                     </span>
                   </label>
+                  <label className="model-select">
+                    <BookOpen size={15} />
+                    <span>
+                      <small>Define model · {providerLabel(workspace.settings.provider)}</small>
+                      {workspace.settings.provider === "openai" ? (
+                        <select
+                          aria-label="Model used for definitions"
+                          value={
+                            workspace.settings.definitionModels[
+                              workspace.settings.provider
+                            ]
+                          }
+                          onChange={(event) =>
+                            selectDefinitionModel(event.target.value)
+                          }
+                        >
+                          {MODEL_OPTIONS.map((model) => (
+                            <option value={model.value} key={model.value}>
+                              {model.label} · {model.note}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <>
+                          <input
+                            aria-label="Model used for definitions"
+                            value={
+                              workspace.settings.definitionModels[
+                                workspace.settings.provider
+                              ]
+                            }
+                            onChange={(event) =>
+                              selectDefinitionModel(event.target.value)
+                            }
+                            list="definition-model-options"
+                            placeholder={
+                              workspace.settings.provider === "openrouter"
+                                ? "provider/model"
+                                : "Model ID"
+                            }
+                            spellCheck={false}
+                          />
+                          <datalist id="definition-model-options">
+                            {providerModels.map((model) => (
+                              <option value={model.id} key={model.id}>
+                                {model.name ?? model.id}
+                              </option>
+                            ))}
+                          </datalist>
+                        </>
+                      )}
+                    </span>
+                  </label>
                   {workspace.settings.provider === "local" && (
                     <label className="model-select provider-url-control">
                       <ServerCog size={15} />
@@ -3754,7 +3829,7 @@ export default function App() {
                     {providerModelsStatus === "loading"
                       ? "Loading model IDs…"
                       : providerModelsStatus === "loaded"
-                        ? `${providerModels.length.toLocaleString()} model IDs available in the chat model field.`
+                        ? `${providerModels.length.toLocaleString()} model IDs available in the chat and Define model fields.`
                         : providerModelsStatus === "error"
                           ? "The model catalog is unavailable; you can still enter a model ID manually."
                           : "Enter a model ID in the chat box."}

@@ -113,6 +113,7 @@ export interface WorkspaceState {
   settings: {
     provider: ProviderId;
     providerModels: Record<ProviderId, string>;
+    definitionModels: Record<ProviderId, string>;
     localBaseUrl: string;
     model: string;
     reasoningEffort: ReasoningEffort;

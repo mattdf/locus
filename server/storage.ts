@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { WorkspaceState } from "../src/types.ts";
 import {
+  DEFAULT_DEFINITION_MODELS,
   DEFAULT_LOCAL_BASE_URL,
   DEFAULT_PROVIDER_MODELS,
   isProviderId,
@@ -19,6 +20,7 @@ export const emptyState = (): WorkspaceState => ({
   settings: {
     provider: "openai",
     providerModels: { ...DEFAULT_PROVIDER_MODELS },
+    definitionModels: { ...DEFAULT_DEFINITION_MODELS },
     localBaseUrl: DEFAULT_LOCAL_BASE_URL,
     model: "gpt-5.6-sol",
     reasoningEffort: "max",
@@ -67,6 +69,16 @@ function normalizeState(state: WorkspaceState): WorkspaceState {
         : savedProviderModels?.local || DEFAULT_PROVIDER_MODELS.local,
   };
   const model = providerModels[provider];
+  const savedDefinitionModels = state.settings?.definitionModels;
+  const definitionModels = {
+    openai:
+      savedDefinitionModels?.openai?.trim() || DEFAULT_DEFINITION_MODELS.openai,
+    openrouter:
+      savedDefinitionModels?.openrouter?.trim() ||
+      DEFAULT_DEFINITION_MODELS.openrouter,
+    local:
+      savedDefinitionModels?.local?.trim() || DEFAULT_DEFINITION_MODELS.local,
+  };
   return {
     ...state,
     categories,
@@ -82,6 +94,7 @@ function normalizeState(state: WorkspaceState): WorkspaceState {
     settings: {
       provider,
       providerModels,
+      definitionModels,
       localBaseUrl:
         typeof state.settings?.localBaseUrl === "string" &&
         state.settings.localBaseUrl.trim()
