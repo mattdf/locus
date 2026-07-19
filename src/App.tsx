@@ -227,12 +227,35 @@ function makePendingAssistant(): Message & { requestId: string } {
   };
 }
 
+function branchSubtreeIds(chat: ChatTree, nodeId: string): string[] {
+  const childrenByParent = new Map<string, string[]>();
+  Object.values(chat.nodes).forEach((node) => {
+    if (!node.parentId) return;
+    const siblings = childrenByParent.get(node.parentId) ?? [];
+    siblings.push(node.id);
+    childrenByParent.set(node.parentId, siblings);
+  });
+
+  const subtree: string[] = [];
+  const pending = [nodeId];
+  const seen = new Set<string>();
+  while (pending.length) {
+    const currentId = pending.pop();
+    if (!currentId || seen.has(currentId) || !chat.nodes[currentId]) continue;
+    seen.add(currentId);
+    subtree.push(currentId);
+    pending.push(...(childrenByParent.get(currentId) ?? []));
+  }
+  return subtree;
+}
+
 function BranchTree({
   chat,
   parentId,
   activeNodeId,
   onOpen,
   onRename,
+  onDelete,
   root = false,
 }: {
   chat: ChatTree;
@@ -240,6 +263,7 @@ function BranchTree({
   activeNodeId: string | null;
   onOpen: (nodeId: string) => void;
   onRename: (nodeId: string) => void;
+  onDelete: (nodeId: string) => void;
   root?: boolean;
 }) {
   const children = childThreads(chat, parentId).sort((left, right) =>
@@ -269,6 +293,14 @@ function BranchTree({
             >
               <Pencil size={11} />
             </button>
+            <button
+              className="branch-tree__delete"
+              type="button"
+              aria-label={`Delete branch: ${node.title}`}
+              onClick={() => onDelete(node.id)}
+            >
+              <Trash2 size={11} />
+            </button>
           </div>
           <BranchTree
             chat={chat}
@@ -276,6 +308,7 @@ function BranchTree({
             activeNodeId={activeNodeId}
             onOpen={onOpen}
             onRename={onRename}
+            onDelete={onDelete}
           />
         </li>
       ))}
@@ -780,6 +813,93 @@ export default function App() {
     }
     setActiveNodeId(parent.id);
     setFocusMaximized(parent.id !== rootNode.id);
+  };
+
+  const deleteBranchSubtree = (nodeId: string) => {
+    if (!activeChat || nodeId === activeChat.rootId) return;
+    const node = activeChat.nodes[nodeId];
+    const parent = node?.parentId ? activeChat.nodes[node.parentId] : null;
+    if (!node || !parent) return;
+
+    const subtreeIds = branchSubtreeIds(activeChat, nodeId);
+    const nestedCount = subtreeIds.length - 1;
+    const confirmed = window.confirm(
+      nestedCount
+        ? `Delete “${node.title}” and its ${nestedCount} nested elaboration${nestedCount === 1 ? "" : "s"}? This cannot be undone.`
+        : `Delete “${node.title}”? This cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    const removedIds = new Set(subtreeIds);
+    pendingGenerations(workspaceRef.current)
+      .filter(
+        (pending) =>
+          pending.chatId === activeChat.id && removedIds.has(pending.nodeId),
+      )
+      .forEach((pending) => {
+        assistantDeltaBuffers.current.delete(pending.assistantId);
+        const controller = responseControllers.current.get(pending.assistantId);
+        void fetch(`/api/respond/${encodeURIComponent(pending.requestId)}/abort`, {
+          method: "POST",
+        })
+          .catch(() => undefined)
+          .finally(() => {
+            controller?.abort();
+            if (responseControllers.current.get(pending.assistantId) === controller) {
+              responseControllers.current.delete(pending.assistantId);
+            }
+          });
+      });
+
+    const activeWasRemoved = Boolean(
+      activeNodeIdRef.current && removedIds.has(activeNodeIdRef.current),
+    );
+    const draftWasRemoved = Boolean(
+      draftRef.current && removedIds.has(draftRef.current.sourceNodeId),
+    );
+    const shouldReturnToParent = activeWasRemoved || draftWasRemoved;
+
+    setWorkspace((current) => ({
+      ...current,
+      chats: current.chats.map((chat) => {
+        if (chat.id !== activeChat.id) return chat;
+        return {
+          ...chat,
+          updatedAt: timestamp(),
+          nodes: Object.fromEntries(
+            Object.entries(chat.nodes).filter(([id]) => !removedIds.has(id)),
+          ),
+        };
+      }),
+    }));
+    setSelection(null);
+    setComposerInsertion((current) =>
+      current && removedIds.has(current.nodeId) ? null : current,
+    );
+    setThreadScrollRequest((current) =>
+      current && removedIds.has(current.nodeId) ? null : current,
+    );
+    setRenamingNodeId((current) =>
+      current && removedIds.has(current) ? null : current,
+    );
+    setBranchMenuOpen(false);
+
+    if (draftWasRemoved) {
+      draftReturnView.current = null;
+      setDraft(null);
+    }
+    if (shouldReturnToParent) {
+      historyAction.current = "push";
+      setActiveNodeId(parent.id);
+      setFocusMaximized(parent.id !== activeChat.rootId);
+      if (node.anchor) {
+        setThreadScrollRequest({
+          id: newId(),
+          nodeId: parent.id,
+          anchor: node.anchor,
+        });
+      }
+    }
   };
 
   useEffect(() => {
@@ -2701,6 +2821,7 @@ export default function App() {
                           activeNodeId={activeNodeId}
                           root
                           onRename={openRenameNode}
+                          onDelete={deleteBranchSubtree}
                           onOpen={(nodeId) => {
                             historyAction.current = "push";
                             setActiveNodeId(nodeId);
@@ -2942,6 +3063,15 @@ export default function App() {
               )}
             </div>
             <div className="focus-header__actions">
+              <button
+                className="icon-button danger"
+                type="button"
+                title="Delete this branch"
+                aria-label="Delete this branch"
+                onClick={() => deleteBranchSubtree(sideNode.id)}
+              >
+                <Trash2 size={16} />
+              </button>
               <button
                 className="icon-button focus-maximize-button"
                 type="button"
