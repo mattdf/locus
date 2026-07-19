@@ -659,6 +659,13 @@ export default function App() {
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [selection, setSelection] = useState<SelectionDraft | null>(null);
   const [draft, setDraft] = useState<SelectionDraft | null>(null);
+  const draftReturnView = useRef<{
+    chatId: string;
+    nodeId: string;
+    maximized: boolean;
+  } | null>(null);
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   const [composerInsertion, setComposerInsertion] = useState<{
     id: string;
     nodeId: string;
@@ -726,6 +733,54 @@ export default function App() {
       ? activeChat.nodes[activeNodeId]
       : rootNode;
   const sideNode = activeNode && rootNode && activeNode.id !== rootNode.id ? activeNode : null;
+  const leftPaneNode =
+    activeChat && rootNode
+      ? draft
+        ? activeChat.nodes[draft.sourceNodeId] ?? rootNode
+        : sideNode?.parentId
+          ? activeChat.nodes[sideNode.parentId] ?? rootNode
+          : rootNode
+      : null;
+
+  const closeElaborationDraft = () => {
+    if (!draftRef.current) {
+      draftReturnView.current = null;
+      setDraft(null);
+      return;
+    }
+    const returnView = draftReturnView.current;
+    draftReturnView.current = null;
+    setDraft(null);
+    if (!returnView) return;
+
+    const chat = workspaceRef.current.chats.find(
+      (item) => item.id === returnView.chatId,
+    );
+    if (!chat || !chat.nodes[returnView.nodeId]) return;
+
+    historyAction.current = "push";
+    setActiveNodeId(returnView.nodeId);
+    setFocusMaximized(
+      returnView.maximized && returnView.nodeId !== chat.rootId,
+    );
+  };
+
+  const closeFocusedThread = () => {
+    if (!activeChat || !rootNode || !sideNode?.parentId) return;
+    const parent = activeChat.nodes[sideNode.parentId];
+    if (!parent) return;
+
+    historyAction.current = "push";
+    if (sideNode.anchor) {
+      setThreadScrollRequest({
+        id: newId(),
+        nodeId: parent.id,
+        anchor: sideNode.anchor,
+      });
+    }
+    setActiveNodeId(parent.id);
+    setFocusMaximized(parent.id !== rootNode.id);
+  };
 
   useEffect(() => {
     fetch("/api/state")
@@ -900,7 +955,7 @@ export default function App() {
       if (event.key === "Escape") {
         setSelection(null);
         window.getSelection()?.removeAllRanges();
-        setDraft(null);
+        closeElaborationDraft();
         setSettingsOpen(false);
         setCustomInstructionsOpen(false);
         setApiKeyOpen(false);
@@ -1646,6 +1701,7 @@ export default function App() {
       chats: current.chats.map((chat) => (chat.id === nextChat.id ? nextChat : chat)),
     }));
     setActiveNodeId(childId);
+    draftReturnView.current = null;
     setDraft(null);
     setSelection(null);
     window.getSelection()?.removeAllRanges();
@@ -1704,7 +1760,7 @@ export default function App() {
     saveDrawerWidth(currentWidth + (event.key === "ArrowLeft" ? 24 : -24));
   };
 
-  const openRenameNode = (nodeId: string) => {
+  const openRenameNode = (nodeId: string, navigateToNode = true) => {
     if (!activeChat) return;
     const node = activeChat.nodes[nodeId];
     if (!node) return;
@@ -1712,7 +1768,7 @@ export default function App() {
     setRenamingNodeId(nodeId);
     setChatMenuOpen(false);
     setBranchMenuOpen(false);
-    if (nodeId !== activeChat.rootId) {
+    if (navigateToNode && nodeId !== activeChat.rootId) {
       historyAction.current = "push";
       setActiveNodeId(nodeId);
       setFocusMaximized(false);
@@ -2221,6 +2277,10 @@ export default function App() {
   const activeBranchCount = activeChat ? Object.keys(activeChat.nodes).length - 1 : 0;
   const activePath = activeChat && sideNode ? threadPath(activeChat, sideNode.id) : [];
   const draftPath = activeChat && draft ? threadPath(activeChat, draft.sourceNodeId) : [];
+  const leftPanePath = activeChat && leftPaneNode ? threadPath(activeChat, leftPaneNode.id) : [];
+  const leftPaneIsRoot = Boolean(
+    activeChat && leftPaneNode && leftPaneNode.id === activeChat.rootId,
+  );
   const drawerResizeHandle = (
     <div
       className="drawer-resize-handle"
@@ -2535,7 +2595,7 @@ export default function App() {
 
       {sidebarOpen && <button className="sidebar-scrim" type="button" aria-label="Close menu" onClick={() => setSidebarOpen(false)} />}
 
-      {!activeChat || !rootNode ? (
+      {!activeChat || !rootNode || !leftPaneNode ? (
         <NewChatScreen
           initialMode={newMode}
           onCreate={createChat}
@@ -2550,7 +2610,7 @@ export default function App() {
           sendShortcut={workspace.settings.sendShortcut}
         />
       ) : (
-        <main className="main-pane">
+        <main className={`main-pane ${leftPaneIsRoot ? "" : "main-pane--stacked"}`}>
           {(chatMenuOpen || branchMenuOpen) && (
             <button
               className="chat-menu-scrim"
@@ -2568,8 +2628,10 @@ export default function App() {
               <Menu size={19} />
             </button>
             <div className="pane-header__title">
-              <span>Main thread</span>
-              {renamingNodeId === rootNode.id ? (
+              <span>
+                {leftPaneIsRoot ? "Main thread" : `Focus · depth ${leftPanePath.length - 1}`}
+              </span>
+              {renamingNodeId === leftPaneNode.id ? (
                 <form
                   className="inline-title-editor"
                   onSubmit={(event) => {
@@ -2579,7 +2641,7 @@ export default function App() {
                 >
                   <input
                     autoFocus
-                    aria-label="Rename main thread"
+                    aria-label={leftPaneIsRoot ? "Rename main thread" : "Rename branch"}
                     value={renameDraft}
                     onChange={(event) => setRenameDraft(event.target.value)}
                     onKeyDown={(event) => {
@@ -2593,12 +2655,16 @@ export default function App() {
                 </form>
               ) : (
                 <div className="inline-title-row">
-                  <h1><InlineMath source={activeChat.title} /></h1>
+                  <h1>
+                    <InlineMath
+                      source={leftPaneIsRoot ? activeChat.title : leftPaneNode.title}
+                    />
+                  </h1>
                   <button
                     className="inline-rename-button"
                     type="button"
-                    aria-label="Rename main thread"
-                    onClick={() => openRenameNode(rootNode.id)}
+                    aria-label={leftPaneIsRoot ? "Rename main thread" : "Rename branch"}
+                    onClick={() => openRenameNode(leftPaneNode.id, false)}
                   >
                     <Pencil size={11} />
                   </button>
@@ -2702,7 +2768,7 @@ export default function App() {
           </header>
           <ThreadView
             chat={activeChat}
-            node={rootNode}
+            node={leftPaneNode}
             provider={workspace.settings.provider}
             modelOptions={providerModels}
             onSelect={setSelection}
@@ -2712,24 +2778,24 @@ export default function App() {
               setDraft(null);
               setFocusMaximized(false);
             }}
-            onSend={(message) => sendToThread(rootNode.id, message)}
-            onStop={(assistantId) => stopResponse(rootNode.id, assistantId)}
+            onSend={(message) => sendToThread(leftPaneNode.id, message)}
+            onStop={(assistantId) => stopResponse(leftPaneNode.id, assistantId)}
             onEditMessage={(revisionGroupId, content) =>
-              editUserMessage(rootNode.id, revisionGroupId, content)
+              editUserMessage(leftPaneNode.id, revisionGroupId, content)
             }
             onRegenerateResponse={(assistantId, modelOverride, reasoningOverride) =>
               regenerateAssistantMessage(
-                rootNode.id,
+                leftPaneNode.id,
                 assistantId,
                 modelOverride,
                 reasoningOverride,
               )
             }
             onSwitchMessageRevision={(revisionGroupId, variantId) =>
-              switchMessageRevision(rootNode.id, revisionGroupId, variantId)
+              switchMessageRevision(leftPaneNode.id, revisionGroupId, variantId)
             }
             onSwitchResponseRevision={(responseGroupId, responseId) =>
-              switchResponseRevision(rootNode.id, responseGroupId, responseId)
+              switchResponseRevision(leftPaneNode.id, responseGroupId, responseId)
             }
             model={workspace.settings.model}
             onModelChange={selectModel}
@@ -2737,11 +2803,11 @@ export default function App() {
             onReasoningEffortChange={selectReasoningEffort}
             sendShortcut={workspace.settings.sendShortcut}
             composerInsertion={
-              composerInsertion?.nodeId === rootNode.id ? composerInsertion : undefined
+              composerInsertion?.nodeId === leftPaneNode.id ? composerInsertion : undefined
             }
             onComposerInsertionApplied={applyComposerInsertion}
             scrollRequest={
-              threadScrollRequest?.nodeId === rootNode.id
+              threadScrollRequest?.nodeId === leftPaneNode.id
                 ? threadScrollRequest
                 : undefined
             }
@@ -2771,7 +2837,7 @@ export default function App() {
               <h2>Open a focused thread</h2>
             </div>
             <div className="focus-header__actions">
-              <button className="icon-button" type="button" aria-label="Close elaboration" onClick={() => setDraft(null)}>
+              <button className="icon-button" type="button" aria-label="Close elaboration" onClick={closeElaborationDraft}>
                 <X size={17} />
               </button>
             </div>
@@ -2782,8 +2848,10 @@ export default function App() {
                 {index > 0 && <ChevronRight size={12} />}
                 <button type="button" onClick={() => {
                   historyAction.current = "push";
+                  draftReturnView.current = null;
                   setActiveNodeId(node.id);
                   setDraft(null);
+                  setFocusMaximized(false);
                 }}>
                   {index === 0 ? "Main" : <InlineMath source={node.title} />}
                 </button>
@@ -2890,11 +2958,7 @@ export default function App() {
                 className="icon-button"
                 type="button"
                 aria-label="Close focused thread"
-                onClick={() => {
-                  historyAction.current = "push";
-                  setActiveNodeId(activeChat.rootId);
-                  setFocusMaximized(false);
-                }}
+                onClick={closeFocusedThread}
               >
                 <X size={17} />
               </button>
@@ -3663,6 +3727,23 @@ export default function App() {
           onDismiss={() => setSelection(null)}
           onQuote={quoteSelectionInThread}
           onElaborate={() => {
+            if (activeChat && activeNode) {
+              draftReturnView.current = {
+                chatId: activeChat.id,
+                nodeId: activeNode.id,
+                maximized: focusMaximized,
+              };
+            }
+            setThreadScrollRequest({
+              id: newId(),
+              nodeId: selection.sourceNodeId,
+              anchor: {
+                sourceNodeId: selection.sourceNodeId,
+                sourceMessageId: selection.sourceMessageId,
+                quote: selection.quote,
+                blockIndex: selection.blockIndex,
+              },
+            });
             setDraft(selection);
             setSelection(null);
             setFocusMaximized(false);

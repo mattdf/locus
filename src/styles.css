@@ -792,6 +792,7 @@ a:focus-visible {
 }
 
 .main-pane {
+  position: relative;
   display: flex;
   min-width: 0;
   grid-column: 2;
@@ -799,6 +800,18 @@ a:focus-visible {
   flex-direction: column;
   height: 100vh;
   background: var(--paper);
+}
+
+.main-pane--stacked::before {
+  position: absolute;
+  z-index: 40;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  pointer-events: none;
+  background: rgba(13, 112, 101, 0.28);
+  content: "";
 }
 
 .pane-header {
@@ -3737,6 +3750,10 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .pane-header {
   background: rgba(25, 30, 28, 0.96);
   border-bottom-color: var(--line-soft);
+}
+
+.app-shell[data-theme="dark"] .main-pane--stacked::before {
+  background: rgba(86, 184, 168, 0.34);
 }
 
 .app-shell[data-theme="dark"] .pane-header h1,
