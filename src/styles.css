@@ -1815,6 +1815,22 @@ a:focus-visible {
   border-left-color: rgba(173, 117, 0, 0.78);
 }
 
+.has-linked-definition {
+  padding: 2px 6px;
+  margin-right: -6px !important;
+  margin-left: -6px !important;
+  background: rgba(88, 166, 214, 0.12);
+  border-left: 2px solid rgba(36, 112, 158, 0.52);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.has-linked-definition:hover {
+  background: rgba(88, 166, 214, 0.2);
+  border-left-color: rgba(26, 94, 137, 0.78);
+}
+
 .elaboration-links {
   display: flex;
   flex-wrap: wrap;
@@ -2430,7 +2446,7 @@ body.resizing-drawer {
   position: fixed;
   z-index: 100;
   display: flex;
-  max-width: min(410px, calc(100vw - 20px));
+  max-width: min(500px, calc(100vw - 20px));
   align-items: center;
   gap: 8px;
   min-height: 38px;
@@ -2488,6 +2504,16 @@ body.resizing-drawer {
   background: #f5cf70;
 }
 
+.selection-toolbar > button.selection-define-button {
+  color: #f4fbff;
+  background: #347fa9;
+  border: 1px solid #5796b9;
+}
+
+.selection-toolbar > button.selection-define-button:hover {
+  background: #418db7;
+}
+
 .selection-toolbar > button.selection-quote-button {
   color: #edf2f0;
   background: #394641;
@@ -2496,6 +2522,130 @@ body.resizing-drawer {
 
 .selection-toolbar > button.selection-quote-button:hover {
   background: #46544f;
+}
+
+.definition-popover {
+  position: fixed;
+  z-index: 110;
+  width: min(380px, calc(100vw - 24px));
+  max-height: min(320px, calc(100vh - 24px));
+  padding: 12px 14px 13px;
+  overflow: auto;
+  color: #263a43;
+  background: #f8fcfe;
+  border: 1px solid #b9d7e7;
+  border-radius: 9px;
+  box-shadow: 0 12px 34px rgba(27, 55, 68, 0.2), 0 2px 8px rgba(27, 55, 68, 0.1);
+  animation: definition-popover-in 120ms ease-out;
+}
+
+@keyframes definition-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.definition-popover > header {
+  display: flex;
+  align-items: center;
+  padding-bottom: 7px;
+  margin-bottom: 7px;
+  color: #347fa9;
+  border-bottom: 1px solid #d8e9f1;
+}
+
+.definition-popover > header span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.definition-popover > header button {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  padding: 0;
+  margin-left: auto;
+  color: #78929e;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.definition-popover > header button:hover {
+  color: #294956;
+  background: #e5f1f6;
+}
+
+.definition-popover .math-block,
+.definition-popover .math-block p {
+  margin: 0;
+  color: inherit;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 13px;
+  line-height: 1.58;
+}
+
+.definition-popover__loading {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 8px;
+  color: #5f7c89;
+  font-size: 11px;
+}
+
+.definition-popover__loading > span {
+  width: 13px;
+  height: 13px;
+  border: 2px solid #b8d5e3;
+  border-top-color: #347fa9;
+  border-radius: 50%;
+  animation: definition-spin 700ms linear infinite;
+}
+
+.definition-popover__loading > button {
+  padding: 4px 7px;
+  margin-left: auto;
+  color: #58727e;
+  background: transparent;
+  border: 1px solid #b9d7e7;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.definition-popover__loading > button:hover {
+  color: var(--danger);
+  background: #f6e9e6;
+  border-color: #dfc8c3;
+}
+
+@keyframes definition-spin {
+  to { transform: rotate(360deg); }
+}
+
+.definition-popover .definition-popover__error,
+.definition-popover .definition-popover__error p {
+  color: var(--danger);
+  font-family: Inter, ui-sans-serif, sans-serif;
+  font-size: 11px;
+}
+
+.definition-popover > footer {
+  padding-top: 8px;
+  margin-top: 9px;
+  color: #78909a;
+  border-top: 1px solid #d8e9f1;
+  font-size: 8px;
+  line-height: 1.45;
 }
 
 .toolbar-close {
@@ -4049,6 +4199,57 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .has-linked-elaboration:hover {
   background: rgba(214, 168, 69, 0.19);
   border-left-color: rgba(231, 184, 81, 0.75);
+}
+
+.app-shell[data-theme="dark"] .has-linked-definition {
+  background: rgba(79, 151, 194, 0.12);
+  border-left-color: rgba(89, 169, 216, 0.55);
+}
+
+.app-shell[data-theme="dark"] .has-linked-definition:hover {
+  background: rgba(79, 151, 194, 0.2);
+  border-left-color: rgba(105, 185, 232, 0.78);
+}
+
+.app-shell[data-theme="dark"] .definition-popover {
+  color: #d8e8ef;
+  background: #192429;
+  border-color: #365562;
+  box-shadow: 0 14px 38px rgba(0, 0, 0, 0.42);
+}
+
+.app-shell[data-theme="dark"] .definition-popover > header {
+  color: #72b8db;
+  border-bottom-color: #30444d;
+}
+
+.app-shell[data-theme="dark"] .definition-popover > header button {
+  color: #91a8b2;
+}
+
+.app-shell[data-theme="dark"] .definition-popover > header button:hover {
+  color: #e3eff4;
+  background: #27383f;
+}
+
+.app-shell[data-theme="dark"] .definition-popover__loading {
+  color: #9db5c0;
+}
+
+.app-shell[data-theme="dark"] .definition-popover__loading > button {
+  color: #9db5c0;
+  border-color: #365562;
+}
+
+.app-shell[data-theme="dark"] .definition-popover__loading > button:hover {
+  color: var(--danger);
+  background: #382522;
+  border-color: #583630;
+}
+
+.app-shell[data-theme="dark"] .definition-popover > footer {
+  color: #8199a4;
+  border-top-color: #30444d;
 }
 
 .app-shell[data-theme="dark"] .elaboration-links {

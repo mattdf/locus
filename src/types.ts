@@ -63,12 +63,24 @@ export interface HighlightAnchor {
   blockIndex: number;
 }
 
+export interface InlineDefinition {
+  id: string;
+  anchor: HighlightAnchor;
+  content: string;
+  createdAt: string;
+  pending?: boolean;
+  error?: boolean;
+  requestId?: string;
+  generation?: GenerationMetrics;
+}
+
 export interface ThreadNode {
   id: string;
   parentId: string | null;
   title: string;
   anchor?: HighlightAnchor;
   messages: Message[];
+  definitions?: InlineDefinition[];
   messageRevisions?: Record<string, MessageRevisionGroup>;
   responseRevisions?: Record<string, ResponseRevisionGroup>;
   createdAt: string;

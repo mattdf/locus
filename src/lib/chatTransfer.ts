@@ -1,4 +1,10 @@
-import type { ChatCategory, ChatTree, Message, WorkspaceState } from "../types";
+import type {
+  ChatCategory,
+  ChatTree,
+  InlineDefinition,
+  Message,
+  WorkspaceState,
+} from "../types";
 import { normalizeChatRevisions } from "./revisions";
 
 export const CHAT_EXPORT_FORMAT = "locus-chat-export" as const;
@@ -35,6 +41,19 @@ function isMessage(value: unknown): value is Message {
   );
 }
 
+function isDefinition(value: unknown): value is InlineDefinition {
+  if (!isRecord(value) || !isRecord(value.anchor)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.content === "string" &&
+    typeof value.createdAt === "string" &&
+    typeof value.anchor.sourceNodeId === "string" &&
+    typeof value.anchor.sourceMessageId === "string" &&
+    typeof value.anchor.quote === "string" &&
+    Number.isSafeInteger(value.anchor.blockIndex)
+  );
+}
+
 function isChat(value: unknown): value is ChatTree {
   if (
     !isRecord(value) ||
@@ -60,6 +79,8 @@ function isChat(value: unknown): value is ChatTree {
         typeof node.title === "string" &&
         Array.isArray(node.messages) &&
         node.messages.every(isMessage) &&
+        (node.definitions === undefined ||
+          (Array.isArray(node.definitions) && node.definitions.every(isDefinition))) &&
         typeof node.createdAt === "string" &&
         typeof node.updatedAt === "string",
     )
@@ -205,6 +226,17 @@ function importedMessage(message: Message): Message {
   };
 }
 
+function importedDefinition(definition: InlineDefinition): InlineDefinition {
+  if (!definition.pending) return { ...definition };
+  const { requestId: _requestId, ...rest } = definition;
+  return {
+    ...rest,
+    content: definition.content || "Definition stopped before the export completed.",
+    pending: false,
+    error: true,
+  };
+}
+
 export function cloneChatForImport(chat: ChatTree, id: string): ChatTree {
   const normalizedChat = normalizeChatRevisions(chat);
   return {
@@ -217,6 +249,7 @@ export function cloneChatForImport(chat: ChatTree, id: string): ChatTree {
         {
           ...node,
           messages: node.messages.map(importedMessage),
+          definitions: node.definitions?.map(importedDefinition),
           messageRevisions: node.messageRevisions
             ? Object.fromEntries(
                 Object.entries(node.messageRevisions).map(([groupId, group]) => [

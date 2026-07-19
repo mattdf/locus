@@ -1,6 +1,7 @@
 import {
   ArrowDown,
   ArrowUp,
+  BookOpen,
   BookOpenText,
   ChevronLeft,
   ChevronRight,
@@ -51,6 +52,7 @@ import {
   type ParsedChatImport,
 } from "./lib/chatTransfer";
 import { markdownBlockquote } from "./lib/markdown";
+import { generationDetails } from "./lib/generation";
 import { applyMarkdownShortcut, isSendShortcut } from "./lib/textarea";
 import {
   childThreads,
@@ -69,6 +71,7 @@ import type {
   ChatTree,
   GenerationMetrics,
   HighlightAnchor,
+  InlineDefinition,
   Message,
   MessageRevisionGroup,
   ResponseRevisionGroup,
@@ -136,6 +139,7 @@ class GenerationStreamError extends Error {
 }
 
 interface PendingGeneration {
+  kind: "message" | "definition";
   chatId: string;
   nodeId: string;
   assistantId: string;
@@ -208,10 +212,21 @@ function pendingGenerations(workspace: WorkspaceState): PendingGeneration[] {
       messages.forEach((message) => {
         if (message.role !== "assistant" || !message.pending || !message.requestId) return;
         pending.set(message.id, {
+          kind: "message",
           chatId: chat.id,
           nodeId: node.id,
           assistantId: message.id,
           requestId: message.requestId,
+        });
+      });
+      (node.definitions ?? []).forEach((definition) => {
+        if (!definition.pending || !definition.requestId) return;
+        pending.set(`definition:${definition.id}`, {
+          kind: "definition",
+          chatId: chat.id,
+          nodeId: node.id,
+          assistantId: definition.id,
+          requestId: definition.requestId,
         });
       });
     });
@@ -247,6 +262,14 @@ function branchSubtreeIds(chat: ChatTree, nodeId: string): string[] {
     pending.push(...(childrenByParent.get(currentId) ?? []));
   }
   return subtree;
+}
+
+function oneParagraph(content: string): string {
+  const firstBlock = content.trim().split(/\n\s*\n/, 1)[0] ?? "";
+  return firstBlock
+    .replace(/^\s{0,3}(?:#{1,6}|[-*+])\s+/, "")
+    .replace(/\s*\n\s*/g, " ")
+    .trim();
 }
 
 function BranchTree({
@@ -416,11 +439,13 @@ async function resumeModelRequest(
 
 function SelectionToolbar({
   selection,
+  onDefine,
   onElaborate,
   onQuote,
   onDismiss,
 }: {
   selection: SelectionDraft;
+  onDefine: () => void;
   onElaborate: () => void;
   onQuote: () => void;
   onDismiss: () => void;
@@ -478,9 +503,9 @@ function SelectionToolbar({
       className="selection-toolbar"
       style={{
         left: Math.max(
-          Math.min(205, window.innerWidth / 2),
+          Math.min(250, window.innerWidth / 2),
           Math.min(
-            window.innerWidth - Math.min(205, window.innerWidth / 2),
+            window.innerWidth - Math.min(250, window.innerWidth / 2),
             rect.left + rect.width / 2,
           ),
         ),
@@ -491,6 +516,9 @@ function SelectionToolbar({
       <span className="selection-toolbar__quote">
         “<InlineMath source={selection.quote} />”
       </span>
+      <button className="selection-define-button" type="button" onClick={onDefine}>
+        <BookOpen size={14} /> Define
+      </button>
       <button type="button" onClick={onElaborate}>
         <CornerUpRight size={14} /> Elaborate
       </button>
@@ -508,6 +536,122 @@ function SelectionToolbar({
       >
         <X size={13} />
       </button>
+    </div>
+  );
+}
+
+function DefinitionPopover({
+  definition,
+  rect,
+  getAnchorRect,
+  onStop,
+  onDismiss,
+}: {
+  definition: InlineDefinition;
+  rect: SelectionDraft["rect"];
+  getAnchorRect?: () => SelectionDraft["rect"];
+  onStop: () => void;
+  onDismiss: () => void;
+}) {
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const [anchorRect, setAnchorRect] = useState(rect);
+  const [position, setPosition] = useState({ left: rect.left, top: rect.top });
+
+  useEffect(() => setAnchorRect(rect), [rect]);
+
+  useEffect(() => {
+    const popover = popoverRef.current;
+    if (!popover) return;
+    const place = () => {
+      const bounds = popover.getBoundingClientRect();
+      const left = Math.min(
+        window.innerWidth - bounds.width - 12,
+        Math.max(12, anchorRect.left + anchorRect.width / 2 - bounds.width / 2),
+      );
+      const below = anchorRect.top + anchorRect.height + 10;
+      const preferredTop =
+        below + bounds.height <= window.innerHeight - 12
+          ? below
+          : anchorRect.top - bounds.height - 10;
+      const top = Math.min(
+        window.innerHeight - bounds.height - 12,
+        Math.max(12, preferredTop),
+      );
+      setPosition({ left, top });
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(popover);
+    window.addEventListener("resize", place);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", place);
+    };
+  }, [definition.id, definition.content, definition.pending, anchorRect]);
+
+  useEffect(() => {
+    const dismissOnPointer = (event: PointerEvent) => {
+      if (popoverRef.current?.contains(event.target as Node)) return;
+      if (definition.pending) return;
+      onDismiss();
+    };
+    const dismissOnKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onDismiss();
+    };
+    const dismissOnScroll = (event: Event) => {
+      if (
+        event.target instanceof Node &&
+        popoverRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      if (definition.pending) {
+        const nextRect = getAnchorRect?.();
+        if (nextRect && (nextRect.width || nextRect.height)) {
+          setAnchorRect(nextRect);
+        }
+        return;
+      }
+      onDismiss();
+    };
+    document.addEventListener("pointerdown", dismissOnPointer);
+    document.addEventListener("keydown", dismissOnKey);
+    document.addEventListener("scroll", dismissOnScroll, true);
+    return () => {
+      document.removeEventListener("pointerdown", dismissOnPointer);
+      document.removeEventListener("keydown", dismissOnKey);
+      document.removeEventListener("scroll", dismissOnScroll, true);
+    };
+  }, [definition.pending, getAnchorRect, onDismiss]);
+
+  return (
+    <div
+      className="definition-popover"
+      ref={popoverRef}
+      role="dialog"
+      aria-label="Definition"
+      style={{ left: position.left, top: position.top }}
+    >
+      <header>
+        <span><BookOpen size={13} /> Definition</span>
+        <button type="button" aria-label="Close definition" onClick={onDismiss}>
+          <X size={13} />
+        </button>
+      </header>
+      {definition.pending ? (
+        <div className="definition-popover__loading" aria-live="polite">
+          <span /> Defining…
+          <button type="button" onClick={onStop}>Stop</button>
+        </div>
+      ) : (
+        <MathBlock
+          className={definition.error ? "definition-popover__error" : ""}
+          source={definition.content}
+        />
+      )}
+      {!definition.pending && definition.generation && (
+        <footer>{generationDetails(definition.generation)}</footer>
+      )}
     </div>
   );
 }
@@ -692,6 +836,13 @@ export default function App() {
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [selection, setSelection] = useState<SelectionDraft | null>(null);
   const [draft, setDraft] = useState<SelectionDraft | null>(null);
+  const [definitionPopover, setDefinitionPopover] = useState<{
+    chatId: string;
+    nodeId: string;
+    definitionId: string;
+    rect: SelectionDraft["rect"];
+    getAnchorRect?: () => SelectionDraft["rect"];
+  } | null>(null);
   const draftReturnView = useRef<{
     chatId: string;
     nodeId: string;
@@ -873,6 +1024,9 @@ export default function App() {
       }),
     }));
     setSelection(null);
+    setDefinitionPopover((current) =>
+      current && removedIds.has(current.nodeId) ? null : current,
+    );
     setComposerInsertion((current) =>
       current && removedIds.has(current.nodeId) ? null : current,
     );
@@ -972,6 +1126,7 @@ export default function App() {
       setFocusMaximized(Boolean(chat && nodeId !== chat.rootId && requestedView.maximized));
       setDraft(null);
       setSelection(null);
+      setDefinitionPopover(null);
       setChatMenuOpen(false);
       setBranchMenuOpen(false);
     };
@@ -1074,6 +1229,7 @@ export default function App() {
     const close = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setSelection(null);
+        setDefinitionPopover(null);
         window.getSelection()?.removeAllRanges();
         closeElaborationDraft();
         setSettingsOpen(false);
@@ -1157,6 +1313,35 @@ export default function App() {
             messages,
             messageRevisions,
             responseRevisions,
+          },
+        },
+      };
+    });
+  };
+
+  const updateDefinition = (
+    chatId: string,
+    nodeId: string,
+    definitionId: string,
+    update: (definition: InlineDefinition) => InlineDefinition,
+  ) => {
+    updateChat(chatId, (chat) => {
+      const node = chat.nodes[nodeId];
+      if (!node?.definitions?.some((definition) => definition.id === definitionId)) {
+        return chat;
+      }
+      const updatedAt = timestamp();
+      return {
+        ...chat,
+        updatedAt,
+        nodes: {
+          ...chat.nodes,
+          [nodeId]: {
+            ...node,
+            updatedAt,
+            definitions: node.definitions.map((definition) =>
+              definition.id === definitionId ? update(definition) : definition,
+            ),
           },
         },
       };
@@ -1326,6 +1511,122 @@ export default function App() {
     }
   };
 
+  const askDefinition = async (
+    chat: ChatTree,
+    nodeId: string,
+    definition: InlineDefinition,
+  ) => {
+    if (!definition.requestId) return;
+    const node = chat.nodes[nodeId];
+    const sourceMessage = node
+      ? messagesForNode(node).find(
+          (message) => message.id === definition.anchor.sourceMessageId,
+        )
+      : null;
+    if (!node || !sourceMessage) {
+      updateDefinition(chat.id, nodeId, definition.id, (current) => ({
+        ...current,
+        content: "The selected message is no longer available.",
+        pending: false,
+        error: true,
+      }));
+      return;
+    }
+    const controller = new AbortController();
+    responseControllers.current.set(definition.id, controller);
+    try {
+      const result = await modelRequest(
+        definition.requestId,
+        {
+          provider: workspace.settings.provider,
+          localBaseUrl: workspace.settings.localBaseUrl,
+          model: workspace.settings.model,
+          reasoningEffort: workspace.settings.reasoningEffort,
+          maxOutputTokens: workspace.settings.maxOutputTokens,
+          customInstructions: workspace.settings.customInstructions,
+          context: [
+            {
+              title: node.title,
+              messages: [
+                {
+                  role: sourceMessage.role,
+                  content: sourceMessage.content,
+                },
+              ],
+            },
+          ],
+          message:
+            "Define or explain only the selected passage in one concise paragraph. Return the paragraph directly: no heading, list, preamble, follow-up question, or second paragraph. Preserve useful mathematical notation with inline LaTeX.",
+          anchor: definition.anchor,
+        },
+        () => undefined,
+        () => undefined,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      const content = oneParagraph(result.content);
+      updateDefinition(chat.id, nodeId, definition.id, (current) => ({
+        ...current,
+        content: content || "No definition was returned.",
+        pending: false,
+        error: result.stopped || !content,
+        generation: result.generation,
+      }));
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      updateDefinition(chat.id, nodeId, definition.id, (current) => ({
+        ...current,
+        content: error instanceof Error ? error.message : "The definition request failed",
+        pending: false,
+        error: true,
+        generation:
+          error instanceof GenerationStreamError ? error.generation : undefined,
+      }));
+    } finally {
+      if (responseControllers.current.get(definition.id) === controller) {
+        responseControllers.current.delete(definition.id);
+      }
+    }
+  };
+
+  const stopDefinition = async (
+    chatId: string,
+    nodeId: string,
+    definitionId: string,
+  ) => {
+    const chat = workspaceRef.current.chats.find((item) => item.id === chatId);
+    const definition = chat?.nodes[nodeId]?.definitions?.find(
+      (item) => item.id === definitionId,
+    );
+    if (!definition?.pending || !definition.requestId) return;
+    try {
+      const response = await fetch(
+        `/api/respond/${encodeURIComponent(definition.requestId)}/abort`,
+        { method: "POST" },
+      );
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({}))) as ApiError;
+        throw new Error(data.error ?? "The server could not stop this definition");
+      }
+      const data = (await response.json()) as {
+        stopped: boolean;
+        generation: GenerationMetrics;
+      };
+      responseControllers.current.get(definition.id)?.abort();
+      updateDefinition(chatId, nodeId, definitionId, (current) => ({
+        ...current,
+        content: "Definition stopped.",
+        pending: false,
+        error: true,
+        generation: data.generation,
+      }));
+    } catch (error) {
+      window.alert(
+        error instanceof Error ? error.message : "The definition could not be stopped",
+      );
+    }
+  };
+
   const stopResponse = async (nodeId: string, assistantId: string) => {
     if (!activeChat) return;
     const node = activeChat.nodes[nodeId];
@@ -1472,11 +1773,58 @@ export default function App() {
     }
   };
 
+  const resumeDefinition = async (pending: PendingGeneration) => {
+    const controller = new AbortController();
+    responseControllers.current.set(pending.assistantId, controller);
+    try {
+      const result = await resumeModelRequest(
+        pending.requestId,
+        () => undefined,
+        () => undefined,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      const content = oneParagraph(result.content);
+      updateDefinition(
+        pending.chatId,
+        pending.nodeId,
+        pending.assistantId,
+        (current) => ({
+          ...current,
+          content: content || "No definition was returned.",
+          pending: false,
+          error: result.stopped || !content,
+          generation: result.generation,
+        }),
+      );
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      updateDefinition(
+        pending.chatId,
+        pending.nodeId,
+        pending.assistantId,
+        (current) => ({
+          ...current,
+          content: error instanceof Error ? error.message : "The definition request failed",
+          pending: false,
+          error: true,
+          generation:
+            error instanceof GenerationStreamError ? error.generation : undefined,
+        }),
+      );
+    } finally {
+      if (responseControllers.current.get(pending.assistantId) === controller) {
+        responseControllers.current.delete(pending.assistantId);
+      }
+    }
+  };
+
   useEffect(() => {
     if (!loaded) return;
     pendingGenerations(workspace).forEach((pending) => {
       if (!responseControllers.current.has(pending.assistantId)) {
-        void resumeGeneration(pending);
+        if (pending.kind === "definition") void resumeDefinition(pending);
+        else void resumeGeneration(pending);
       }
     });
   }, [loaded, workspace.chats]);
@@ -2384,6 +2732,103 @@ export default function App() {
     setSelection(null);
   };
 
+  const defineSelection = () => {
+    if (!activeChat || !selection) return;
+    const node = activeChat.nodes[selection.sourceNodeId];
+    if (!node) return;
+    const liveSelection = window.getSelection();
+    const selectedRange =
+      liveSelection?.rangeCount && !liveSelection.isCollapsed
+        ? liveSelection.getRangeAt(0).cloneRange()
+        : null;
+    const getAnchorRect = selectedRange
+      ? () => selectedRange.getBoundingClientRect()
+      : undefined;
+    const clearNativeSelectionAfterHighlight = () => {
+      if (!selectedRange) return;
+      window.requestAnimationFrame(() => {
+        const current = window.getSelection();
+        if (!current?.rangeCount) return;
+        const range = current.getRangeAt(0);
+        if (
+          range.startContainer === selectedRange.startContainer &&
+          range.startOffset === selectedRange.startOffset &&
+          range.endContainer === selectedRange.endContainer &&
+          range.endOffset === selectedRange.endOffset
+        ) {
+          current.removeAllRanges();
+        }
+      });
+    };
+    const matchesSelection = (definition: InlineDefinition) =>
+        definition.anchor.sourceMessageId === selection.sourceMessageId &&
+        definition.anchor.blockIndex === selection.blockIndex &&
+        definition.anchor.quote === selection.quote;
+    const existing = (node.definitions ?? []).find(
+      (definition) => !definition.error && matchesSelection(definition),
+    );
+    if (existing) {
+      setDefinitionPopover({
+        chatId: activeChat.id,
+        nodeId: node.id,
+        definitionId: existing.id,
+        rect: selection.rect,
+        getAnchorRect,
+      });
+      setSelection(null);
+      clearNativeSelectionAfterHighlight();
+      return;
+    }
+
+    const createdAt = timestamp();
+    const definition: InlineDefinition = {
+      id: newId(),
+      anchor: {
+        sourceNodeId: selection.sourceNodeId,
+        sourceMessageId: selection.sourceMessageId,
+        quote: selection.quote,
+        blockIndex: selection.blockIndex,
+      },
+      content: "",
+      createdAt,
+      pending: true,
+      requestId: newId(),
+    };
+    const nextChat: ChatTree = {
+      ...activeChat,
+      updatedAt: createdAt,
+      nodes: {
+        ...activeChat.nodes,
+        [node.id]: {
+          ...node,
+          updatedAt: createdAt,
+          definitions: [
+            ...(node.definitions ?? []).filter(
+              (current) => !current.error || !matchesSelection(current),
+            ),
+            definition,
+          ],
+        },
+      },
+    };
+    setWorkspace((current) => ({
+      ...current,
+      chats: current.chats.map((chat) =>
+        chat.id === nextChat.id ? nextChat : chat,
+      ),
+    }));
+    setDefinitionPopover({
+      chatId: activeChat.id,
+      nodeId: node.id,
+      definitionId: definition.id,
+      rect: selection.rect,
+      getAnchorRect,
+    });
+    setSelection(null);
+    clearNativeSelectionAfterHighlight();
+    void askDefinition(nextChat, node.id, definition);
+  };
+
   if (!loaded) {
     return (
       <div className="loading-screen">
@@ -2401,6 +2846,12 @@ export default function App() {
   const leftPaneIsRoot = Boolean(
     activeChat && leftPaneNode && leftPaneNode.id === activeChat.rootId,
   );
+  const displayedDefinition =
+    definitionPopover && activeChat?.id === definitionPopover.chatId
+      ? activeChat.nodes[definitionPopover.nodeId]?.definitions?.find(
+          (definition) => definition.id === definitionPopover.definitionId,
+        ) ?? null
+      : null;
   const drawerResizeHandle = (
     <div
       className="drawer-resize-handle"
@@ -2899,6 +3350,15 @@ export default function App() {
               setDraft(null);
               setFocusMaximized(false);
             }}
+            onOpenDefinition={(definitionId, rect, getAnchorRect) =>
+              setDefinitionPopover({
+                chatId: activeChat.id,
+                nodeId: leftPaneNode.id,
+                definitionId,
+                rect,
+                getAnchorRect,
+              })
+            }
             onSend={(message) => sendToThread(leftPaneNode.id, message)}
             onStop={(assistantId) => stopResponse(leftPaneNode.id, assistantId)}
             onEditMessage={(revisionGroupId, content) =>
@@ -3130,6 +3590,15 @@ export default function App() {
               setActiveNodeId(id);
               setFocusMaximized(false);
             }}
+            onOpenDefinition={(definitionId, rect, getAnchorRect) =>
+              setDefinitionPopover({
+                chatId: activeChat.id,
+                nodeId: sideNode.id,
+                definitionId,
+                rect,
+                getAnchorRect,
+              })
+            }
             onSend={(message) => sendToThread(sideNode.id, message)}
             onStop={(assistantId) => stopResponse(sideNode.id, assistantId)}
             onEditMessage={(revisionGroupId, content) =>
@@ -3855,6 +4324,7 @@ export default function App() {
         <SelectionToolbar
           selection={selection}
           onDismiss={() => setSelection(null)}
+          onDefine={defineSelection}
           onQuote={quoteSelectionInThread}
           onElaborate={() => {
             if (activeChat && activeNode) {
@@ -3878,6 +4348,22 @@ export default function App() {
             setSelection(null);
             setFocusMaximized(false);
           }}
+        />
+      )}
+
+      {definitionPopover && displayedDefinition && (
+        <DefinitionPopover
+          definition={displayedDefinition}
+          rect={definitionPopover.rect}
+          getAnchorRect={definitionPopover.getAnchorRect}
+          onStop={() =>
+            void stopDefinition(
+              definitionPopover.chatId,
+              definitionPopover.nodeId,
+              definitionPopover.definitionId,
+            )
+          }
+          onDismiss={() => setDefinitionPopover(null)}
         />
       )}
     </div>

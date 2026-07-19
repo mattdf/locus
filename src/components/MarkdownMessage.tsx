@@ -1,12 +1,17 @@
 import { CornerUpRight, ExternalLink } from "lucide-react";
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { normalizeMathDelimiters } from "../lib/markdown";
-import type { HighlightAnchor, Message, SelectionDraft } from "../types";
+import type {
+  HighlightAnchor,
+  InlineDefinition,
+  Message,
+  SelectionDraft,
+} from "../types";
 import { InlineMath } from "./MathText";
 
 export interface LinkedAnchor {
@@ -28,8 +33,14 @@ interface MarkdownMessageProps {
   message: Message;
   nodeId: string;
   linkedAnchors: LinkedAnchor[];
+  definitions: InlineDefinition[];
   onSelect: (selection: SelectionDraft) => void;
   onOpenElaboration: (childId: string) => void;
+  onOpenDefinition: (
+    definitionId: string,
+    rect: SelectionDraft["rect"],
+    getAnchorRect?: () => SelectionDraft["rect"],
+  ) => void;
 }
 
 interface Point {
@@ -45,6 +56,16 @@ interface RangeTarget {
 interface BlockTarget {
   element: Element;
   childId: string;
+}
+
+interface DefinitionRangeTarget {
+  range: Range;
+  definitionId: string;
+}
+
+interface DefinitionBlockTarget {
+  element: Element;
+  definitionId: string;
 }
 
 function textMap(container: HTMLElement): { text: string; points: Point[] } {
@@ -142,14 +163,22 @@ function MarkdownMessageComponent({
   message,
   nodeId,
   linkedAnchors,
+  definitions,
   onSelect,
   onOpenElaboration,
+  onOpenDefinition,
 }: MarkdownMessageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const targetsRef = useRef<RangeTarget[]>([]);
   const blockTargetsRef = useRef<BlockTarget[]>([]);
+  const definitionTargetsRef = useRef<DefinitionRangeTarget[]>([]);
+  const definitionBlockTargetsRef = useRef<DefinitionBlockTarget[]>([]);
   const highlightName = useMemo(
     () => `elaboration-${message.id.replace(/[^a-zA-Z0-9-]/g, "")}`,
+    [message.id],
+  );
+  const definitionHighlightName = useMemo(
+    () => `definition-${message.id.replace(/[^a-zA-Z0-9-]/g, "")}`,
     [message.id],
   );
   const normalizedContent = useMemo(
@@ -212,6 +241,66 @@ function MarkdownMessageComponent({
     };
   }, [highlightName, linkedAnchors, message.content]);
 
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container || !definitions.length) return;
+
+    const ranges: Range[] = [];
+    const targets: DefinitionRangeTarget[] = [];
+    const styledBlocks: Element[] = [];
+    const blockTargets: DefinitionBlockTarget[] = [];
+
+    for (const definition of definitions) {
+      const block = container.children[definition.anchor.blockIndex];
+      const searchRoot = block instanceof HTMLElement ? block : container;
+      const { text, points } = textMap(searchRoot);
+      const quote = normalizedQuote(definition.anchor.quote);
+      const index = quote ? text.indexOf(quote) : -1;
+      if (index >= 0 && points[index] && points[index + quote.length - 1]) {
+        const start = points[index];
+        const end = points[index + quote.length - 1];
+        const range = document.createRange();
+        range.setStart(start.node, start.offset);
+        range.setEnd(end.node, end.offset + 1);
+        ranges.push(range);
+        targets.push({ range, definitionId: definition.id });
+        continue;
+      }
+
+      if (block) {
+        block.classList.add("has-linked-definition");
+        styledBlocks.push(block);
+        blockTargets.push({ element: block, definitionId: definition.id });
+      }
+    }
+
+    definitionTargetsRef.current = targets;
+    definitionBlockTargetsRef.current = blockTargets;
+    const css = CSS as typeof CSS & {
+      highlights?: { set: (name: string, value: unknown) => void; delete: (name: string) => void };
+    };
+    const HighlightConstructor = (
+      window as typeof window & { Highlight?: new (...ranges: Range[]) => unknown }
+    ).Highlight;
+    const style = document.createElement("style");
+    if (css.highlights && HighlightConstructor && ranges.length) {
+      css.highlights.set(
+        definitionHighlightName,
+        new HighlightConstructor(...ranges),
+      );
+      style.textContent = `::highlight(${definitionHighlightName}) { background: rgba(88, 166, 214, .3); text-decoration: underline; text-decoration-color: rgba(36, 112, 158, .62); text-underline-offset: 3px; }`;
+      document.head.appendChild(style);
+    }
+
+    return () => {
+      css.highlights?.delete(definitionHighlightName);
+      style.remove();
+      styledBlocks.forEach((block) => block.classList.remove("has-linked-definition"));
+      definitionTargetsRef.current = [];
+      definitionBlockTargetsRef.current = [];
+    };
+  }, [definitionHighlightName, definitions, message.content]);
+
   const captureSelection = () => {
     const container = containerRef.current;
     const selection = window.getSelection();
@@ -246,6 +335,41 @@ function MarkdownMessageComponent({
         const interactive =
           event.target instanceof Element ? event.target.closest("a, button") : null;
         if (interactive) return;
+
+        const definitionRangeMatch = definitionTargetsRef.current.find((target) =>
+          Array.from(target.range.getClientRects()).some(
+            (rect) =>
+              event.clientX >= rect.left &&
+              event.clientX <= rect.right &&
+              event.clientY >= rect.top &&
+              event.clientY <= rect.bottom,
+          ),
+        );
+        const definitionBlockMatch =
+          event.target instanceof Node
+            ? definitionBlockTargetsRef.current.find((target) =>
+                target.element.contains(event.target as Node),
+              )
+            : undefined;
+        const definitionMatch = definitionRangeMatch ?? definitionBlockMatch;
+        if (definitionMatch) {
+          const getAnchorRect = () => {
+            const bounds =
+            "range" in definitionMatch
+              ? definitionMatch.range.getBoundingClientRect()
+              : definitionMatch.element.getBoundingClientRect();
+            return {
+              left: bounds.left,
+              top: bounds.top,
+              width: bounds.width,
+              height: bounds.height,
+            };
+          };
+          const bounds = getAnchorRect();
+          event.preventDefault();
+          onOpenDefinition(definitionMatch.definitionId, bounds, getAnchorRect);
+          return;
+        }
 
         const rangeMatch = targetsRef.current.find((target) =>
           Array.from(target.range.getClientRects()).some(
@@ -325,10 +449,29 @@ function sameLinkedAnchors(left: LinkedAnchor[], right: LinkedAnchor[]): boolean
   );
 }
 
+function sameDefinitions(left: InlineDefinition[], right: InlineDefinition[]): boolean {
+  return (
+    left === right ||
+    (left.length === right.length &&
+      left.every((definition, index) => {
+        const candidate = right[index];
+        return (
+          definition.id === candidate.id &&
+          definition.anchor === candidate.anchor &&
+          definition.content === candidate.content &&
+          definition.pending === candidate.pending &&
+          definition.error === candidate.error &&
+          definition.generation === candidate.generation
+        );
+      }))
+  );
+}
+
 export const MarkdownMessage = memo(
   MarkdownMessageComponent,
   (left, right) =>
     left.nodeId === right.nodeId &&
     sameMessage(left.message, right.message) &&
-    sameLinkedAnchors(left.linkedAnchors, right.linkedAnchors),
+    sameLinkedAnchors(left.linkedAnchors, right.linkedAnchors) &&
+    sameDefinitions(left.definitions, right.definitions),
 );

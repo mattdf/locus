@@ -16,8 +16,8 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   ChatTree,
-  GenerationMetrics,
   HighlightAnchor,
+  InlineDefinition,
   SelectionDraft,
   ThreadNode,
   ReasoningEffort,
@@ -26,13 +26,15 @@ import type {
   ProviderModelOption,
 } from "../types";
 import { childThreads, messagesForNode } from "../lib/tree";
+import { formatDuration, generationDetails } from "../lib/generation";
 import { applyMarkdownShortcut } from "../lib/textarea";
-import { compatibleReasoningEffort, providerLabel } from "../lib/providers";
+import { compatibleReasoningEffort } from "../lib/providers";
 import { Composer } from "./Composer";
 import { MarkdownMessage, type LinkedAnchor } from "./MarkdownMessage";
 import { MODEL_OPTIONS, REASONING_OPTIONS } from "./ModelPicker";
 
 const EMPTY_LINKED_ANCHORS: LinkedAnchor[] = [];
+const EMPTY_DEFINITIONS: InlineDefinition[] = [];
 
 interface ThreadViewProps {
   chat: ChatTree;
@@ -40,6 +42,11 @@ interface ThreadViewProps {
   side?: boolean;
   onSelect: (selection: SelectionDraft) => void;
   onOpenElaboration: (childId: string) => void;
+  onOpenDefinition: (
+    definitionId: string,
+    rect: SelectionDraft["rect"],
+    getAnchorRect?: () => SelectionDraft["rect"],
+  ) => void;
   onSend: (message: string) => void;
   onStop: (assistantId: string) => void;
   onEditMessage: (revisionGroupId: string, content: string) => void;
@@ -80,43 +87,6 @@ async function writeMarkdownToClipboard(markdown: string): Promise<void> {
   if (copiedSynchronously) return;
 
   await navigator.clipboard.writeText(markdown);
-}
-
-function formatDuration(durationMs: number): string {
-  if (durationMs < 1_000) return `${Math.max(1, Math.round(durationMs))} ms`;
-  if (durationMs < 60_000) {
-    const seconds = durationMs / 1_000;
-    return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)} s`;
-  }
-  const minutes = Math.floor(durationMs / 60_000);
-  const seconds = Math.round((durationMs % 60_000) / 1_000);
-  return `${minutes}m ${seconds}s`;
-}
-
-function generationDetails(generation: GenerationMetrics): string {
-  const duration = formatDuration(generation.durationMs);
-  const route = [
-    generation.provider ? providerLabel(generation.provider) : null,
-    generation.model,
-  ].filter(Boolean).join(" · ");
-  const prefix = route ? `${duration} · ${route}` : duration;
-  if (
-    generation.totalTokens === null ||
-    generation.inputTokens === null ||
-    generation.outputTokens === null ||
-    generation.reasoningTokens === null
-  ) {
-    return `${prefix} · token usage unavailable`;
-  }
-  const format = (value: number) => value.toLocaleString();
-  const costKind = generation.provider === "openrouter" ? "reported" : "estimated";
-  const cost =
-    typeof generation.totalCostUsd === "number"
-      ? generation.totalCostUsd < 0.0001
-        ? `< $0.0001 ${costKind}`
-        : `$${generation.totalCostUsd.toFixed(generation.totalCostUsd < 0.01 ? 5 : 4)} ${costKind}`
-      : "cost unavailable";
-  return `${prefix} · ${format(generation.totalTokens)} tokens total · ${format(generation.inputTokens)} input · ${format(generation.outputTokens)} generated (including ${format(generation.reasoningTokens)} reasoning) · ${cost}`;
 }
 
 function ThinkingIndicator({ startedAt }: { startedAt: string }) {
@@ -183,6 +153,7 @@ export function ThreadView({
   side,
   onSelect,
   onOpenElaboration,
+  onOpenDefinition,
   onSend,
   onStop,
   onEditMessage,
@@ -235,6 +206,15 @@ export function ThreadView({
     });
     return anchors;
   }, [children]);
+  const definitionsByMessage = useMemo(() => {
+    const definitions = new Map<string, InlineDefinition[]>();
+    (node.definitions ?? []).forEach((definition) => {
+      const messageDefinitions = definitions.get(definition.anchor.sourceMessageId);
+      if (messageDefinitions) messageDefinitions.push(definition);
+      else definitions.set(definition.anchor.sourceMessageId, [definition]);
+    });
+    return definitions;
+  }, [node.definitions]);
   const pendingAssistant = messages.find(
     (message) => message.role === "assistant" && message.pending,
   );
@@ -450,6 +430,7 @@ export function ThreadView({
             copyState?.messageId === message.id ? copyState.status : null;
           const linkedAnchors =
             linkedAnchorsByMessage.get(message.id) ?? EMPTY_LINKED_ANCHORS;
+          const definitions = definitionsByMessage.get(message.id) ?? EMPTY_DEFINITIONS;
           return (
             <article
               className={`message message--${message.role} ${message.error ? "message--error" : ""}`}
@@ -711,8 +692,10 @@ export function ThreadView({
                   message={message}
                   nodeId={node.id}
                   linkedAnchors={linkedAnchors}
+                  definitions={definitions}
                   onSelect={onSelect}
                   onOpenElaboration={onOpenElaboration}
+                  onOpenDefinition={onOpenDefinition}
                 />
                   {message.pending && (
                     <div className="streaming-status" aria-label="Locus is responding">
@@ -762,7 +745,7 @@ export function ThreadView({
         />
         {!side && (
           <p className="selection-tip">
-            Select any passage or equation to quote it here or open a focused elaboration.
+            Select any passage or equation to define it, quote it, or open a focused elaboration.
           </p>
         )}
       </div>
