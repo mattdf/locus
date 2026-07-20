@@ -29,6 +29,7 @@ import {
   Search,
   ServerCog,
   Settings2,
+  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   Sun,
@@ -44,6 +45,7 @@ import type {
   PointerEvent as ReactPointerEvent,
 } from "react";
 import { Composer } from "./components/Composer";
+import { AdminAccountsModal } from "./components/AdminAccountsModal";
 import { InlineMath, MathBlock } from "./components/MathText";
 import { MODEL_OPTIONS, ModelPicker, REASONING_OPTIONS } from "./components/ModelPicker";
 import { ThreadView } from "./components/ThreadView";
@@ -980,6 +982,7 @@ export default function App({
   const [newMode, setNewMode] = useState<"ask" | "import">("ask");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [adminAccountsOpen, setAdminAccountsOpen] = useState(false);
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
   const [customInstructionsOpen, setCustomInstructionsOpen] = useState(false);
   const [customInstructionsDraft, setCustomInstructionsDraft] = useState("");
@@ -1037,6 +1040,9 @@ export default function App({
   );
 
   const activeChat = workspace.chats.find((chat) => chat.id === workspace.activeChatId) ?? null;
+  const isAdministrator = runtime.mode === "hosted" && Boolean(
+    runtime.user?.role?.split(",").includes("admin"),
+  );
   const rootNode = activeChat ? activeChat.nodes[activeChat.rootId] : null;
   const activeNode =
     activeChat && activeNodeId && activeChat.nodes[activeNodeId]
@@ -4430,6 +4436,23 @@ export default function App({
                       </span>
                       <ChevronRight size={13} />
                     </button>
+                    {isAdministrator && (
+                      <button
+                        className="custom-instructions-button"
+                        type="button"
+                        onClick={() => {
+                          setSettingsOpen(false);
+                          setAdminAccountsOpen(true);
+                        }}
+                      >
+                        <ShieldCheck size={15} />
+                        <span>
+                          <small>Administration</small>
+                          <strong>Manage accounts</strong>
+                        </span>
+                        <ChevronRight size={13} />
+                      </button>
+                    )}
                   </div>
                 </section>
               )}
@@ -4843,6 +4866,13 @@ export default function App({
             </footer>
           </section>
         </div>
+      )}
+
+      {adminAccountsOpen && isAdministrator && runtime.user && (
+        <AdminAccountsModal
+          currentUserId={runtime.user.id}
+          onClose={() => setAdminAccountsOpen(false)}
+        />
       )}
 
       {categoryEditor && (

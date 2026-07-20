@@ -541,7 +541,7 @@ function MarkdownMessageComponent({
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[rehypeKatex, rehypeHighlight]}
+        rehypePlugins={[[rehypeKatex, { strict: false }], rehypeHighlight]}
         components={MARKDOWN_COMPONENTS}
       >
         {normalizedContent}

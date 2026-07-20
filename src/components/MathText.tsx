@@ -28,7 +28,7 @@ export const InlineMath = memo(function InlineMath({
     <span className={`inline-math ${className}`.trim()}>
       <ReactMarkdown
         remarkPlugins={[remarkMath]}
-        rehypePlugins={[rehypeKatex]}
+        rehypePlugins={[[rehypeKatex, { strict: false }]]}
         components={INLINE_COMPONENTS}
       >
         {inlineSource}
@@ -44,7 +44,10 @@ export const MathBlock = memo(function MathBlock({
   const normalizedSource = useMemo(() => normalizeMathDelimiters(source), [source]);
   return (
     <div className={`math-block ${className}`.trim()}>
-      <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+      <ReactMarkdown
+        remarkPlugins={[remarkMath]}
+        rehypePlugins={[[rehypeKatex, { strict: false }]]}
+      >
         {normalizedSource}
       </ReactMarkdown>
     </div>

@@ -69,13 +69,18 @@ const aliceCookie = await signIn(alice);
 const runtime = await json(await request("/api/runtime", { cookie: aliceCookie }));
 assert(runtime.authenticated && runtime.user?.email === alice.email, "Authenticated runtime is incorrect");
 
-const createBob = await request("/api/auth/admin/create-user", {
+const createBob = await request("/api/admin/users", {
   method: "POST",
   cookie: aliceCookie,
   body: JSON.stringify({ ...bob, role: "user" }),
 });
 assert(createBob.ok, `Admin could not create a private account: ${JSON.stringify(await json(createBob))}`);
 const bobCookie = await signIn(bob);
+
+const adminUsers = await json(await request("/api/admin/users", { cookie: aliceCookie }));
+assert(adminUsers.users?.length === 2, "Admin account list did not include both private accounts");
+const forbiddenAdminUsers = await request("/api/admin/users", { cookie: bobCookie });
+assert(forbiddenAdminUsers.status === 403, "A non-admin account could access account management");
 
 const aliceInitial = await json(await request("/api/workspace", { cookie: aliceCookie }));
 assert(aliceInitial.revision === 0 && aliceInitial.state.chats.length === 0, "Alice did not receive a new workspace");
@@ -175,4 +180,47 @@ setbounds currentpicture to unitsquare xscaled canvasWidth yscaled canvasHeight;
 const metapostBody = await json(metapost);
 assert(metapost.ok && metapostBody.svg?.includes("<svg"), `MetaPost compilation failed: ${JSON.stringify(metapostBody)}`);
 
-console.log("Hosted integration checks passed: auth, isolation, conflicts, CSRF, encrypted BYOK, and MetaPost");
+const bobUser = adminUsers.users.find((user) => user.email === bob.email);
+assert(bobUser?.id, "Bob was missing from account management");
+const bobUserId = bobUser.id;
+const replacementPassword = "bob-replacement-password-123";
+const resetBobPassword = await request(`/api/admin/users/${bobUserId}/password`, {
+  method: "POST",
+  cookie: aliceCookie,
+  body: JSON.stringify({ password: replacementPassword }),
+});
+assert(resetBobPassword.ok, `Admin password reset failed: ${JSON.stringify(await json(resetBobPassword))}`);
+assert((await request("/api/workspace", { cookie: bobCookie })).status === 401, "Password reset did not revoke existing sessions");
+const replacementBob = { ...bob, password: replacementPassword };
+const replacementBobCookie = await signIn(replacementBob);
+
+const disableBob = await request(`/api/admin/users/${bobUserId}`, {
+  method: "PATCH",
+  cookie: aliceCookie,
+  body: JSON.stringify({ disabled: true }),
+});
+assert(disableBob.ok, `Admin could not disable an account: ${JSON.stringify(await json(disableBob))}`);
+assert((await request("/api/workspace", { cookie: replacementBobCookie })).status === 401, "Disabling an account did not revoke its sessions");
+const disabledSignIn = await request("/api/auth/sign-in/email", {
+  method: "POST",
+  body: JSON.stringify({ email: bob.email, password: replacementPassword }),
+});
+assert(!disabledSignIn.ok, "A disabled account could still sign in");
+
+const enableBob = await request(`/api/admin/users/${bobUserId}`, {
+  method: "PATCH",
+  cookie: aliceCookie,
+  body: JSON.stringify({ disabled: false }),
+});
+assert(enableBob.ok, `Admin could not enable an account: ${JSON.stringify(await json(enableBob))}`);
+await signIn(replacementBob);
+
+const deleteBob = await request(`/api/admin/users/${bobUserId}`, {
+  method: "DELETE",
+  cookie: aliceCookie,
+});
+assert(deleteBob.status === 204, `Admin could not delete an account: ${JSON.stringify(await json(deleteBob))}`);
+const finalUsers = await json(await request("/api/admin/users", { cookie: aliceCookie }));
+assert(finalUsers.users?.length === 1 && finalUsers.users[0].email === alice.email, "Deleted account remained in account management");
+
+console.log("Hosted integration checks passed: admin accounts, auth, isolation, conflicts, CSRF, encrypted BYOK, and MetaPost");

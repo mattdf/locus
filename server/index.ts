@@ -6,6 +6,7 @@ import rateLimit from "express-rate-limit";
 import helmet from "helmet";
 import { fromNodeHeaders, toNodeHandler } from "better-auth/node";
 import { auth } from "./auth.ts";
+import { adminRouter } from "./admin-routes.ts";
 import { closePool, getPool, query } from "./db.ts";
 import { isHosted, locusMode, publicOrigin } from "./config.ts";
 import {
@@ -233,6 +234,8 @@ app.use("/api", async (request, response, next) => {
 function owner(response: express.Response): string {
   return String(response.locals.ownerUserId || LOCAL_OWNER);
 }
+
+app.use("/api/admin", adminRouter);
 
 app.get("/api/metapost/status", async (_request, response) => {
   response.json({ available: await metapostImageAvailable() });

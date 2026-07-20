@@ -14,7 +14,7 @@ import {
   Sparkles,
   Square,
 } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import type {
   ChatTree,
@@ -145,30 +145,61 @@ function InlineVisualizationMount({
 }) {
   const [mount, setMount] = useState<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
-    const article = messagesRef.current?.querySelector<HTMLElement>(
-      `[data-message-id="${CSS.escape(messageId)}"]`,
-    );
-    const markdown = article?.querySelector<HTMLElement>(".markdown-message");
-    if (!markdown) return;
-    const blocks = Array.from(markdown.children).filter(
-      (element) => !element.classList.contains("inline-visualization-slot"),
-    );
-    const block = blocks[visualization.anchor.blockIndex];
-    if (!block) return;
-
     const slot = document.createElement("div");
     slot.className = "inline-visualization-slot";
     slot.dataset.visualizationSlot = visualization.id;
     slot.dataset.blockIndex = String(visualization.anchor.blockIndex);
-    const existingSlots = Array.from(
-      markdown.querySelectorAll<HTMLElement>(
-        `:scope > .inline-visualization-slot[data-block-index="${visualization.anchor.blockIndex}"]`,
-      ),
-    );
-    const lastSlot = existingSlots.at(-1);
-    markdown.insertBefore(slot, lastSlot ? lastSlot.nextSibling : block.nextSibling);
+    let frame: number | null = null;
+    let attempts = 0;
+    let disposed = false;
+
+    const place = () => {
+      const article = messagesRef.current?.querySelector<HTMLElement>(
+        `article[data-message-id="${CSS.escape(messageId)}"]`,
+      );
+      const markdown = article?.querySelector<HTMLElement>(".markdown-message");
+      if (!markdown) return false;
+      const blocks = Array.from(markdown.children).filter(
+        (element) => !element.classList.contains("inline-visualization-slot"),
+      );
+      const block = blocks[visualization.anchor.blockIndex];
+      if (!block) return false;
+      if (slot.parentElement === markdown) return true;
+
+      const existingSlots = Array.from(
+        markdown.querySelectorAll<HTMLElement>(
+          `:scope > .inline-visualization-slot[data-block-index="${visualization.anchor.blockIndex}"]`,
+        ),
+      ).filter((candidate) => candidate !== slot);
+      const lastSlot = existingSlots.at(-1);
+      markdown.insertBefore(slot, lastSlot ? lastSlot.nextSibling : block.nextSibling);
+      return true;
+    };
+
+    const schedulePlacement = () => {
+      if (disposed || frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        attempts += 1;
+        if (!place() && attempts < 60) schedulePlacement();
+      });
+    };
+
+    const root = messagesRef.current;
+    const observer = root
+      ? new MutationObserver(() => {
+          if (slot.isConnected) return;
+          attempts = 0;
+          schedulePlacement();
+        })
+      : null;
+    observer?.observe(root!, { childList: true, subtree: true });
     setMount(slot);
+    if (!place()) schedulePlacement();
     return () => {
+      disposed = true;
+      observer?.disconnect();
+      if (frame !== null) window.cancelAnimationFrame(frame);
       setMount(null);
       slot.remove();
     };
@@ -261,6 +292,7 @@ export function ThreadView({
   const endRef = useRef<HTMLDivElement>(null);
   const copyResetTimer = useRef<number | null>(null);
   const scrollFrame = useRef<number | null>(null);
+  const visualizationScrollFrame = useRef<number | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [currentMessageIndex, setCurrentMessageIndex] = useState(0);
@@ -444,9 +476,34 @@ export function ThreadView({
       if (copyResetTimer.current !== null) {
         window.clearTimeout(copyResetTimer.current);
       }
+      if (visualizationScrollFrame.current !== null) {
+        window.cancelAnimationFrame(visualizationScrollFrame.current);
+      }
     },
     [],
   );
+
+  const focusVisualization = useCallback((visualizationId: string) => {
+    if (visualizationScrollFrame.current !== null) {
+      window.cancelAnimationFrame(visualizationScrollFrame.current);
+    }
+    let attempts = 0;
+    const focus = () => {
+      visualizationScrollFrame.current = null;
+      const target = messagesRef.current?.querySelector<HTMLElement>(
+        `[data-visualization-id="${CSS.escape(visualizationId)}"]`,
+      );
+      if (target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
+      attempts += 1;
+      if (attempts < 30) {
+        visualizationScrollFrame.current = window.requestAnimationFrame(focus);
+      }
+    };
+    focus();
+  }, []);
 
   const copyResponse = async (messageId: string, markdown: string) => {
     if (copyResetTimer.current !== null) {
@@ -839,11 +896,7 @@ export function ThreadView({
                   onSelect={onSelect}
                   onOpenElaboration={onOpenElaboration}
                   onOpenDefinition={onOpenDefinition}
-                  onOpenVisualization={(visualizationId) => {
-                    messagesRef.current
-                      ?.querySelector<HTMLElement>(`[data-visualization-id="${CSS.escape(visualizationId)}"]`)
-                      ?.scrollIntoView({ behavior: "smooth", block: "center" });
-                  }}
+                  onOpenVisualization={focusVisualization}
                 />
                   {visualizations.map((visualization) => (
                     <InlineVisualizationMount

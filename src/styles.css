@@ -3475,6 +3475,306 @@ body.resizing-drawer {
   flex-direction: column;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.settings-modal--accounts {
+  display: flex;
+  width: min(900px, 100%);
+  max-height: calc(100vh - 48px);
+  flex-direction: column;
+}
+
+.admin-accounts {
+  min-height: 0;
+  margin-top: 16px;
+  overflow-y: auto;
+}
+
+.admin-account-create,
+.admin-account-list,
+.admin-password-reset {
+  padding: 13px;
+  background: rgba(255, 255, 255, 0.34);
+  border: 1px solid #ddd9cf;
+  border-radius: 9px;
+}
+
+.admin-account-create > header > div,
+.admin-account-list > header > div,
+.admin-password-reset > div,
+.admin-account-row__identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.admin-account-create > header span,
+.admin-account-list > header span,
+.admin-password-reset > div > span,
+.admin-account-row__identity > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.admin-account-create > header strong,
+.admin-account-list > header strong,
+.admin-password-reset strong {
+  color: #394640;
+  font-size: 10px;
+}
+
+.admin-account-create > header small,
+.admin-account-list > header small,
+.admin-password-reset small {
+  color: #88918c;
+  font-size: 8px;
+}
+
+.admin-account-create__fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 11px;
+}
+
+.admin-account-create__fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.admin-account-create__fields label > span {
+  color: #78817d;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.admin-account-create__fields input,
+.admin-account-create__fields select,
+.admin-password-reset input,
+.admin-account-row__actions select {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 9px;
+  color: var(--ink);
+  background: white;
+  border: 1px solid #d8d5cc;
+  border-radius: 6px;
+  outline: 0;
+  font-size: 10px;
+}
+
+.admin-account-create__fields input:focus,
+.admin-account-create__fields select:focus,
+.admin-password-reset input:focus,
+.admin-account-row__actions select:focus {
+  border-color: rgba(13, 112, 101, 0.55);
+  box-shadow: 0 0 0 3px rgba(13, 112, 101, 0.08);
+}
+
+.admin-account-create > .primary-button {
+  margin-top: 10px;
+}
+
+.admin-account-list {
+  margin-top: 10px;
+}
+
+.admin-account-list > header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.admin-account-list > header > button {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  color: #6e7974;
+  background: transparent;
+  border: 1px solid #d8d5cc;
+  border-radius: 6px;
+  cursor: pointer;
+  place-items: center;
+}
+
+.admin-account-list > header > button:disabled {
+  opacity: 0.45;
+}
+
+.admin-account-list__rows {
+  margin-top: 9px;
+  border-top: 1px solid #e3dfd6;
+}
+
+.admin-account-row {
+  display: grid;
+  min-height: 61px;
+  grid-template-columns: minmax(190px, 1.25fr) minmax(125px, .7fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid #e3dfd6;
+}
+
+.admin-account-row[data-disabled] {
+  opacity: 0.62;
+}
+
+.admin-account-row__identity > i {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 auto;
+  color: var(--accent);
+  background: rgba(13, 112, 101, 0.08);
+  border-radius: 50%;
+  place-items: center;
+}
+
+.admin-account-row__identity strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #35413c;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-account-row__identity strong > em {
+  padding: 2px 5px;
+  margin-left: 6px;
+  color: var(--accent-dark);
+  background: rgba(13, 112, 101, 0.08);
+  border-radius: 999px;
+  font-size: 7px;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.admin-account-row__identity small,
+.admin-account-row__status small {
+  overflow: hidden;
+  color: #8a928e;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-account-row__status {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  color: #606c66;
+  font-size: 9px;
+}
+
+.admin-account-row__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+
+.admin-account-row__actions select {
+  min-height: 29px;
+  padding-right: 21px;
+}
+
+.admin-account-row__actions button,
+.admin-password-reset footer button:not(.primary-button) {
+  display: inline-flex;
+  min-height: 29px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  color: #59655f;
+  background: white;
+  border: 1px solid #d8d5cc;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.admin-account-row__actions button:disabled,
+.admin-password-reset footer button:disabled {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.admin-account-row__actions .admin-account-row__delete {
+  padding: 0 7px;
+  color: #a04f49;
+}
+
+.admin-password-reset {
+  display: grid;
+  grid-template-columns: minmax(190px, .8fr) minmax(220px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  border-color: rgba(13, 112, 101, 0.3);
+}
+
+.admin-password-reset footer {
+  display: flex;
+  gap: 5px;
+}
+
+.admin-password-reset .primary-button {
+  min-height: 29px;
+  margin: 0;
+}
+
+.admin-account-empty {
+  display: flex;
+  min-height: 80px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: #87908c;
+  font-size: 9px;
+}
+
+.admin-account-error {
+  padding: 8px 10px;
+  margin: 10px 0 0;
+  color: #8f403a;
+  background: rgba(175, 72, 64, 0.08);
+  border: 1px solid rgba(175, 72, 64, 0.2);
+  border-radius: 7px;
+  font-size: 9px;
+}
+
+@media (max-width: 760px) {
+  .admin-account-create__fields,
+  .admin-account-row,
+  .admin-password-reset {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-account-row__actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
+
 .settings-view {
   min-height: 0;
   padding-right: 3px;
@@ -5003,6 +5303,49 @@ body.resizing-drawer {
   background: #1b211e;
   border-color: #39413d;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
+}
+
+.app-shell[data-theme="dark"] .admin-account-create,
+.app-shell[data-theme="dark"] .admin-account-list,
+.app-shell[data-theme="dark"] .admin-password-reset {
+  background: rgba(255, 255, 255, 0.025);
+  border-color: #3a433f;
+}
+
+.app-shell[data-theme="dark"] .admin-account-create > header strong,
+.app-shell[data-theme="dark"] .admin-account-list > header strong,
+.app-shell[data-theme="dark"] .admin-password-reset strong,
+.app-shell[data-theme="dark"] .admin-account-row__identity strong {
+  color: #d5ddd9;
+}
+
+.app-shell[data-theme="dark"] .admin-account-create > header small,
+.app-shell[data-theme="dark"] .admin-account-list > header small,
+.app-shell[data-theme="dark"] .admin-password-reset small,
+.app-shell[data-theme="dark"] .admin-account-row__identity small,
+.app-shell[data-theme="dark"] .admin-account-row__status small {
+  color: #7e8883;
+}
+
+.app-shell[data-theme="dark"] .admin-account-list__rows,
+.app-shell[data-theme="dark"] .admin-account-row {
+  border-color: #303835;
+}
+
+.app-shell[data-theme="dark"] .admin-account-create__fields input,
+.app-shell[data-theme="dark"] .admin-account-create__fields select,
+.app-shell[data-theme="dark"] .admin-password-reset input,
+.app-shell[data-theme="dark"] .admin-account-row__actions select,
+.app-shell[data-theme="dark"] .admin-account-row__actions button,
+.app-shell[data-theme="dark"] .admin-password-reset footer button:not(.primary-button),
+.app-shell[data-theme="dark"] .admin-account-list > header > button {
+  color: #c7d0cb;
+  background: #151a18;
+  border-color: #3a433f;
+}
+
+.app-shell[data-theme="dark"] .admin-account-row__status {
+  color: #aab4af;
 }
 
 .app-shell[data-theme="dark"] .settings-modal > p {
