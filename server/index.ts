@@ -7,6 +7,7 @@ import helmet from "helmet";
 import { fromNodeHeaders, toNodeHandler } from "better-auth/node";
 import { auth } from "./auth.ts";
 import { adminRouter } from "./admin-routes.ts";
+import { publicSharesRouter, sharesRouter } from "./shares.ts";
 import { closePool, getPool, query } from "./db.ts";
 import { isHosted, locusMode, publicOrigin } from "./config.ts";
 import {
@@ -93,6 +94,12 @@ app.use(helmet({
     : false,
   referrerPolicy: { policy: "no-referrer" },
 }));
+
+app.use("/share", (_request, response, next) => {
+  response.setHeader("X-Robots-Tag", "noindex, nofollow, noarchive");
+  response.setHeader("Cache-Control", "no-store");
+  next();
+});
 
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true });
@@ -204,6 +211,10 @@ app.post("/api/setup/bootstrap", async (request, response, next) => {
   }
 });
 
+// Capability URLs are intentionally readable without a Locus session. They
+// expose only immutable, server-created snapshots and cannot be enumerated.
+app.use("/api/public/shares", publicSharesRouter);
+
 app.use("/api", async (request, response, next) => {
   if (
     ["/health", "/ready", "/runtime", "/setup/bootstrap"].includes(request.path) ||
@@ -236,6 +247,7 @@ function owner(response: express.Response): string {
 }
 
 app.use("/api/admin", adminRouter);
+app.use("/api/shares", sharesRouter);
 
 app.get("/api/metapost/status", async (_request, response) => {
   response.json({ available: await metapostImageAvailable() });

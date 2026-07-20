@@ -45,6 +45,7 @@ interface ThreadViewProps {
   chat: ChatTree;
   node: ThreadNode;
   side?: boolean;
+  readOnly?: boolean;
   onSelect: (selection: SelectionDraft) => void;
   onOpenElaboration: (childId: string) => void;
   onOpenDefinition: (
@@ -131,6 +132,7 @@ function InlineVisualizationMount({
   onCompile,
   onStop,
   onDelete,
+  readOnly,
 }: {
   messagesRef: RefObject<HTMLDivElement | null>;
   messageId: string;
@@ -142,6 +144,7 @@ function InlineVisualizationMount({
   onCompile: (visualizationId: string, source: string) => void;
   onStop: (visualizationId: string) => void;
   onDelete: (visualizationId: string) => void;
+  readOnly?: boolean;
 }) {
   const [mount, setMount] = useState<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
@@ -215,6 +218,7 @@ function InlineVisualizationMount({
           onCompile={onCompile}
           onStop={onStop}
           onDelete={onDelete}
+          readOnly={readOnly}
         />,
         mount,
       )
@@ -262,6 +266,7 @@ export function ThreadView({
   chat,
   node,
   side,
+  readOnly = false,
   onSelect,
   onOpenElaboration,
   onOpenDefinition,
@@ -642,7 +647,7 @@ export function ThreadView({
                         : "You"}
                   </span>
                 </span>
-                {message.role === "user" && revisionGroupId && (
+                {!readOnly && message.role === "user" && revisionGroupId && (
                   <span className="message__controls">
                     {revisionGroup && (
                       <RevisionSwitcher
@@ -671,7 +676,7 @@ export function ThreadView({
                 )}
                 {message.role === "assistant" && !message.pending && (
                   <span className="message__controls">
-                    {responseRevisionGroup && responseRevisionGroupId && (
+                    {!readOnly && responseRevisionGroup && responseRevisionGroupId && (
                       <RevisionSwitcher
                         label="response"
                         activeIndex={activeResponseIndex}
@@ -722,7 +727,7 @@ export function ThreadView({
                         <span>Print</span>
                       </button>
                     )}
-                    <span
+                    {!readOnly && <span
                       className="regenerate-response-control"
                       data-message-id={message.id}
                     >
@@ -842,7 +847,7 @@ export function ThreadView({
                           </button>
                         </div>
                       )}
-                    </span>
+                    </span>}
                   </span>
                 )}
               </div>
@@ -911,6 +916,7 @@ export function ThreadView({
                       onCompile={onCompileVisualization}
                       onStop={onStopVisualization}
                       onDelete={onDeleteVisualization}
+                      readOnly={readOnly}
                     />
                   ))}
                   {message.pending && (
@@ -934,7 +940,7 @@ export function ThreadView({
         })}
         <div ref={endRef} />
       </div>
-      <div className="thread-composer-wrap">
+      {!readOnly && <div className="thread-composer-wrap">
         {pendingAssistant && (
           <button
             className="stop-response-button"
@@ -964,7 +970,7 @@ export function ThreadView({
             Select any passage or equation to define, visualize, quote, or elaborate on it.
           </p>
         )}
-      </div>
+      </div>}
     </div>
   );
 }

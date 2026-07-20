@@ -129,6 +129,68 @@ const missingOrigin = await request("/api/workspace/sync", {
 });
 assert(missingOrigin.status === 403, "A cookie-authenticated mutation without Origin was accepted");
 
+const unauthenticatedShares = await request("/api/shares");
+assert(unauthenticatedShares.status === 401, "Private share management was available without authentication");
+const createShare = await request("/api/shares", {
+  method: "POST",
+  cookie: aliceCookie,
+  body: JSON.stringify({ chatId: "alice-chat" }),
+});
+const createdShare = await json(createShare);
+assert(
+  createShare.status === 201 && /^\/share\/[A-Za-z0-9_-]{43}$/.test(createdShare.share?.path ?? ""),
+  `Could not create a shared snapshot: ${JSON.stringify(createdShare)}`,
+);
+const shareToken = createdShare.share.path.split("/").at(-1);
+const publicSnapshot = await json(await request(`/api/public/shares/${shareToken}`));
+assert(
+  publicSnapshot.chat?.nodes?.["alice-root"]?.messages?.[0]?.content === "$x^2$",
+  "The public snapshot did not contain the shared chat",
+);
+const listedShares = await json(await request("/api/shares", { cookie: aliceCookie }));
+assert(listedShares.shares?.length === 1, "The owner could not list the shared snapshot");
+
+const mutateOriginal = await request("/api/workspace/sync", {
+  method: "POST",
+  cookie: aliceCookie,
+  body: JSON.stringify({
+    baseRevision: 1,
+    upsertChats: [{
+      id: "alice-chat",
+      title: "Alice private chat",
+      categoryId: "private-category",
+      rootId: "alice-root",
+      nodes: {
+        "alice-root": {
+          id: "alice-root",
+          parentId: null,
+          title: "Alice private chat",
+          messages: [{ id: "alice-source", role: "source", content: "$y^3$", createdAt: now }],
+          createdAt: now,
+          updatedAt: new Date(Date.now() + 1000).toISOString(),
+        },
+      },
+      createdAt: now,
+      updatedAt: new Date(Date.now() + 1000).toISOString(),
+    }],
+  }),
+});
+assert(mutateOriginal.ok, "Could not update the original after sharing");
+const unchangedSnapshot = await json(await request(`/api/public/shares/${shareToken}`));
+assert(
+  unchangedSnapshot.chat?.nodes?.["alice-root"]?.messages?.[0]?.content === "$x^2$",
+  "The public snapshot changed when its original chat changed",
+);
+const revokeShare = await request(`/api/shares/${createdShare.share.id}`, {
+  method: "DELETE",
+  cookie: aliceCookie,
+});
+assert(revokeShare.status === 204, "The owner could not revoke a shared snapshot");
+assert(
+  (await request(`/api/public/shares/${shareToken}`)).status === 404,
+  "A revoked shared snapshot remained public",
+);
+
 const bobWorkspace = await json(await request("/api/workspace", { cookie: bobCookie }));
 assert(bobWorkspace.revision === 0 && bobWorkspace.state.chats.length === 0, "Bob received Alice workspace data");
 
@@ -223,4 +285,4 @@ assert(deleteBob.status === 204, `Admin could not delete an account: ${JSON.stri
 const finalUsers = await json(await request("/api/admin/users", { cookie: aliceCookie }));
 assert(finalUsers.users?.length === 1 && finalUsers.users[0].email === alice.email, "Deleted account remained in account management");
 
-console.log("Hosted integration checks passed: admin accounts, auth, isolation, conflicts, CSRF, encrypted BYOK, and MetaPost");
+console.log("Hosted integration checks passed: admin accounts, auth, sharing, isolation, conflicts, CSRF, encrypted BYOK, and MetaPost");

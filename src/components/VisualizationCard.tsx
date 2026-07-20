@@ -28,6 +28,7 @@ interface VisualizationCardProps {
   onCompile: (visualizationId: string, source: string) => void;
   onStop: (visualizationId: string) => void;
   onDelete: (visualizationId: string) => void;
+  readOnly?: boolean;
 }
 
 function downloadText(contents: string, filename: string, type: string) {
@@ -62,6 +63,7 @@ export function VisualizationCard({
   onCompile,
   onStop,
   onDelete,
+  readOnly = false,
 }: VisualizationCardProps) {
   const [hint, setHint] = useState(visualization.hint);
   const [source, setSource] = useState(visualization.metapostSource ?? "");
@@ -149,7 +151,7 @@ export function VisualizationCard({
               <Maximize2 size={13} />
             </button>
           )}
-          {visualization.metapostSource && !busy && (
+          {!readOnly && visualization.metapostSource && !busy && (
             <button
               type="button"
               aria-label={fixing ? "Close visualization fix instructions" : "Fix visualization with AI"}
@@ -162,7 +164,7 @@ export function VisualizationCard({
               {fixing ? <X size={13} /> : <><Wrench size={12} /> Fix</>}
             </button>
           )}
-          {visualization.metapostSource && !busy && (
+          {!readOnly && visualization.metapostSource && !busy && (
             <button
               type="button"
               aria-label={editingSource ? "Close MetaPost source editor" : "Edit MetaPost source"}
@@ -175,7 +177,7 @@ export function VisualizationCard({
               {editingSource ? <X size={13} /> : <Pencil size={13} />}
             </button>
           )}
-          <button
+          {!readOnly && <button
             type="button"
             aria-label="Delete visualization"
             title="Delete visualization"
@@ -183,7 +185,7 @@ export function VisualizationCard({
             onClick={() => onDelete(visualization.id)}
           >
             <Trash2 size={13} />
-          </button>
+          </button>}
         </div>
       </header>
 
@@ -192,7 +194,7 @@ export function VisualizationCard({
         <MathBlock source={visualization.anchor.quote} />
       </details>
 
-      {fixing && !busy && (
+      {!readOnly && fixing && !busy && (
         <div className="visualization-card__fix">
           <label htmlFor={`visualization-fix-${visualization.id}`}>What should change?</label>
           <textarea
@@ -224,7 +226,7 @@ export function VisualizationCard({
         </div>
       )}
 
-      {visualization.status === "draft" && (
+      {!readOnly && visualization.status === "draft" && (
         <div className="visualization-card__draft">
           <label htmlFor={`visualization-hint-${visualization.id}`}>Visualization hint <small>optional</small></label>
           <textarea
@@ -248,7 +250,7 @@ export function VisualizationCard({
         </div>
       )}
 
-      {busy && (
+      {!readOnly && busy && (
         <div className="visualization-card__progress">
           <WorkingStatus
             label={visualization.status === "generating" ? "Writing MetaPost" : "Compiling in sandbox"}
@@ -269,7 +271,7 @@ export function VisualizationCard({
         </figure>
       )}
 
-      {editingSource && (
+      {!readOnly && editingSource && (
         <div className="visualization-card__source-editor">
           <label htmlFor={`metapost-source-${visualization.id}`}>MetaPost figure body</label>
           <textarea
@@ -294,7 +296,7 @@ export function VisualizationCard({
         </div>
       )}
 
-      {visualization.status === "error" && (
+      {!readOnly && visualization.status === "error" && (
         <div className="visualization-card__error" role="alert">
           <strong>{visualization.errorStage === "compile" ? "Compilation failed" : "Generation failed"}</strong>
           <p>{visualization.errorMessage}</p>
@@ -315,7 +317,7 @@ export function VisualizationCard({
         </div>
       )}
 
-      {(visualization.status === "ready" || visualization.status === "error") && visualization.metapostSource && (
+      {!readOnly && (visualization.status === "ready" || visualization.status === "error") && visualization.metapostSource && (
         <footer>
           <span>
             {visualization.generation ? generationDetails(visualization.generation) : "Generated source"}

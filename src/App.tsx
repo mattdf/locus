@@ -15,6 +15,8 @@ import {
   GitBranch,
   Hash,
   KeyRound,
+  Link2,
+  LoaderCircle,
   LogOut,
   Menu,
   Maximize2,
@@ -27,6 +29,7 @@ import {
   Plus,
   Quote,
   Search,
+  Share2,
   ServerCog,
   Settings2,
   ShieldCheck,
@@ -46,6 +49,11 @@ import type {
 } from "react";
 import { Composer } from "./components/Composer";
 import { AdminAccountsModal } from "./components/AdminAccountsModal";
+import {
+  ShareCreatedModal,
+  SharedChatsModal,
+  type SharedChatSummary,
+} from "./components/SharedChatsModal";
 import { InlineMath, MathBlock } from "./components/MathText";
 import { MODEL_OPTIONS, ModelPicker, REASONING_OPTIONS } from "./components/ModelPicker";
 import { ThreadView } from "./components/ThreadView";
@@ -983,6 +991,10 @@ export default function App({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [adminAccountsOpen, setAdminAccountsOpen] = useState(false);
+  const [sharedChatsOpen, setSharedChatsOpen] = useState(false);
+  const [shareCreating, setShareCreating] = useState(false);
+  const [shareResult, setShareResult] = useState<SharedChatSummary | null>(null);
+  const [shareError, setShareError] = useState("");
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
   const [customInstructionsOpen, setCustomInstructionsOpen] = useState(false);
   const [customInstructionsDraft, setCustomInstructionsDraft] = useState("");
@@ -1426,6 +1438,9 @@ export default function App({
         setCategoryMenuId(null);
         setCategoryEditor(null);
         setJsonImportOpen(false);
+        setSharedChatsOpen(false);
+        setShareResult(null);
+        setShareError("");
       }
     };
     window.addEventListener("keydown", close);
@@ -1437,6 +1452,43 @@ export default function App({
       ...current,
       chats: current.chats.map((chat) => (chat.id === chatId ? update(chat) : chat)),
     }));
+  };
+
+  const shareActiveChat = async () => {
+    const chatId = workspaceRef.current.activeChatId;
+    if (runtime.mode !== "hosted" || !chatId || shareCreating) return;
+    setShareCreating(true);
+    setShareError("");
+    try {
+      // Let the debounced workspace save enqueue, then wait for it. The server
+      // creates the snapshot from its own persisted copy, never from client JSON.
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 400));
+      await saveQueueRef.current;
+      const persistedChat = lastSavedWorkspaceRef.current?.chats.find((chat) => chat.id === chatId);
+      const currentChat = workspaceRef.current.chats.find((chat) => chat.id === chatId);
+      if (!persistedChat || !currentChat || persistedChat.updatedAt !== currentChat.updatedAt) {
+        throw new Error("This chat has not finished saving yet. Try sharing again in a moment.");
+      }
+      const response = await fetch("/api/shares", {
+        method: "POST",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId }),
+      });
+      const result = (await response.json().catch(() => ({}))) as {
+        share?: SharedChatSummary;
+        error?: string;
+      };
+      if (!response.ok || !result.share) {
+        throw new Error(result.error ?? "Could not create a public link");
+      }
+      setShareResult(result.share);
+    } catch (reason) {
+      setShareError(reason instanceof Error ? reason.message : "Could not create a public link");
+    } finally {
+      setShareCreating(false);
+    }
   };
 
   const updateAssistantMessage = (
@@ -3949,6 +4001,19 @@ export default function App({
               )}
             </div>
             <div className="pane-header__actions">
+              {runtime.mode === "hosted" && (
+                <button
+                  className="share-chat-button"
+                  type="button"
+                  aria-label="Create a public read-only snapshot"
+                  title="Create a public read-only snapshot"
+                  disabled={shareCreating}
+                  onClick={() => void shareActiveChat()}
+                >
+                  {shareCreating ? <LoaderCircle className="spin" size={14} /> : <Share2 size={14} />}
+                  <span>{shareCreating ? "Sharing…" : "Share"}</span>
+                </button>
+              )}
               <div className="header-popover-anchor">
                 <button
                   className="branch-stat branch-stat--button"
@@ -4244,6 +4309,19 @@ export default function App({
               )}
             </div>
             <div className="focus-header__actions">
+              {runtime.mode === "hosted" && (
+                <button
+                  className="share-chat-button focus-share-button"
+                  type="button"
+                  aria-label="Create a public read-only snapshot"
+                  title="Create a public read-only snapshot"
+                  disabled={shareCreating}
+                  onClick={() => void shareActiveChat()}
+                >
+                  {shareCreating ? <LoaderCircle className="spin" size={14} /> : <Share2 size={14} />}
+                  <span>{shareCreating ? "Sharing…" : "Share"}</span>
+                </button>
+              )}
               <button
                 className="icon-button danger"
                 type="button"
@@ -4453,6 +4531,21 @@ export default function App({
                         <ChevronRight size={13} />
                       </button>
                     )}
+                    <button
+                      className="custom-instructions-button"
+                      type="button"
+                      onClick={() => {
+                        setSettingsOpen(false);
+                        setSharedChatsOpen(true);
+                      }}
+                    >
+                      <Link2 size={15} />
+                      <span>
+                        <small>Public snapshots</small>
+                        <strong>Manage shared chats</strong>
+                      </span>
+                      <ChevronRight size={13} />
+                    </button>
                   </div>
                 </section>
               )}
@@ -4873,6 +4966,23 @@ export default function App({
           currentUserId={runtime.user.id}
           onClose={() => setAdminAccountsOpen(false)}
         />
+      )}
+
+      {sharedChatsOpen && runtime.mode === "hosted" && (
+        <SharedChatsModal onClose={() => setSharedChatsOpen(false)} />
+      )}
+
+      {shareResult && runtime.mode === "hosted" && (
+        <ShareCreatedModal share={shareResult} onClose={() => setShareResult(null)} />
+      )}
+
+      {shareError && (
+        <div className="share-error-toast" role="alert">
+          <span>{shareError}</span>
+          <button type="button" aria-label="Dismiss share error" onClick={() => setShareError("")}>
+            <X size={13} />
+          </button>
+        </div>
       )}
 
       {categoryEditor && (
