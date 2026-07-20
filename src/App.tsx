@@ -15,6 +15,7 @@ import {
   GitBranch,
   Hash,
   KeyRound,
+  LogOut,
   Menu,
   Maximize2,
   Minimize2,
@@ -33,6 +34,7 @@ import {
   Sun,
   Trash2,
   Upload,
+  UserRound,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -93,6 +95,7 @@ import {
   compatibleReasoningEffort,
   providerLabel,
 } from "./lib/providers";
+import type { RuntimeInfo } from "./runtime";
 
 const UNCATEGORIZED_CATEGORY_ID = "__uncategorized__";
 
@@ -179,6 +182,46 @@ interface ThreadScrollRequest {
   id: string;
   nodeId: string;
   anchor: HighlightAnchor;
+}
+
+interface HostedWorkspaceResponse {
+  state: WorkspaceState;
+  revision: number;
+}
+
+interface HostedWorkspaceSync {
+  baseRevision: number;
+  settings?: WorkspaceState["settings"];
+  categories?: ChatCategory[];
+  upsertChats?: ChatTree[];
+  deleteChatIds?: string[];
+  activeChatId?: string | null;
+}
+
+function workspaceSyncChanges(
+  before: WorkspaceState,
+  after: WorkspaceState,
+  baseRevision: number,
+): HostedWorkspaceSync | null {
+  const changes: HostedWorkspaceSync = { baseRevision };
+  if (JSON.stringify(before.settings) !== JSON.stringify(after.settings)) {
+    changes.settings = after.settings;
+  }
+  if (JSON.stringify(before.categories) !== JSON.stringify(after.categories)) {
+    changes.categories = after.categories;
+  }
+  const previousChats = new Map(before.chats.map((chat) => [chat.id, chat]));
+  const nextChatIds = new Set(after.chats.map((chat) => chat.id));
+  const upsertChats = after.chats.filter(
+    (chat) => JSON.stringify(previousChats.get(chat.id)) !== JSON.stringify(chat),
+  );
+  const deleteChatIds = before.chats
+    .filter((chat) => !nextChatIds.has(chat.id))
+    .map((chat) => chat.id);
+  if (upsertChats.length) changes.upsertChats = upsertChats;
+  if (deleteChatIds.length) changes.deleteChatIds = deleteChatIds;
+  if (before.activeChatId !== after.activeChatId) changes.activeChatId = after.activeChatId;
+  return Object.keys(changes).length === 1 ? null : changes;
 }
 
 function readViewLocation(): ViewLocation {
@@ -883,7 +926,7 @@ function NewChatScreen({
                 reasoningAriaLabel="Reasoning effort for new chat"
               />
             ) : (
-              <span>Saved locally · no model call</span>
+              <span>Saved without a model call</span>
             )}
             <button
               className="primary-button"
@@ -901,9 +944,16 @@ function NewChatScreen({
   );
 }
 
-export default function App() {
+export default function App({
+  runtime,
+  onSignOut,
+}: {
+  runtime: RuntimeInfo;
+  onSignOut: () => Promise<void>;
+}) {
   const [workspace, setWorkspace] = useState<WorkspaceState>(DEFAULT_STATE);
   const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [search, setSearch] = useState("");
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [selection, setSelection] = useState<SelectionDraft | null>(null);
@@ -968,6 +1018,9 @@ export default function App() {
   );
   const assistantDeltaFrame = useRef<number | null>(null);
   const workspaceRef = useRef(workspace);
+  const lastSavedWorkspaceRef = useRef<WorkspaceState | null>(null);
+  const hostedRevisionRef = useRef(0);
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const activeNodeIdRef = useRef(activeNodeId);
   const historyAction = useRef<"push" | "replace">("replace");
   workspaceRef.current = workspace;
@@ -1130,12 +1183,16 @@ export default function App() {
   };
 
   useEffect(() => {
-    fetch("/api/state")
+    setLoadError("");
+    const endpoint = runtime.mode === "hosted" ? "/api/workspace" : "/api/state";
+    fetch(endpoint, { credentials: "same-origin", cache: "no-store" })
       .then(async (response) => {
-        if (!response.ok) throw new Error("Could not load local chats");
-        return (await response.json()) as WorkspaceState;
+        if (!response.ok) throw new Error("Could not load your workspace");
+        return runtime.mode === "hosted"
+          ? ((await response.json()) as HostedWorkspaceResponse)
+          : ({ state: (await response.json()) as WorkspaceState, revision: 0 } satisfies HostedWorkspaceResponse);
       })
-      .then((state) => {
+      .then(({ state, revision }) => {
         const requestedView = readViewLocation();
         const chat = requestedView.chatId
           ? state.chats.find((item) => item.id === requestedView.chatId) ?? null
@@ -1145,6 +1202,8 @@ export default function App() {
             ? requestedView.nodeId
             : chat?.rootId ?? null;
         const nextState = { ...state, activeChatId: chat?.id ?? null };
+        hostedRevisionRef.current = revision;
+        lastSavedWorkspaceRef.current = nextState;
         workspaceRef.current = nextState;
         setWorkspace(nextState);
         setDrawerWidth(state.settings.focusDrawerWidth ?? 440);
@@ -1165,9 +1224,16 @@ export default function App() {
           Boolean(chat && requestedNode !== chat.rootId && requestedView.maximized),
         );
       })
-      .catch(() => setWorkspace(DEFAULT_STATE))
+      .catch((error) => {
+        if (runtime.mode === "local") {
+          lastSavedWorkspaceRef.current = DEFAULT_STATE;
+          setWorkspace(DEFAULT_STATE);
+        } else {
+          setLoadError(error instanceof Error ? error.message : "Could not load your workspace");
+        }
+      })
       .finally(() => setLoaded(true));
-  }, []);
+  }, [runtime.mode]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -1281,22 +1347,60 @@ export default function App() {
   }, [loaded, workspace.settings.provider, workspace.settings.localBaseUrl]);
 
   useEffect(() => {
-    if (!loaded) return;
+    if (!loaded || loadError) return;
     setSaveState("saving");
     const timeout = window.setTimeout(() => {
-      fetch("/api/state", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(workspace),
-      })
-        .then((response) => {
-          if (!response.ok) throw new Error("Save failed");
+      const target = workspace;
+      saveQueueRef.current = saveQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          if (runtime.mode === "local") {
+            const response = await fetch("/api/state", {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(target),
+            });
+            if (!response.ok) throw new Error("Save failed");
+            lastSavedWorkspaceRef.current = target;
+            setSaveState("saved");
+            return;
+          }
+
+          const baseline = lastSavedWorkspaceRef.current;
+          if (!baseline) throw new Error("Workspace has not finished loading");
+          const changes = workspaceSyncChanges(baseline, target, hostedRevisionRef.current);
+          if (!changes) {
+            setSaveState("saved");
+            return;
+          }
+          const response = await fetch("/api/workspace/sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify(changes),
+          });
+          const result = (await response.json().catch(() => ({}))) as {
+            revision?: number;
+            error?: string;
+          };
+          if (response.status === 401) {
+            window.location.reload();
+            throw new Error("Session expired");
+          }
+          if (response.status === 409) {
+            throw new Error("This workspace changed in another tab. Reload before editing further.");
+          }
+          if (!response.ok || !Number.isSafeInteger(result.revision)) {
+            throw new Error(result.error ?? "Save failed");
+          }
+          hostedRevisionRef.current = result.revision!;
+          lastSavedWorkspaceRef.current = target;
           setSaveState("saved");
         })
         .catch(() => setSaveState("error"));
     }, 350);
     return () => window.clearTimeout(timeout);
-  }, [loaded, workspace]);
+  }, [loaded, loadError, runtime.mode, workspace]);
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
@@ -3420,7 +3524,21 @@ export default function App() {
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="loading-screen loading-screen--error">
+        <div className="brand-mark"><GitBranch size={20} /></div>
+        <strong>Could not open your workspace</strong>
+        <span>{loadError}</span>
+        <button type="button" onClick={() => window.location.reload()}>Retry</button>
+      </div>
+    );
+  }
+
   const drawerOpen = Boolean(activeChat && (draft || sideNode));
+  const availableProviders = runtime.localProviderEnabled
+    ? PROVIDER_OPTIONS
+    : PROVIDER_OPTIONS.filter((provider) => provider.id !== "local");
   const activeBranchCount = activeChat ? Object.keys(activeChat.nodes).length - 1 : 0;
   const activePath = activeChat && sideNode ? threadPath(activeChat, sideNode.id) : [];
   const draftPath = activeChat && draft ? threadPath(activeChat, draft.sourceNodeId) : [];
@@ -3498,7 +3616,7 @@ export default function App() {
           <div className="brand">
             <div className="brand-mark"><GitBranch size={18} /></div>
             <span>Locus</span>
-            <small>LOCAL</small>
+            <small>{runtime.mode === "hosted" ? "CLOUD" : "LOCAL"}</small>
             <button
               className="sidebar-collapse-button"
               type="button"
@@ -3738,7 +3856,7 @@ export default function App() {
           <div className={`save-status save-status--${saveState}`}>
             <i />
             {saveState === "saved"
-              ? "Saved locally"
+              ? runtime.mode === "hosted" ? "Saved securely" : "Saved locally"
               : saveState === "saving"
                 ? "Saving…"
                 : "Save failed"}
@@ -4283,6 +4401,38 @@ export default function App() {
             </header>
 
             <div className="settings-view">
+              {runtime.mode === "hosted" && runtime.user && (
+                <section className="settings-view__section">
+                  <header>
+                    <h3>Account</h3>
+                    <p>Your chats, settings, usage, and provider keys are private to this account.</p>
+                  </header>
+                  <div className="settings-view__actions">
+                    <div className="custom-instructions-button account-summary">
+                      <UserRound size={15} />
+                      <span>
+                        <small>{runtime.user.email}</small>
+                        <strong>{runtime.user.name}</strong>
+                      </span>
+                    </div>
+                    <button
+                      className="custom-instructions-button"
+                      type="button"
+                      onClick={() => {
+                        setSettingsOpen(false);
+                        void onSignOut();
+                      }}
+                    >
+                      <LogOut size={15} />
+                      <span>
+                        <small>Account session</small>
+                        <strong>Sign out</strong>
+                      </span>
+                      <ChevronRight size={13} />
+                    </button>
+                  </div>
+                </section>
+              )}
               <section className="settings-view__section">
                 <header>
                   <h3>Generation</h3>
@@ -4300,7 +4450,7 @@ export default function App() {
                           selectProvider(event.target.value as ProviderId)
                         }
                       >
-                        {PROVIDER_OPTIONS.map((provider) => (
+                        {availableProviders.map((provider) => (
                           <option value={provider.id} key={provider.id}>
                             {provider.label} · {provider.note}
                           </option>
@@ -4678,7 +4828,7 @@ export default function App() {
               <div className={`save-status save-status--${saveState}`}>
                 <i />
                 {saveState === "saved"
-                  ? "Saved locally"
+                  ? runtime.mode === "hosted" ? "Saved securely" : "Saved locally"
                   : saveState === "saving"
                     ? "Saving…"
                     : "Save failed"}

@@ -1,0 +1,178 @@
+import pg from "pg";
+
+const base = process.env.LOCUS_TEST_BASE_URL || "http://127.0.0.1:8790";
+const origin = process.env.LOCUS_TEST_PUBLIC_ORIGIN || "https://127.0.0.1";
+const bootstrapToken = process.env.LOCUS_TEST_BOOTSTRAP_TOKEN || "test-bootstrap-token";
+const alice = {
+  email: "alice@locus.test",
+  name: "Alice",
+  password: "correct-horse-battery-staple",
+};
+const bob = {
+  email: "bob@locus.test",
+  name: "Bob",
+  password: "another-correct-horse-battery",
+};
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+async function request(pathname, { cookie, originHeader = true, ...options } = {}) {
+  return fetch(`${base}${pathname}`, {
+    ...options,
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...(originHeader && !["GET", "HEAD"].includes(options.method || "GET") ? { Origin: origin } : {}),
+      ...(cookie ? { Cookie: cookie } : {}),
+      "X-Real-IP": "203.0.113.10",
+      ...options.headers,
+    },
+  });
+}
+
+async function json(response) {
+  return response.json().catch(() => ({}));
+}
+
+function responseCookie(response) {
+  const values = typeof response.headers.getSetCookie === "function"
+    ? response.headers.getSetCookie()
+    : [response.headers.get("set-cookie")].filter(Boolean);
+  return values.map((value) => value.split(";", 1)[0]).join("; ");
+}
+
+async function signIn(account) {
+  const response = await request("/api/auth/sign-in/email", {
+    method: "POST",
+    body: JSON.stringify({ email: account.email, password: account.password, rememberMe: true }),
+  });
+  assert(response.ok, `Sign-in failed for ${account.email}: ${JSON.stringify(await json(response))}`);
+  const cookie = responseCookie(response);
+  assert(cookie.includes("locus"), "Sign-in did not return a Locus session cookie");
+  return cookie;
+}
+
+const health = await request("/api/health");
+assert(health.ok, "Hosted liveness check failed");
+
+const unauthenticatedWorkspace = await request("/api/workspace");
+assert(unauthenticatedWorkspace.status === 401, "Workspace was available without authentication");
+
+const bootstrap = await request("/api/setup/bootstrap", {
+  method: "POST",
+  body: JSON.stringify({ token: bootstrapToken, ...alice }),
+});
+assert(bootstrap.status === 201, `Bootstrap failed: ${JSON.stringify(await json(bootstrap))}`);
+
+const aliceCookie = await signIn(alice);
+const runtime = await json(await request("/api/runtime", { cookie: aliceCookie }));
+assert(runtime.authenticated && runtime.user?.email === alice.email, "Authenticated runtime is incorrect");
+
+const createBob = await request("/api/auth/admin/create-user", {
+  method: "POST",
+  cookie: aliceCookie,
+  body: JSON.stringify({ ...bob, role: "user" }),
+});
+assert(createBob.ok, `Admin could not create a private account: ${JSON.stringify(await json(createBob))}`);
+const bobCookie = await signIn(bob);
+
+const aliceInitial = await json(await request("/api/workspace", { cookie: aliceCookie }));
+assert(aliceInitial.revision === 0 && aliceInitial.state.chats.length === 0, "Alice did not receive a new workspace");
+const now = new Date().toISOString();
+const aliceSync = await request("/api/workspace/sync", {
+  method: "POST",
+  cookie: aliceCookie,
+  body: JSON.stringify({
+    baseRevision: 0,
+    categories: [{ id: "private-category", name: "Private", createdAt: now, updatedAt: now }],
+    upsertChats: [{
+      id: "alice-chat",
+      title: "Alice private chat",
+      categoryId: "private-category",
+      rootId: "alice-root",
+      nodes: {
+        "alice-root": {
+          id: "alice-root",
+          parentId: null,
+          title: "Alice private chat",
+          messages: [{ id: "alice-source", role: "source", content: "$x^2$", createdAt: now }],
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+      createdAt: now,
+      updatedAt: now,
+    }],
+    activeChatId: "alice-chat",
+  }),
+});
+assert(aliceSync.ok && (await json(aliceSync)).revision === 1, "Alice workspace sync failed");
+
+const staleSync = await request("/api/workspace/sync", {
+  method: "POST",
+  cookie: aliceCookie,
+  body: JSON.stringify({ baseRevision: 0, activeChatId: null }),
+});
+assert(staleSync.status === 409, "A stale workspace write did not conflict");
+
+const missingOrigin = await request("/api/workspace/sync", {
+  method: "POST",
+  cookie: aliceCookie,
+  originHeader: false,
+  body: JSON.stringify({ baseRevision: 1, activeChatId: null }),
+});
+assert(missingOrigin.status === 403, "A cookie-authenticated mutation without Origin was accepted");
+
+const bobWorkspace = await json(await request("/api/workspace", { cookie: bobCookie }));
+assert(bobWorkspace.revision === 0 && bobWorkspace.state.chats.length === 0, "Bob received Alice workspace data");
+
+const dummyKey = "sk-test-hosted-isolation-000000000000";
+const saveKey = await request("/api/providers/openai/api-key", {
+  method: "PUT",
+  cookie: aliceCookie,
+  body: JSON.stringify({ apiKey: dummyKey }),
+});
+assert(saveKey.ok, `Alice credential save failed: ${JSON.stringify(await json(saveKey))}`);
+const aliceProviders = await json(await request("/api/providers", { cookie: aliceCookie }));
+const bobProviders = await json(await request("/api/providers", { cookie: bobCookie }));
+assert(aliceProviders.openai.configured, "Alice's saved credential was not reported");
+assert(!bobProviders.openai.configured, "Bob could see Alice's credential status");
+
+if (process.env.DATABASE_URL) {
+  const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+  try {
+    const credentials = await pool.query(
+      `select "ownerUserId", "provider", encode("ciphertext", 'escape') as "ciphertext"
+       from "locus_provider_credentials"`,
+    );
+    assert(credentials.rowCount === 1, "Unexpected credential row count");
+    assert(!credentials.rows[0].ciphertext.includes(dummyKey), "Provider credential was stored as plaintext");
+    const owners = await pool.query(
+      `select u.email, count(c.id)::int as chats
+       from "user" u left join "locus_chats" c on c."ownerUserId" = u.id
+       group by u.email order by u.email`,
+    );
+    const counts = Object.fromEntries(owners.rows.map((row) => [row.email, row.chats]));
+    assert(counts[alice.email] === 1 && counts[bob.email] === 0, "Database ownership isolation failed");
+  } finally {
+    await pool.end();
+  }
+}
+
+const metapost = await request("/api/metapost/compile", {
+  method: "POST",
+  cookie: aliceCookie,
+  body: JSON.stringify({
+    source: `numeric canvasWidth, canvasHeight;
+canvasWidth := 220; canvasHeight := 120;
+fill unitsquare xscaled canvasWidth yscaled canvasHeight withcolor locusBg;
+drawarrow (30,40)--(190,90) withpen pencircle scaled locusStrong withcolor locusTeal;
+label(btex $x^2$ etex, (110,70)) withcolor locusInk;
+setbounds currentpicture to unitsquare xscaled canvasWidth yscaled canvasHeight;`,
+  }),
+});
+const metapostBody = await json(metapost);
+assert(metapost.ok && metapostBody.svg?.includes("<svg"), `MetaPost compilation failed: ${JSON.stringify(metapostBody)}`);
+
+console.log("Hosted integration checks passed: auth, isolation, conflicts, CSRF, encrypted BYOK, and MetaPost");

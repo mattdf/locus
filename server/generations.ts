@@ -2,6 +2,8 @@ import type { Response } from "express";
 import type { GenerationMetrics } from "../src/types.ts";
 import { streamResponse, type RespondInput, type TokenUsage } from "./openai.ts";
 import { calculateGenerationCost } from "./pricing.ts";
+import { isHosted } from "./config.ts";
+import { query } from "./db.ts";
 
 type GenerationStatus = "running" | "completed" | "stopped" | "failed";
 
@@ -14,6 +16,7 @@ type GenerationEvent =
 
 export interface GenerationJob {
   id: string;
+  ownerUserId: string;
   controller: AbortController;
   content: string;
   status: GenerationStatus;
@@ -23,10 +26,86 @@ export interface GenerationJob {
   generation?: GenerationMetrics;
   error?: string;
   subscribers: Set<Response>;
+  lastCheckpointAt: number;
+  persistenceReady: Promise<void>;
 }
 
 const generations = new Map<string, GenerationJob>();
 const COMPLETED_JOB_TTL_MS = 60 * 60 * 1000;
+const MAX_CONCURRENT_GENERATIONS = Math.max(
+  1,
+  Number(process.env.LOCUS_MAX_CONCURRENT_GENERATIONS ?? 3),
+);
+
+export class GenerationLimitError extends Error {}
+
+function generationKey(ownerUserId: string, id: string): string {
+  return `${ownerUserId}:${id}`;
+}
+
+function persistStarted(job: GenerationJob, input: RespondInput): Promise<void> {
+  if (!isHosted) return Promise.resolve();
+  return query(
+    `insert into "locus_generation_jobs"
+       ("ownerUserId", "id", "provider", "model", "purpose", "status")
+     values ($1, $2, $3, $4, $5, 'running')
+     on conflict ("ownerUserId", "id") do nothing`,
+    [job.ownerUserId, job.id, job.provider, job.model, input.purpose ?? "chat"],
+  ).then(() => undefined).catch(() => undefined);
+}
+
+function persistCheckpoint(job: GenerationJob): void {
+  if (!isHosted) return;
+  const now = Date.now();
+  if (now - job.lastCheckpointAt < 2_000) return;
+  job.lastCheckpointAt = now;
+  void job.persistenceReady.then(() =>
+    query(
+      `update "locus_generation_jobs"
+       set "partialContent" = $3, "updatedAt" = current_timestamp
+       where "ownerUserId" = $1 and "id" = $2 and "status" = 'running'`,
+      [job.ownerUserId, job.id, job.content],
+    ),
+  ).catch(() => undefined);
+}
+
+function persistFinished(job: GenerationJob): void {
+  if (!isHosted || !job.generation) return;
+  const metrics = job.generation;
+  void job.persistenceReady.then(() => query(
+      `update "locus_generation_jobs"
+       set "status" = $3, "partialContent" = $4, "metrics" = $5::jsonb,
+           "errorCode" = $6, "updatedAt" = current_timestamp, "finishedAt" = current_timestamp
+       where "ownerUserId" = $1 and "id" = $2`,
+      [
+        job.ownerUserId,
+        job.id,
+        job.status,
+        job.content,
+        JSON.stringify(metrics),
+        job.status === "failed" ? "upstream_error" : null,
+      ],
+    )).then(() =>
+    query(
+      `insert into "locus_usage_events"
+         ("ownerUserId", "generationId", "provider", "model", "inputTokens",
+          "cachedInputTokens", "outputTokens", "reasoningTokens", "totalTokens", "totalCostUsd")
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        job.ownerUserId,
+        job.id,
+        metrics.provider,
+        metrics.model,
+        metrics.inputTokens,
+        metrics.cachedInputTokens,
+        metrics.outputTokens,
+        metrics.reasoningTokens,
+        metrics.totalTokens,
+        metrics.totalCostUsd,
+      ],
+    ),
+  ).catch(() => undefined);
+}
 
 function writeEvent(response: Response, event: GenerationEvent): void {
   if (!response.writableEnded && !response.destroyed) {
@@ -77,6 +156,7 @@ function finish(
     outputCostUsd: estimatedCost?.outputCostUsd ?? null,
     totalCostUsd: reportedCost ?? estimatedCost?.totalCostUsd ?? null,
   };
+  persistFinished(job);
   const event = terminalEvent(job);
   job.subscribers.forEach((response) => {
     if (event) writeEvent(response, event);
@@ -85,7 +165,8 @@ function finish(
   job.subscribers.clear();
 
   const cleanup = setTimeout(() => {
-    if (generations.get(job.id) === job) generations.delete(job.id);
+    const key = generationKey(job.ownerUserId, job.id);
+    if (generations.get(key) === job) generations.delete(key);
   }, COMPLETED_JOB_TTL_MS);
   cleanup.unref();
 }
@@ -97,6 +178,7 @@ async function run(job: GenerationJob, input: RespondInput): Promise<void> {
       (delta) => {
         if (job.status !== "running") return;
         job.content += delta;
+        persistCheckpoint(job);
         broadcast(job, { type: "delta", delta });
       },
       job.controller.signal,
@@ -115,16 +197,26 @@ async function run(job: GenerationJob, input: RespondInput): Promise<void> {
   }
 }
 
-export function getGeneration(id: string): GenerationJob | undefined {
-  return generations.get(id);
+export function getGeneration(ownerUserId: string, id: string): GenerationJob | undefined {
+  return generations.get(generationKey(ownerUserId, id));
 }
 
-export function createGeneration(id: string, input: RespondInput): GenerationJob {
-  const existing = generations.get(id);
+export function createGeneration(ownerUserId: string, id: string, input: RespondInput): GenerationJob {
+  const key = generationKey(ownerUserId, id);
+  const existing = generations.get(key);
   if (existing) return existing;
+  const running = [...generations.values()].filter(
+    (job) => job.ownerUserId === ownerUserId && job.status === "running",
+  ).length;
+  if (running >= MAX_CONCURRENT_GENERATIONS) {
+    throw new GenerationLimitError(
+      `At most ${MAX_CONCURRENT_GENERATIONS} model responses may run at once`,
+    );
+  }
 
   const job: GenerationJob = {
     id,
+    ownerUserId,
     controller: new AbortController(),
     content: "",
     status: "running",
@@ -132,8 +224,11 @@ export function createGeneration(id: string, input: RespondInput): GenerationJob
     provider: input.provider,
     model: input.model,
     subscribers: new Set(),
+    lastCheckpointAt: Date.now(),
+    persistenceReady: Promise.resolve(),
   };
-  generations.set(id, job);
+  generations.set(key, job);
+  job.persistenceReady = persistStarted(job, input);
   void run(job, input);
   return job;
 }

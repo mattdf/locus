@@ -38,7 +38,7 @@ export const emptyState = (): WorkspaceState => ({
   },
 });
 
-function normalizeState(state: WorkspaceState): WorkspaceState {
+export function normalizeState(state: WorkspaceState): WorkspaceState {
   const categories = Array.isArray(state.categories)
     ? state.categories.filter(
         (category, index, items) =>

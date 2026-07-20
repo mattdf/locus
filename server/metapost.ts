@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 
 const IMAGE = process.env.METAPOST_IMAGE?.trim() || "locus-metapost:1";
 const DOCKER = process.env.DOCKER_BIN?.trim() || "docker";
+const SERVICE_URL = process.env.METAPOST_SERVICE_URL?.trim().replace(/\/$/, "") || null;
 const MAX_SOURCE_BYTES = 100_000;
 const MAX_SVG_BYTES = 2_000_000;
 const MAX_LOG_BYTES = 24_000;
@@ -308,6 +309,14 @@ async function runDocker(args: string[]): Promise<{ code: number; stderr: string
 }
 
 export async function metapostImageAvailable(): Promise<boolean> {
+  if (SERVICE_URL) {
+    try {
+      const response = await fetch(`${SERVICE_URL}/health`, { signal: AbortSignal.timeout(2_000) });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
   try {
     const result = await runDocker(["image", "inspect", IMAGE]);
     return result.code === 0;
@@ -331,6 +340,36 @@ export async function compileMetaPost(source: unknown): Promise<MetaPostCompileR
   let timeout: NodeJS.Timeout | null = null;
 
   try {
+    if (SERVICE_URL) {
+      const response = await fetch(`${SERVICE_URL}/compile`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ source: wrappedSource(body) }),
+        signal: AbortSignal.timeout(HOST_TIMEOUT_MS),
+      });
+      const result = (await response.json().catch(() => ({}))) as {
+        svg?: string;
+        log?: string;
+        durationMs?: number;
+        error?: string;
+      };
+      if (!response.ok || !result.svg) {
+        throw new MetaPostCompileError(
+          result.error ?? "MetaPost could not compile this visualization.",
+          response.status === 429 ? 429 : response.status === 413 ? 413 : 422,
+          result.log?.slice(-MAX_LOG_BYTES) ?? "",
+        );
+      }
+      if (Buffer.byteLength(result.svg, "utf8") > MAX_SVG_BYTES) {
+        throw new MetaPostCompileError("The compiled SVG exceeds the 2 MB artifact limit.", 413);
+      }
+      return {
+        svg: result.svg,
+        log: result.log?.slice(-MAX_LOG_BYTES) ?? "",
+        durationMs: result.durationMs ?? Date.now() - startedAt,
+      };
+    }
+
     jobDirectory = await mkdtemp(path.join(tmpdir(), "locus-metapost-"));
     await chmod(jobDirectory, 0o777);
     await writeFile(path.join(jobDirectory, "figure.mp"), wrappedSource(body), {
@@ -357,6 +396,7 @@ export async function compileMetaPost(source: unknown): Promise<MetaPostCompileR
       "--env=HOME=/tmp",
       "--mount",
       `type=bind,source=${jobDirectory},target=/work`,
+      "--entrypoint=/usr/local/bin/locus-metapost",
       IMAGE,
     ];
 

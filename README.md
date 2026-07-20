@@ -1,12 +1,15 @@
 # Locus
 
-A local-first chat UI for studying difficult technical material without blowing up every conversation into a mess of unorganized follow ups / clarifications.
+A local-first chat UI for studying difficult technical material without blowing up every conversation into a mess of unorganized follow ups / clarifications. It can also run as a private, multi-user service with isolated accounts.
 
 ![Locus recursive learning chat interface](screenshot.png)
 
 ## How to use / What this does
 
 - Select any rendered passage or equation and choose **Elaborate**.
+- Choose **Visualize** to attach an inline MetaPost artifact: add an optional diagram hint,
+  generate and sandbox-compile it to SVG with real LaTeX labels, edit/recompile the source,
+  and download either format.
 - The focused drawer receives the complete ancestor context, the exact selection, and your
   elaboration request.
 - Repeat the same action inside a focused thread to create arbitrarily deep branches.
@@ -35,14 +38,17 @@ A local-first chat UI for studying difficult technical material without blowing 
 - Recover LaTeX from ChatGPT rendered-copy imports where `\[` / `\(` delimiters were
   flattened into plain brackets and parentheses.
 - Render LaTeX in chat titles, branch titles, saved elaboration labels, and selected quotes.
-- Store the complete workspace as a readable local JSON document in `data/chats.json`.
+- In local mode, store the complete workspace as a readable JSON document in `data/chats.json`.
+- In hosted mode, store each account's chats and settings separately in PostgreSQL and encrypt
+  its BYOK provider credentials at rest.
 
 ## Run it
 
-Requirement: Node.js 20+.
+Requirements: Node.js 20+ and Docker Engine / Docker Desktop.
 
 ```bash
 npm install
+npm run metapost:build
 npm run dev
 ```
 
@@ -60,6 +66,11 @@ npm start
 
 Then open [http://127.0.0.1:8787](http://127.0.0.1:8787).
 
+Local mode remains the default: it has no login or database requirement and keeps the original
+file-backed data format. To self-host private accounts instead, use `compose.hosted.yaml` and
+the instructions in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Day-two operations are documented
+in [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
 ## Architecture
 
 - `src/App.tsx` owns workspace and recursive-thread state.
@@ -70,12 +81,21 @@ Then open [http://127.0.0.1:8787](http://127.0.0.1:8787).
 - `server/openai.ts` builds prompts and streams either the OpenAI Responses API or an
   OpenAI-compatible Chat Completions endpoint.
 - `server/providers.ts` owns provider credentials, base URLs, and model discovery.
+- `server/workspaces.ts` applies owner-scoped, optimistic PostgreSQL workspace updates in hosted mode.
+- `server/credentials.ts` keeps the file-backed local key behavior and adds per-user AES-256-GCM
+  credential storage for hosted mode.
+- `server/metapost.ts` validates figure bodies and uses either a fresh local compiler container or
+  the isolated internal compiler service in `compose.hosted.yaml`.
 - `SYSTEM_PROMPT.md` contains the base instructions loaded fresh for every model request.
-- `server/storage.ts` persists one versioned JSON document using atomic replacement.
+- `server/storage.ts` persists the local mode's versioned JSON document using atomic replacement.
 
 Threads are stored as a flat map with `parentId` links. That keeps updates cheap while
 preserving an ordinary tree: walking parent links produces the exact context path supplied
 to the model.
+
+The multi-user design and its security boundaries are documented in
+[MULTI_USER_PLAN.md](MULTI_USER_PLAN.md). `LOCUS_MODE=local` and `LOCUS_MODE=hosted` are explicit,
+fail-closed modes; hosted mode never falls back to the global local workspace or key files.
 
 ## Notes
 
@@ -86,4 +106,15 @@ to the model.
   effort stay together in each chat composer.
 - Custom instructions are stored locally with the workspace and appended to, rather than
   substituted for, `SYSTEM_PROMPT.md`.
-- Set `PORT` or `HOST` when starting the server if you need different local bindings.
+- Set `PORT`, `HOST`, or `DATA_DIR` when starting the server if you need different local
+  bindings or a separate persistent-data volume.
+- Hosted registration is private and disabled. Administrators create or disable accounts with
+  `npm run admin`; the deployment bootstrap creates only the first administrator.
+- MetaPost jobs run as a non-root user with no network, no Linux capabilities, a read-only
+  root filesystem, CPU/memory/PID/file-size limits, and only a disposable job directory
+  mounted writable. `btex ... etex` labels pass through a bounded LaTeX command allowlist;
+  TeX file access is paranoid, shell escape is disabled, and arbitrary preambles/macros are
+  rejected before a container starts. The image and runtime commands are Linux/Docker portable; set
+  `METAPOST_IMAGE` or `DOCKER_BIN` only when your deployment uses different names.
+- The API permits two concurrent compiler containers by default. Set
+  `METAPOST_MAX_CONCURRENCY` to a value from 1–16 to match the host's capacity.

@@ -2,7 +2,7 @@
 set -eu
 
 umask 022
-cd /work
+cd "${LOCUS_WORKDIR:-/work}"
 test -f figure.mp
 
 # The host applies an additional deadline. This in-container limit remains in

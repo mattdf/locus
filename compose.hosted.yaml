@@ -1,0 +1,101 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: locus
+      POSTGRES_USER: locus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - locus_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U locus -d locus"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    security_opt:
+      - no-new-privileges:true
+
+  metapost:
+    build:
+      context: ./docker/metapost
+    restart: unless-stopped
+    environment:
+      PORT: "8090"
+      MAX_CONCURRENCY: "2"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m,uid=65534,gid=65534,mode=0700
+      - /work:rw,noexec,nosuid,nodev,size=64m,uid=65534,gid=65534,mode=0700
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 96
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build:
+      context: .
+    command: ["node", "build/server/migrate-cli.mjs"]
+    environment:
+      NODE_ENV: production
+      LOCUS_MODE: hosted
+      LOCUS_PUBLIC_ORIGIN: https://locuschat.io
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required}
+      LOCUS_CREDENTIAL_KEYS: ${LOCUS_CREDENTIAL_KEYS:?LOCUS_CREDENTIAL_KEYS is required}
+      METAPOST_SERVICE_URL: http://metapost:8090
+      LOCUS_MAX_CONCURRENT_GENERATIONS: "3"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  app:
+    build:
+      context: .
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      LOCUS_MODE: hosted
+      LOCUS_PUBLIC_ORIGIN: https://locuschat.io
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required}
+      LOCUS_CREDENTIAL_KEYS: ${LOCUS_CREDENTIAL_KEYS:?LOCUS_CREDENTIAL_KEYS is required}
+      METAPOST_SERVICE_URL: http://metapost:8090
+      LOCUS_MAX_CONCURRENT_GENERATIONS: "3"
+      HOST: 0.0.0.0
+      PORT: "8787"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      metapost:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m,uid=1000,gid=1000,mode=0700
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 1g
+    cpus: 2.0
+    expose:
+      - "8787"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+volumes:
+  locus_postgres_data:

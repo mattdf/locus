@@ -1,0 +1,11 @@
+.git
+.gitignore
+node_modules
+dist
+build
+data
+secret
+.env*
+*.log
+.DS_Store
+screenshot.png

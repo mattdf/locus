@@ -52,6 +52,7 @@ export interface RespondInput {
   customInstructions: string;
   anchor?: HighlightAnchor;
   purpose?: "chat" | "definition" | "visualization";
+  apiKey?: string;
 }
 
 export interface TokenUsage {
@@ -117,7 +118,7 @@ async function streamOpenAIResponse(
   onDelta: (delta: string) => void,
   signal?: AbortSignal,
 ): Promise<TokenUsage | null> {
-  const openai = await createProviderClient("openai");
+  const openai = await createProviderClient("openai", undefined, input.apiKey);
   const stream = await openai.responses.create(
     {
       model: input.model,
@@ -176,7 +177,7 @@ async function streamCompatibleChat(
   onDelta: (delta: string) => void,
   signal?: AbortSignal,
 ): Promise<TokenUsage | null> {
-  const client = await createProviderClient(input.provider, input.localBaseUrl);
+  const client = await createProviderClient(input.provider, input.localBaseUrl, input.apiKey);
   const messages = [
     { role: "system" as const, content: instructions },
     { role: "user" as const, content: request },

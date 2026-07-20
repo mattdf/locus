@@ -2,6 +2,7 @@ import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import OpenAI from "openai";
 import type { ProviderId, ProviderModelOption } from "../src/types.ts";
+import { isHosted } from "./config.ts";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 
@@ -133,8 +134,9 @@ export function normalizeLocalBaseUrl(raw: string): string {
 export async function createProviderClient(
   provider: ProviderId,
   localBaseUrl?: string,
+  credential?: string,
 ): Promise<OpenAI> {
-  const savedKey = await readProviderApiKey(provider);
+  const savedKey = credential ?? (isHosted ? null : await readProviderApiKey(provider));
   if (!savedKey && provider !== "local") {
     const label = provider === "openrouter" ? "OpenRouter" : "OpenAI";
     const projectFile = provider === "openrouter" ? "OPENROUTER_API_KEY.txt" : "OPENAI_API_KEY.txt";
