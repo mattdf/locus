@@ -51,6 +51,7 @@ export interface RespondInput {
   maxOutputTokens: number;
   customInstructions: string;
   anchor?: HighlightAnchor;
+  purpose?: "chat" | "definition" | "visualization";
 }
 
 export interface TokenUsage {
@@ -69,8 +70,28 @@ function buildPrompt(input: RespondInput, systemPrompt: string) {
   const customInstructions = input.customInstructions.trim()
     ? `\n\nThe learner also supplied these additional behavior preferences. Follow them where compatible with the tutoring instructions above; they supplement rather than replace the tutoring role:\n<custom_instructions>\n${input.customInstructions.trim()}\n</custom_instructions>`
     : "";
+  const purposeInstructions =
+    input.purpose === "visualization"
+      ? `\n\nFor this request, act as a MetaPost diagram generator. Return only the body of one MetaPost figure: no Markdown fence, beginfig, endfig, end, input, verbatimtex, file I/O, externalfigure, special, or shell execution. The body must compile when placed inside beginfig(1) ... endfig. Define every variable you use except the predeclared Locus palette and line weights listed below. This output contract is mandatory and cannot be changed by custom instructions.
+
+Use real LaTeX typography for every visible label. Put label contents inside MetaPost btex ... etex blocks; do not use quoted MetaPost strings for visible mathematical or prose labels. Examples:
+- label.top(btex $\\Sigma = \\{x \\mid g(x)=0\\}$ etex, titlePos) withcolor locusInk;
+- label.lft(btex $T_x\\Sigma$ etex, tangentPos) withcolor locusBlue;
+- label.top(btex $\\nabla g(x)$ etex, gradientPos) withcolor locusOrange;
+- label(btex \\textbf{Level sets and gradients} etex, headingPos) withcolor locusInk;
+
+The label sandbox accepts ordinary ASCII text plus common LaTeX math notation: Greek letters, subscripts and superscripts, fractions, roots, sums, integrals, arrows, relations, delimiters, \\mathbb/\\mathcal/\\mathrm/\\mathbf, \\text and \\operatorname. It does not accept preambles, environments, comments, macro definitions, file access, shell access, raw %, #, &, or advanced TeX metaprogramming. Keep each label short and rewrite with simpler common notation if an exotic command would be needed.
+
+Create an editorial mathematical illustration, not an unstyled plot. The compiler predeclares these values for you:
+- colors: locusBg, locusPanel, locusInk, locusMuted, locusGuide, locusBlue, locusTeal, locusPurple, locusOrange
+- line weights: locusThin, locusMedium, locusStrong
+
+Use a dark charcoal canvas, warm off-white typography, muted blue-gray construction lines, and a restrained combination of the blue, teal, purple, and orange accents. Use color semantically to distinguish mathematical objects; where the subject has multiple concepts, use at least two accent colors rather than rendering everything monochrome. Establish clear line hierarchy with thin guides, medium structural lines, and strong primary arrows or curves. Prefer generous margins, balanced spacing, legible labels, clean arrowheads, and a few purposeful dots or filled regions over dense decoration.
+
+Declare numeric canvasWidth and canvasHeight (normally around 720 by 420, adjusted to the subject). Start by filling “unitsquare xscaled canvasWidth yscaled canvasHeight” with locusBg, keep all content within that canvas, and finish with “setbounds currentpicture to unitsquare xscaled canvasWidth yscaled canvasHeight;”. Every label must specify “withcolor locusInk” or an appropriate accent color. Do not use pure black or pure white, gradients, paragraphs of prose, or default black strokes. Titles and short section labels are welcome only when they improve comprehension.`
+      : "";
   return {
-    instructions: systemPrompt + customInstructions,
+    instructions: systemPrompt + customInstructions + purposeInstructions,
     request: `Here is the complete path of conversation context:\n\n${formatContext(input.context)}${highlighted}\n\n<learner_request>\n${input.message}\n</learner_request>`,
   };
 }

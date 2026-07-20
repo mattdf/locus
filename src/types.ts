@@ -74,6 +74,30 @@ export interface InlineDefinition {
   generation?: GenerationMetrics;
 }
 
+export type VisualizationStatus =
+  | "draft"
+  | "generating"
+  | "compiling"
+  | "ready"
+  | "error";
+
+export interface InlineVisualization {
+  id: string;
+  anchor: HighlightAnchor;
+  hint: string;
+  status: VisualizationStatus;
+  metapostSource?: string;
+  svg?: string;
+  errorStage?: "model" | "compile";
+  errorMessage?: string;
+  compilerLog?: string;
+  requestId?: string;
+  generation?: GenerationMetrics;
+  compileDurationMs?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ThreadNode {
   id: string;
   parentId: string | null;
@@ -81,6 +105,7 @@ export interface ThreadNode {
   anchor?: HighlightAnchor;
   messages: Message[];
   definitions?: InlineDefinition[];
+  visualizations?: InlineVisualization[];
   messageRevisions?: Record<string, MessageRevisionGroup>;
   responseRevisions?: Record<string, ResponseRevisionGroup>;
   createdAt: string;
@@ -114,6 +139,8 @@ export interface WorkspaceState {
     provider: ProviderId;
     providerModels: Record<ProviderId, string>;
     definitionModels: Record<ProviderId, string>;
+    visualizationModels: Record<ProviderId, string>;
+    visualizationReasoningEfforts: Record<ProviderId, ReasoningEffort>;
     localBaseUrl: string;
     model: string;
     reasoningEffort: ReasoningEffort;

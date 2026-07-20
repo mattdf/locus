@@ -11,3 +11,4 @@ LOCAL_API_KEY.txt
 .env*
 .DS_Store
 *.log
+secret/

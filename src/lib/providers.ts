@@ -22,6 +22,12 @@ export const DEFAULT_DEFINITION_MODELS: Record<ProviderId, string> = {
   local: "local-model",
 };
 
+export const DEFAULT_VISUALIZATION_MODELS: Record<ProviderId, string> = {
+  openai: "gpt-5.4",
+  openrouter: "~openai/gpt-latest",
+  local: "local-model",
+};
+
 export const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:1234/v1";
 
 export function providerLabel(provider: ProviderId): string {

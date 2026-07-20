@@ -9,6 +9,7 @@ import { normalizeMathDelimiters } from "../lib/markdown";
 import type {
   HighlightAnchor,
   InlineDefinition,
+  InlineVisualization,
   Message,
   SelectionDraft,
 } from "../types";
@@ -34,6 +35,7 @@ interface MarkdownMessageProps {
   nodeId: string;
   linkedAnchors: LinkedAnchor[];
   definitions: InlineDefinition[];
+  visualizations: InlineVisualization[];
   onSelect: (selection: SelectionDraft) => void;
   onOpenElaboration: (childId: string) => void;
   onOpenDefinition: (
@@ -41,6 +43,7 @@ interface MarkdownMessageProps {
     rect: SelectionDraft["rect"],
     getAnchorRect?: () => SelectionDraft["rect"],
   ) => void;
+  onOpenVisualization: (visualizationId: string) => void;
 }
 
 interface Point {
@@ -68,13 +71,25 @@ interface DefinitionBlockTarget {
   definitionId: string;
 }
 
+interface VisualizationRangeTarget {
+  range: Range;
+  visualizationId: string;
+}
+
+interface VisualizationBlockTarget {
+  element: Element;
+  visualizationId: string;
+}
+
 function textMap(container: HTMLElement): { text: string; points: Point[] } {
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
       const parent = (node as Text).parentElement;
       if (
         !parent ||
-        parent.closest(".katex-mathml, annotation, .elaboration-links")
+        parent.closest(
+          ".katex-mathml, annotation, .elaboration-links, .inline-visualization-slot",
+        )
       ) {
         return NodeFilter.FILTER_REJECT;
       }
@@ -111,7 +126,17 @@ function topLevelBlockIndex(container: HTMLElement, sourceNode: Node): number {
   while (element.parentElement && element.parentElement !== container) {
     element = element.parentElement;
   }
-  return Math.max(0, Array.from(container.children).indexOf(element));
+  return Math.max(0, topLevelBlocks(container).indexOf(element));
+}
+
+function topLevelBlocks(container: HTMLElement): Element[] {
+  return Array.from(container.children).filter(
+    (element) => !element.classList.contains("inline-visualization-slot"),
+  );
+}
+
+function topLevelBlock(container: HTMLElement, index: number): Element | undefined {
+  return topLevelBlocks(container)[index];
 }
 
 function mathSource(math: Element): string | null {
@@ -122,6 +147,18 @@ function mathSource(math: Element): string | null {
   if (!source) return null;
   const display = Boolean(math.closest(".katex-display"));
   return display ? `$$\n${source}\n$$` : `$${source}$`;
+}
+
+function rangeForMathSource(root: Element, quote: string): Range | null {
+  const normalized = quote.trim();
+  const katex = Array.from(root.querySelectorAll(".katex")).find(
+    (candidate) => mathSource(candidate) === normalized,
+  );
+  const visible = katex?.querySelector(".katex-html") ?? katex;
+  if (!visible) return null;
+  const range = document.createRange();
+  range.selectNodeContents(visible);
+  return range;
 }
 
 function sourceQuoteFromRange(range: Range, container: HTMLElement): string {
@@ -164,21 +201,29 @@ function MarkdownMessageComponent({
   nodeId,
   linkedAnchors,
   definitions,
+  visualizations,
   onSelect,
   onOpenElaboration,
   onOpenDefinition,
+  onOpenVisualization,
 }: MarkdownMessageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const targetsRef = useRef<RangeTarget[]>([]);
   const blockTargetsRef = useRef<BlockTarget[]>([]);
   const definitionTargetsRef = useRef<DefinitionRangeTarget[]>([]);
   const definitionBlockTargetsRef = useRef<DefinitionBlockTarget[]>([]);
+  const visualizationTargetsRef = useRef<VisualizationRangeTarget[]>([]);
+  const visualizationBlockTargetsRef = useRef<VisualizationBlockTarget[]>([]);
   const highlightName = useMemo(
     () => `elaboration-${message.id.replace(/[^a-zA-Z0-9-]/g, "")}`,
     [message.id],
   );
   const definitionHighlightName = useMemo(
     () => `definition-${message.id.replace(/[^a-zA-Z0-9-]/g, "")}`,
+    [message.id],
+  );
+  const visualizationHighlightName = useMemo(
+    () => `visualization-${message.id.replace(/[^a-zA-Z0-9-]/g, "")}`,
     [message.id],
   );
   const normalizedContent = useMemo(
@@ -197,7 +242,7 @@ function MarkdownMessageComponent({
     const blockTargets: BlockTarget[] = [];
 
     for (const linked of linkedAnchors) {
-      const block = container.children[linked.anchor.blockIndex];
+      const block = topLevelBlock(container, linked.anchor.blockIndex);
       if (block) {
         block.classList.add("has-linked-elaboration");
         styledBlocks.push(block);
@@ -251,7 +296,7 @@ function MarkdownMessageComponent({
     const blockTargets: DefinitionBlockTarget[] = [];
 
     for (const definition of definitions) {
-      const block = container.children[definition.anchor.blockIndex];
+      const block = topLevelBlock(container, definition.anchor.blockIndex);
       const searchRoot = block instanceof HTMLElement ? block : container;
       const { text, points } = textMap(searchRoot);
       const quote = normalizedQuote(definition.anchor.quote);
@@ -264,6 +309,13 @@ function MarkdownMessageComponent({
         range.setEnd(end.node, end.offset + 1);
         ranges.push(range);
         targets.push({ range, definitionId: definition.id });
+        continue;
+      }
+
+      const mathRange = rangeForMathSource(searchRoot, definition.anchor.quote);
+      if (mathRange) {
+        ranges.push(mathRange);
+        targets.push({ range: mathRange, definitionId: definition.id });
         continue;
       }
 
@@ -301,6 +353,64 @@ function MarkdownMessageComponent({
     };
   }, [definitionHighlightName, definitions, message.content]);
 
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container || !visualizations.length) return;
+
+    const ranges: Range[] = [];
+    const targets: VisualizationRangeTarget[] = [];
+    const styledBlocks: Element[] = [];
+    const blockTargets: VisualizationBlockTarget[] = [];
+    for (const visualization of visualizations) {
+      const block = topLevelBlock(container, visualization.anchor.blockIndex);
+      const searchRoot = block instanceof HTMLElement ? block : container;
+      const { text, points } = textMap(searchRoot);
+      const quote = normalizedQuote(visualization.anchor.quote);
+      const index = quote ? text.indexOf(quote) : -1;
+      if (index >= 0 && points[index] && points[index + quote.length - 1]) {
+        const start = points[index];
+        const end = points[index + quote.length - 1];
+        const range = document.createRange();
+        range.setStart(start.node, start.offset);
+        range.setEnd(end.node, end.offset + 1);
+        ranges.push(range);
+        targets.push({ range, visualizationId: visualization.id });
+        continue;
+      }
+      const mathRange = rangeForMathSource(searchRoot, visualization.anchor.quote);
+      if (mathRange) {
+        ranges.push(mathRange);
+        targets.push({ range: mathRange, visualizationId: visualization.id });
+      } else if (block) {
+        block.classList.add("has-linked-visualization");
+        styledBlocks.push(block);
+        blockTargets.push({ element: block, visualizationId: visualization.id });
+      }
+    }
+
+    visualizationTargetsRef.current = targets;
+    visualizationBlockTargetsRef.current = blockTargets;
+    const css = CSS as typeof CSS & {
+      highlights?: { set: (name: string, value: unknown) => void; delete: (name: string) => void };
+    };
+    const HighlightConstructor = (
+      window as typeof window & { Highlight?: new (...ranges: Range[]) => unknown }
+    ).Highlight;
+    const style = document.createElement("style");
+    if (css.highlights && HighlightConstructor && ranges.length) {
+      css.highlights.set(visualizationHighlightName, new HighlightConstructor(...ranges));
+      style.textContent = `::highlight(${visualizationHighlightName}) { background: rgba(139, 102, 211, .3); text-decoration: underline; text-decoration-color: rgba(103, 63, 178, .7); text-underline-offset: 3px; }`;
+      document.head.appendChild(style);
+    }
+    return () => {
+      css.highlights?.delete(visualizationHighlightName);
+      style.remove();
+      styledBlocks.forEach((block) => block.classList.remove("has-linked-visualization"));
+      visualizationTargetsRef.current = [];
+      visualizationBlockTargetsRef.current = [];
+    };
+  }, [visualizationHighlightName, visualizations, message.content]);
+
   const captureSelection = () => {
     const container = containerRef.current;
     const selection = window.getSelection();
@@ -328,9 +438,25 @@ function MarkdownMessageComponent({
     <div
       className="markdown-message"
       ref={containerRef}
-      onMouseUp={captureSelection}
-      onKeyUp={captureSelection}
+      onMouseUp={(event) => {
+        if (
+          event.target instanceof Element &&
+          event.target.closest(".inline-visualization-slot")
+        ) return;
+        captureSelection();
+      }}
+      onKeyUp={(event) => {
+        if (
+          event.target instanceof Element &&
+          event.target.closest(".inline-visualization-slot")
+        ) return;
+        captureSelection();
+      }}
       onClickCapture={(event) => {
+        if (
+          event.target instanceof Element &&
+          event.target.closest(".inline-visualization-slot")
+        ) return;
         if (window.getSelection()?.toString()) return;
         const interactive =
           event.target instanceof Element ? event.target.closest("a, button") : null;
@@ -368,6 +494,28 @@ function MarkdownMessageComponent({
           const bounds = getAnchorRect();
           event.preventDefault();
           onOpenDefinition(definitionMatch.definitionId, bounds, getAnchorRect);
+          return;
+        }
+
+        const visualizationRangeMatch = visualizationTargetsRef.current.find((target) =>
+          Array.from(target.range.getClientRects()).some(
+            (rect) =>
+              event.clientX >= rect.left &&
+              event.clientX <= rect.right &&
+              event.clientY >= rect.top &&
+              event.clientY <= rect.bottom,
+          ),
+        );
+        const visualizationBlockMatch =
+          event.target instanceof Node
+            ? visualizationBlockTargetsRef.current.find((target) =>
+                target.element.contains(event.target as Node),
+              )
+            : undefined;
+        const visualizationMatch = visualizationRangeMatch ?? visualizationBlockMatch;
+        if (visualizationMatch) {
+          event.preventDefault();
+          onOpenVisualization(visualizationMatch.visualizationId);
           return;
         }
 
@@ -467,11 +615,29 @@ function sameDefinitions(left: InlineDefinition[], right: InlineDefinition[]): b
   );
 }
 
+function sameVisualizations(left: InlineVisualization[], right: InlineVisualization[]): boolean {
+  return (
+    left === right ||
+    (left.length === right.length &&
+      left.every((visualization, index) => {
+        const candidate = right[index];
+        return (
+          visualization.id === candidate.id &&
+          visualization.anchor.sourceNodeId === candidate.anchor.sourceNodeId &&
+          visualization.anchor.sourceMessageId === candidate.anchor.sourceMessageId &&
+          visualization.anchor.quote === candidate.anchor.quote &&
+          visualization.anchor.blockIndex === candidate.anchor.blockIndex
+        );
+      }))
+  );
+}
+
 export const MarkdownMessage = memo(
   MarkdownMessageComponent,
   (left, right) =>
     left.nodeId === right.nodeId &&
     sameMessage(left.message, right.message) &&
     sameLinkedAnchors(left.linkedAnchors, right.linkedAnchors) &&
-    sameDefinitions(left.definitions, right.definitions),
+    sameDefinitions(left.definitions, right.definitions) &&
+    sameVisualizations(left.visualizations, right.visualizations),
 );

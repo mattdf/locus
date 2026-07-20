@@ -3,6 +3,7 @@ import {
   ArrowUp,
   BookOpen,
   BookOpenText,
+  ChartNoAxesCombined,
   ChevronLeft,
   ChevronRight,
   CornerDownLeft,
@@ -42,7 +43,7 @@ import type {
 } from "react";
 import { Composer } from "./components/Composer";
 import { InlineMath, MathBlock } from "./components/MathText";
-import { MODEL_OPTIONS, ModelPicker } from "./components/ModelPicker";
+import { MODEL_OPTIONS, ModelPicker, REASONING_OPTIONS } from "./components/ModelPicker";
 import { ThreadView } from "./components/ThreadView";
 import {
   cloneChatForImport,
@@ -72,6 +73,7 @@ import type {
   GenerationMetrics,
   HighlightAnchor,
   InlineDefinition,
+  InlineVisualization,
   Message,
   MessageRevisionGroup,
   ResponseRevisionGroup,
@@ -86,6 +88,7 @@ import {
   DEFAULT_DEFINITION_MODELS,
   DEFAULT_LOCAL_BASE_URL,
   DEFAULT_PROVIDER_MODELS,
+  DEFAULT_VISUALIZATION_MODELS,
   PROVIDER_OPTIONS,
   compatibleReasoningEffort,
   providerLabel,
@@ -102,6 +105,8 @@ const DEFAULT_STATE: WorkspaceState = {
     provider: "openai",
     providerModels: { ...DEFAULT_PROVIDER_MODELS },
     definitionModels: { ...DEFAULT_DEFINITION_MODELS },
+    visualizationModels: { ...DEFAULT_VISUALIZATION_MODELS },
+    visualizationReasoningEfforts: { openai: "high", openrouter: "high", local: "medium" },
     localBaseUrl: DEFAULT_LOCAL_BASE_URL,
     model: "gpt-5.6-sol",
     reasoningEffort: "max",
@@ -134,6 +139,22 @@ interface GenerationResult {
   generation: GenerationMetrics;
 }
 
+interface MetaPostCompileResult {
+  svg: string;
+  log: string;
+  durationMs: number;
+}
+
+type VisualizationFollowup =
+  | { kind: "repair"; source: string; diagnostic: string }
+  | { kind: "revision"; source: string; instruction: string };
+
+class MetaPostRequestError extends Error {
+  constructor(message: string, readonly log = "") {
+    super(message);
+  }
+}
+
 class GenerationStreamError extends Error {
   constructor(message: string, readonly generation: GenerationMetrics) {
     super(message);
@@ -141,7 +162,7 @@ class GenerationStreamError extends Error {
 }
 
 interface PendingGeneration {
-  kind: "message" | "definition";
+  kind: "message" | "definition" | "visualization";
   chatId: string;
   nodeId: string;
   assistantId: string;
@@ -229,6 +250,16 @@ function pendingGenerations(workspace: WorkspaceState): PendingGeneration[] {
           nodeId: node.id,
           assistantId: definition.id,
           requestId: definition.requestId,
+        });
+      });
+      (node.visualizations ?? []).forEach((visualization) => {
+        if (visualization.status !== "generating" || !visualization.requestId) return;
+        pending.set(`visualization:${visualization.id}`, {
+          kind: "visualization",
+          chatId: chat.id,
+          nodeId: node.id,
+          assistantId: visualization.id,
+          requestId: visualization.requestId,
         });
       });
     });
@@ -439,15 +470,51 @@ async function resumeModelRequest(
   return readGenerationStream(response, onDelta, onSnapshot);
 }
 
+function extractMetaPostSource(response: string): string {
+  const fenced = response.match(/```(?:metapost|mp)?\s*\n([\s\S]*?)```/i)?.[1];
+  let source = (fenced ?? response).trim();
+  source = source
+    .replace(/^\s*outputformat\s*:=\s*["']svg["']\s*;\s*/i, "")
+    .replace(/^\s*outputtemplate\s*:=\s*[^;]+;\s*/i, "")
+    .replace(/^\s*prologues\s*:=\s*[^;]+;\s*/i, "")
+    .replace(/^\s*beginfig\s*\(\s*1\s*\)\s*;\s*/i, "")
+    .replace(/\s*endfig\s*;\s*end\s*\.\s*$/i, "")
+    .trim();
+  if (!source) throw new Error("The model returned no MetaPost source");
+  return source;
+}
+
+async function compileMetaPostRequest(
+  source: string,
+  signal?: AbortSignal,
+): Promise<MetaPostCompileResult> {
+  const response = await fetch("/api/metapost/compile", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source }),
+    signal,
+  });
+  const data = (await response.json().catch(() => ({}))) as
+    | MetaPostCompileResult
+    | { error?: string; log?: string };
+  if (!response.ok) {
+    const error = data as { error?: string; log?: string };
+    throw new MetaPostRequestError(error.error ?? "MetaPost compilation failed", error.log);
+  }
+  return data as MetaPostCompileResult;
+}
+
 function SelectionToolbar({
   selection,
   onDefine,
+  onVisualize,
   onElaborate,
   onQuote,
   onDismiss,
 }: {
   selection: SelectionDraft;
   onDefine: () => void;
+  onVisualize: () => void;
   onElaborate: () => void;
   onQuote: () => void;
   onDismiss: () => void;
@@ -520,6 +587,9 @@ function SelectionToolbar({
       </span>
       <button className="selection-define-button" type="button" onClick={onDefine}>
         <BookOpen size={14} /> Define
+      </button>
+      <button className="selection-visualize-button" type="button" onClick={onVisualize}>
+        <ChartNoAxesCombined size={14} /> Visualize
       </button>
       <button type="button" onClick={onElaborate}>
         <CornerUpRight size={14} /> Elaborate
@@ -892,6 +962,7 @@ export default function App() {
     useState<ThreadScrollRequest | null>(null);
   const [focusMaximized, setFocusMaximized] = useState(false);
   const responseControllers = useRef(new Map<string, AbortController>());
+  const visualizationCompiles = useRef(new Set<string>());
   const assistantDeltaBuffers = useRef(
     new Map<string, { chatId: string; nodeId: string; delta: string }>(),
   );
@@ -1350,6 +1421,35 @@ export default function App() {
     });
   };
 
+  const updateVisualization = (
+    chatId: string,
+    nodeId: string,
+    visualizationId: string,
+    update: (visualization: InlineVisualization) => InlineVisualization,
+  ) => {
+    updateChat(chatId, (chat) => {
+      const node = chat.nodes[nodeId];
+      if (!node?.visualizations?.some((visualization) => visualization.id === visualizationId)) {
+        return chat;
+      }
+      const updatedAt = timestamp();
+      return {
+        ...chat,
+        updatedAt,
+        nodes: {
+          ...chat.nodes,
+          [nodeId]: {
+            ...node,
+            updatedAt,
+            visualizations: node.visualizations.map((visualization) =>
+              visualization.id === visualizationId ? update(visualization) : visualization,
+            ),
+          },
+        },
+      };
+    });
+  };
+
   const discardAssistantDelta = (assistantId: string) => {
     assistantDeltaBuffers.current.delete(assistantId);
     if (
@@ -1567,6 +1667,7 @@ export default function App() {
           message:
             "Define or explain only the selected passage in one concise paragraph. Return the paragraph directly: no heading, list, preamble, follow-up question, or second paragraph. Preserve useful mathematical notation with inline LaTeX.",
           anchor: definition.anchor,
+          purpose: "definition",
         },
         () => undefined,
         () => undefined,
@@ -1634,6 +1735,291 @@ export default function App() {
         error instanceof Error ? error.message : "The definition could not be stopped",
       );
     }
+  };
+
+  const compileVisualization = async (
+    chatId: string,
+    nodeId: string,
+    visualizationId: string,
+    source: string,
+    generation?: GenerationMetrics,
+  ): Promise<MetaPostRequestError | null> => {
+    const compileKey = `${chatId}:${nodeId}:${visualizationId}`;
+    if (visualizationCompiles.current.has(compileKey)) {
+      return new MetaPostRequestError("This visualization is already compiling.");
+    }
+    visualizationCompiles.current.add(compileKey);
+    const updatedAt = timestamp();
+    updateVisualization(chatId, nodeId, visualizationId, (current) => ({
+      ...current,
+      status: "compiling",
+      metapostSource: source,
+      svg: undefined,
+      errorStage: undefined,
+      errorMessage: undefined,
+      compilerLog: undefined,
+      requestId: undefined,
+      generation: generation ?? current.generation,
+      updatedAt,
+    }));
+    try {
+      const result = await compileMetaPostRequest(source);
+      updateVisualization(chatId, nodeId, visualizationId, (current) => ({
+        ...current,
+        status: "ready",
+        svg: result.svg,
+        compilerLog: result.log,
+        compileDurationMs: result.durationMs,
+        updatedAt: timestamp(),
+      }));
+      visualizationCompiles.current.delete(compileKey);
+      return null;
+    } catch (error) {
+      updateVisualization(chatId, nodeId, visualizationId, (current) => ({
+        ...current,
+        status: "error",
+        errorStage: "compile",
+        errorMessage: error instanceof Error ? error.message : "MetaPost compilation failed",
+        compilerLog: error instanceof MetaPostRequestError ? error.log : "",
+        updatedAt: timestamp(),
+      }));
+      visualizationCompiles.current.delete(compileKey);
+      return error instanceof MetaPostRequestError
+        ? error
+        : new MetaPostRequestError(
+            error instanceof Error ? error.message : "MetaPost compilation failed",
+          );
+    }
+  };
+
+  const generateVisualization = async (
+    chatId: string,
+    nodeId: string,
+    visualizationId: string,
+    hint: string,
+    followup?: VisualizationFollowup,
+  ): Promise<void> => {
+    const chat = workspaceRef.current.chats.find((item) => item.id === chatId);
+    const node = chat?.nodes[nodeId];
+    const visualization = node?.visualizations?.find((item) => item.id === visualizationId);
+    const sourceMessage = node
+      ? messagesForNode(node).find(
+          (message) => message.id === visualization?.anchor.sourceMessageId,
+        )
+      : null;
+    if (!chat || !node || !visualization || !sourceMessage) return;
+
+    if (followup?.kind !== "repair") {
+      try {
+        const statusResponse = await fetch("/api/metapost/status");
+        const status = (await statusResponse.json()) as { available?: boolean } & ApiError;
+        if (!statusResponse.ok || !status.available) {
+          updateVisualization(chatId, nodeId, visualizationId, (current) => ({
+            ...current,
+            hint,
+            status: "error",
+            errorStage: "compile",
+            errorMessage:
+              status.error ?? "The compiler image is unavailable. Run: npm run metapost:build",
+            updatedAt: timestamp(),
+          }));
+          return;
+        }
+      } catch {
+        updateVisualization(chatId, nodeId, visualizationId, (current) => ({
+          ...current,
+          hint,
+          status: "error",
+          errorStage: "compile",
+          errorMessage: "Could not verify the MetaPost compiler before generation.",
+          updatedAt: timestamp(),
+        }));
+        return;
+      }
+    }
+
+    const requestId = newId();
+    updateVisualization(chatId, nodeId, visualizationId, (current) => ({
+      ...current,
+      hint,
+      status: "generating",
+      requestId,
+      svg: followup ? current.svg : undefined,
+      errorStage: undefined,
+      errorMessage: undefined,
+      compilerLog: followup?.kind === "repair" ? followup.diagnostic : undefined,
+      updatedAt: timestamp(),
+    }));
+    const controller = new AbortController();
+    responseControllers.current.set(visualizationId, controller);
+    try {
+      const visualizationModel =
+        workspaceRef.current.settings.visualizationModels[
+          workspaceRef.current.settings.provider
+        ]?.trim() || workspaceRef.current.settings.model;
+      const prompt = followup?.kind === "repair"
+        ? `Repair the following MetaPost figure body so it compiles under the required restricted output contract. Preserve its intended content and return only the corrected body.\n\n<failed_source>\n${followup.source}\n</failed_source>\n\n<compiler_log>\n${followup.diagnostic.slice(-12_000)}\n</compiler_log>`
+        : followup?.kind === "revision"
+          ? `Revise the following existing MetaPost figure body according to the one-time instruction. Return the complete replacement figure body, preserve everything that already works, and make only the changes needed to satisfy the instruction. Do not describe the changes.\n\n<existing_source>\n${followup.source}\n</existing_source>\n\n<revision_request>\n${followup.instruction}\n</revision_request>`
+          : `Create a clear, static mathematical diagram of the highlighted passage. Use the containing message to resolve symbols. ${
+              hint
+                ? `Follow this visualization hint:\n<visualization_hint>\n${hint}\n</visualization_hint>`
+                : "Choose the most useful geometric or graphical interpretation yourself."
+            }`;
+      const result = await modelRequest(
+        requestId,
+        {
+          provider: workspaceRef.current.settings.provider,
+          localBaseUrl: workspaceRef.current.settings.localBaseUrl,
+          model: visualizationModel,
+          reasoningEffort: compatibleReasoningEffort(
+            workspaceRef.current.settings.provider,
+            visualizationModel,
+            workspaceRef.current.settings.visualizationReasoningEfforts[
+              workspaceRef.current.settings.provider
+            ],
+          ),
+          maxOutputTokens: workspaceRef.current.settings.maxOutputTokens,
+          customInstructions: workspaceRef.current.settings.customInstructions,
+          context: [
+            {
+              title: node.title,
+              messages: [{ role: sourceMessage.role, content: sourceMessage.content }],
+            },
+          ],
+          message: prompt,
+          anchor: visualization.anchor,
+          purpose: "visualization",
+        },
+        () => undefined,
+        () => undefined,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      if (result.stopped) {
+        updateVisualization(chatId, nodeId, visualizationId, (current) => ({
+          ...current,
+          status: "error",
+          errorStage: "model",
+          errorMessage: "Visualization generation stopped.",
+          requestId: undefined,
+          generation: result.generation,
+          updatedAt: timestamp(),
+        }));
+        return;
+      }
+      const source = extractMetaPostSource(result.content);
+      const compileError = await compileVisualization(
+        chatId,
+        nodeId,
+        visualizationId,
+        source,
+        result.generation,
+      );
+      if (compileError && followup?.kind !== "repair") {
+        await generateVisualization(chatId, nodeId, visualizationId, hint, {
+          kind: "repair",
+          source,
+          diagnostic: compileError.log || compileError.message,
+        });
+      }
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      updateVisualization(chatId, nodeId, visualizationId, (current) => ({
+        ...current,
+        status: "error",
+        errorStage: "model",
+        errorMessage: error instanceof Error ? error.message : "Visualization generation failed",
+        requestId: undefined,
+        generation: error instanceof GenerationStreamError ? error.generation : current.generation,
+        updatedAt: timestamp(),
+      }));
+    } finally {
+      if (responseControllers.current.get(visualizationId) === controller) {
+        responseControllers.current.delete(visualizationId);
+      }
+    }
+  };
+
+  const reviseVisualization = async (
+    chatId: string,
+    nodeId: string,
+    visualizationId: string,
+    instruction: string,
+  ): Promise<void> => {
+    const visualization = workspaceRef.current.chats
+      .find((chat) => chat.id === chatId)
+      ?.nodes[nodeId]?.visualizations?.find((item) => item.id === visualizationId);
+    const source = visualization?.metapostSource?.trim();
+    const revisionInstruction = instruction.trim();
+    if (!visualization || !source || !revisionInstruction) return;
+    await generateVisualization(chatId, nodeId, visualizationId, visualization.hint, {
+      kind: "revision",
+      source,
+      instruction: revisionInstruction,
+    });
+  };
+
+  const stopVisualization = async (
+    chatId: string,
+    nodeId: string,
+    visualizationId: string,
+  ) => {
+    const chat = workspaceRef.current.chats.find((item) => item.id === chatId);
+    const visualization = chat?.nodes[nodeId]?.visualizations?.find(
+      (item) => item.id === visualizationId,
+    );
+    if (visualization?.status !== "generating" || !visualization.requestId) return;
+    try {
+      const response = await fetch(
+        `/api/respond/${encodeURIComponent(visualization.requestId)}/abort`,
+        { method: "POST" },
+      );
+      const data = (await response.json().catch(() => ({}))) as ApiError & {
+        generation?: GenerationMetrics;
+      };
+      if (!response.ok) throw new Error(data.error ?? "Could not stop visualization generation");
+      responseControllers.current.get(visualizationId)?.abort();
+      updateVisualization(chatId, nodeId, visualizationId, (current) => ({
+        ...current,
+        status: "error",
+        errorStage: "model",
+        errorMessage: "Visualization generation stopped.",
+        requestId: undefined,
+        generation: data.generation,
+        updatedAt: timestamp(),
+      }));
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Could not stop visualization generation");
+    }
+  };
+
+  const deleteVisualization = (chatId: string, nodeId: string, visualizationId: string) => {
+    const chat = workspaceRef.current.chats.find((item) => item.id === chatId);
+    const visualization = chat?.nodes[nodeId]?.visualizations?.find(
+      (item) => item.id === visualizationId,
+    );
+    if (!chat || !visualization || visualization.status === "generating" || visualization.status === "compiling") return;
+    if (!window.confirm("Delete this visualization?")) return;
+    updateChat(chatId, (current) => {
+      const currentNode = current.nodes[nodeId];
+      if (!currentNode) return current;
+      const updatedAt = timestamp();
+      return {
+        ...current,
+        updatedAt,
+        nodes: {
+          ...current.nodes,
+          [nodeId]: {
+            ...currentNode,
+            updatedAt,
+            visualizations: (currentNode.visualizations ?? []).filter(
+              (item) => item.id !== visualizationId,
+            ),
+          },
+        },
+      };
+    });
   };
 
   const stopResponse = async (nodeId: string, assistantId: string) => {
@@ -1828,13 +2214,92 @@ export default function App() {
     }
   };
 
+  const resumeVisualization = async (pending: PendingGeneration) => {
+    const controller = new AbortController();
+    responseControllers.current.set(pending.assistantId, controller);
+    try {
+      const result = await resumeModelRequest(
+        pending.requestId,
+        () => undefined,
+        () => undefined,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      if (result.stopped) {
+        updateVisualization(
+          pending.chatId,
+          pending.nodeId,
+          pending.assistantId,
+          (current) => ({
+            ...current,
+            status: "error",
+            errorStage: "model",
+            errorMessage: "Visualization generation stopped.",
+            requestId: undefined,
+            generation: result.generation,
+            updatedAt: timestamp(),
+          }),
+        );
+        return;
+      }
+      await compileVisualization(
+        pending.chatId,
+        pending.nodeId,
+        pending.assistantId,
+        extractMetaPostSource(result.content),
+        result.generation,
+      );
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      updateVisualization(
+        pending.chatId,
+        pending.nodeId,
+        pending.assistantId,
+        (current) => ({
+          ...current,
+          status: "error",
+          errorStage: "model",
+          errorMessage: error instanceof Error ? error.message : "Visualization generation failed",
+          requestId: undefined,
+          generation: error instanceof GenerationStreamError ? error.generation : current.generation,
+          updatedAt: timestamp(),
+        }),
+      );
+    } finally {
+      if (responseControllers.current.get(pending.assistantId) === controller) {
+        responseControllers.current.delete(pending.assistantId);
+      }
+    }
+  };
+
   useEffect(() => {
     if (!loaded) return;
     pendingGenerations(workspace).forEach((pending) => {
       if (!responseControllers.current.has(pending.assistantId)) {
         if (pending.kind === "definition") void resumeDefinition(pending);
+        else if (pending.kind === "visualization") void resumeVisualization(pending);
         else void resumeGeneration(pending);
       }
+    });
+    workspace.chats.forEach((chat) => {
+      Object.values(chat.nodes).forEach((node) => {
+        (node.visualizations ?? []).forEach((visualization) => {
+          const compileKey = `${chat.id}:${node.id}:${visualization.id}`;
+          if (
+            visualization.status === "compiling" &&
+            visualization.metapostSource &&
+            !visualizationCompiles.current.has(compileKey)
+          ) {
+            void compileVisualization(
+              chat.id,
+              node.id,
+              visualization.id,
+              visualization.metapostSource,
+              visualization.generation,
+            );
+          }
+        });
+      });
     });
   }, [loaded, workspace.chats]);
 
@@ -2648,6 +3113,43 @@ export default function App() {
     }));
   };
 
+  const selectVisualizationModel = (model: string) => {
+    setWorkspace((current) => {
+      const provider = current.settings.provider;
+      return {
+        ...current,
+        settings: {
+          ...current.settings,
+          visualizationModels: {
+            ...current.settings.visualizationModels,
+            [provider]: model,
+          },
+          visualizationReasoningEfforts: {
+            ...current.settings.visualizationReasoningEfforts,
+            [provider]: compatibleReasoningEffort(
+              provider,
+              model,
+              current.settings.visualizationReasoningEfforts[provider],
+            ),
+          },
+        },
+      };
+    });
+  };
+
+  const selectVisualizationReasoningEffort = (reasoningEffort: ReasoningEffort) => {
+    setWorkspace((current) => ({
+      ...current,
+      settings: {
+        ...current.settings,
+        visualizationReasoningEfforts: {
+          ...current.settings.visualizationReasoningEfforts,
+          [current.settings.provider]: reasoningEffort,
+        },
+      },
+    }));
+  };
+
   const selectProvider = (provider: ProviderId) => {
     setWorkspace((current) => {
       const providerModels = {
@@ -2752,6 +3254,64 @@ export default function App() {
     });
     window.getSelection()?.removeAllRanges();
     setSelection(null);
+  };
+
+  const visualizeSelection = () => {
+    if (!activeChat || !selection) return;
+    const node = activeChat.nodes[selection.sourceNodeId];
+    if (!node) return;
+    const matchesSelection = (visualization: InlineVisualization) =>
+      visualization.anchor.sourceMessageId === selection.sourceMessageId &&
+      visualization.anchor.blockIndex === selection.blockIndex &&
+      visualization.anchor.quote === selection.quote;
+    const existing = (node.visualizations ?? []).find(matchesSelection);
+    window.getSelection()?.removeAllRanges();
+    setSelection(null);
+    if (existing) {
+      window.requestAnimationFrame(() => {
+        document
+          .querySelector<HTMLElement>(`[data-visualization-id="${CSS.escape(existing.id)}"]`)
+          ?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+      return;
+    }
+
+    const createdAt = timestamp();
+    const visualization: InlineVisualization = {
+      id: newId(),
+      anchor: {
+        sourceNodeId: selection.sourceNodeId,
+        sourceMessageId: selection.sourceMessageId,
+        quote: selection.quote,
+        blockIndex: selection.blockIndex,
+      },
+      hint: "",
+      status: "draft",
+      createdAt,
+      updatedAt: createdAt,
+    };
+    setWorkspace((current) => ({
+      ...current,
+      chats: current.chats.map((chat) =>
+        chat.id !== activeChat.id
+          ? chat
+          : (() => {
+              const currentNode = chat.nodes[node.id] ?? node;
+              return {
+              ...chat,
+              updatedAt: createdAt,
+              nodes: {
+                ...chat.nodes,
+                [node.id]: {
+                  ...currentNode,
+                  updatedAt: createdAt,
+                  visualizations: [...(currentNode.visualizations ?? []), visualization],
+                },
+              },
+            };
+          })(),
+      ),
+    }));
   };
 
   const defineSelection = () => {
@@ -3381,6 +3941,21 @@ export default function App() {
                 getAnchorRect,
               })
             }
+            onGenerateVisualization={(visualizationId, hint) =>
+              void generateVisualization(activeChat.id, leftPaneNode.id, visualizationId, hint)
+            }
+            onFixVisualization={(visualizationId, instruction) =>
+              void reviseVisualization(activeChat.id, leftPaneNode.id, visualizationId, instruction)
+            }
+            onCompileVisualization={(visualizationId, source) =>
+              void compileVisualization(activeChat.id, leftPaneNode.id, visualizationId, source)
+            }
+            onStopVisualization={(visualizationId) =>
+              void stopVisualization(activeChat.id, leftPaneNode.id, visualizationId)
+            }
+            onDeleteVisualization={(visualizationId) =>
+              deleteVisualization(activeChat.id, leftPaneNode.id, visualizationId)
+            }
             onSend={(message) => sendToThread(leftPaneNode.id, message)}
             onStop={(assistantId) => stopResponse(leftPaneNode.id, assistantId)}
             onEditMessage={(revisionGroupId, content) =>
@@ -3621,6 +4196,21 @@ export default function App() {
                 getAnchorRect,
               })
             }
+            onGenerateVisualization={(visualizationId, hint) =>
+              void generateVisualization(activeChat.id, sideNode.id, visualizationId, hint)
+            }
+            onFixVisualization={(visualizationId, instruction) =>
+              void reviseVisualization(activeChat.id, sideNode.id, visualizationId, instruction)
+            }
+            onCompileVisualization={(visualizationId, source) =>
+              void compileVisualization(activeChat.id, sideNode.id, visualizationId, source)
+            }
+            onStopVisualization={(visualizationId) =>
+              void stopVisualization(activeChat.id, sideNode.id, visualizationId)
+            }
+            onDeleteVisualization={(visualizationId) =>
+              deleteVisualization(activeChat.id, sideNode.id, visualizationId)
+            }
             onSend={(message) => sendToThread(sideNode.id, message)}
             onStop={(assistantId) => stopResponse(sideNode.id, assistantId)}
             onEditMessage={(revisionGroupId, content) =>
@@ -3799,6 +4389,83 @@ export default function App() {
                       )}
                     </span>
                   </label>
+                  <label className="model-select">
+                    <ChartNoAxesCombined size={15} />
+                    <span>
+                      <small>Visualization model · {providerLabel(workspace.settings.provider)}</small>
+                      {workspace.settings.provider === "openai" ? (
+                        <select
+                          aria-label="Model used for MetaPost visualizations"
+                          value={
+                            workspace.settings.visualizationModels[
+                              workspace.settings.provider
+                            ]
+                          }
+                          onChange={(event) => selectVisualizationModel(event.target.value)}
+                        >
+                          {MODEL_OPTIONS.map((model) => (
+                            <option value={model.value} key={model.value}>
+                              {model.label} · {model.note}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <>
+                          <input
+                            aria-label="Model used for MetaPost visualizations"
+                            value={
+                              workspace.settings.visualizationModels[
+                                workspace.settings.provider
+                              ]
+                            }
+                            onChange={(event) => selectVisualizationModel(event.target.value)}
+                            list="visualization-model-options"
+                            placeholder={
+                              workspace.settings.provider === "openrouter"
+                                ? "provider/model"
+                                : "Model ID"
+                            }
+                            spellCheck={false}
+                          />
+                          <datalist id="visualization-model-options">
+                            {providerModels.map((model) => (
+                              <option value={model.id} key={model.id}>
+                                {model.name ?? model.id}
+                              </option>
+                            ))}
+                          </datalist>
+                        </>
+                      )}
+                      <select
+                        className="visualization-reasoning-select"
+                        aria-label="Reasoning effort used for MetaPost visualizations"
+                        value={
+                          workspace.settings.visualizationReasoningEfforts[
+                            workspace.settings.provider
+                          ]
+                        }
+                        onChange={(event) =>
+                          selectVisualizationReasoningEffort(
+                            event.target.value as ReasoningEffort,
+                          )
+                        }
+                      >
+                        {REASONING_OPTIONS.map((effort) => (
+                          <option
+                            value={effort.value}
+                            key={effort.value}
+                            disabled={
+                              effort.value === "max" &&
+                              workspace.settings.provider === "openai" &&
+                              !workspace.settings.visualizationModels.openai.startsWith("gpt-5.6")
+                            }
+                          >
+                            {effort.label} reasoning
+                          </option>
+                        ))}
+                      </select>
+                    </span>
+                  </label>
                   {workspace.settings.provider === "local" && (
                     <label className="model-select provider-url-control">
                       <ServerCog size={15} />
@@ -3829,7 +4496,7 @@ export default function App() {
                     {providerModelsStatus === "loading"
                       ? "Loading model IDs…"
                       : providerModelsStatus === "loaded"
-                        ? `${providerModels.length.toLocaleString()} model IDs available in the chat and Define model fields.`
+                        ? `${providerModels.length.toLocaleString()} model IDs available in the chat, Define, and Visualization model fields.`
                         : providerModelsStatus === "error"
                           ? "The model catalog is unavailable; you can still enter a model ID manually."
                           : "Enter a model ID in the chat box."}
@@ -4400,6 +5067,7 @@ export default function App() {
           selection={selection}
           onDismiss={() => setSelection(null)}
           onDefine={defineSelection}
+          onVisualize={visualizeSelection}
           onQuote={quoteSelectionInThread}
           onElaborate={() => {
             if (activeChat && activeNode) {

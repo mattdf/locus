@@ -2,6 +2,7 @@ import type {
   ChatCategory,
   ChatTree,
   InlineDefinition,
+  InlineVisualization,
   Message,
   WorkspaceState,
 } from "../types";
@@ -54,6 +55,27 @@ function isDefinition(value: unknown): value is InlineDefinition {
   );
 }
 
+function isVisualization(value: unknown): value is InlineVisualization {
+  if (!isRecord(value) || !isRecord(value.anchor)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.hint === "string" &&
+    (value.status === "draft" ||
+      value.status === "generating" ||
+      value.status === "compiling" ||
+      value.status === "ready" ||
+      value.status === "error") &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string" &&
+    typeof value.anchor.sourceNodeId === "string" &&
+    typeof value.anchor.sourceMessageId === "string" &&
+    typeof value.anchor.quote === "string" &&
+    Number.isSafeInteger(value.anchor.blockIndex) &&
+    (value.metapostSource === undefined || typeof value.metapostSource === "string") &&
+    (value.svg === undefined || typeof value.svg === "string")
+  );
+}
+
 function isChat(value: unknown): value is ChatTree {
   if (
     !isRecord(value) ||
@@ -81,6 +103,8 @@ function isChat(value: unknown): value is ChatTree {
         node.messages.every(isMessage) &&
         (node.definitions === undefined ||
           (Array.isArray(node.definitions) && node.definitions.every(isDefinition))) &&
+        (node.visualizations === undefined ||
+          (Array.isArray(node.visualizations) && node.visualizations.every(isVisualization))) &&
         typeof node.createdAt === "string" &&
         typeof node.updatedAt === "string",
     )
@@ -237,6 +261,22 @@ function importedDefinition(definition: InlineDefinition): InlineDefinition {
   };
 }
 
+function importedVisualization(
+  visualization: InlineVisualization,
+): InlineVisualization {
+  if (visualization.status !== "generating" && visualization.status !== "compiling") {
+    return { ...visualization };
+  }
+  const { requestId: _requestId, ...rest } = visualization;
+  return {
+    ...rest,
+    status: "error",
+    errorStage: visualization.status === "compiling" ? "compile" : "model",
+    errorMessage: `Visualization ${visualization.status} stopped before the export completed.`,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 export function cloneChatForImport(chat: ChatTree, id: string): ChatTree {
   const normalizedChat = normalizeChatRevisions(chat);
   return {
@@ -250,6 +290,7 @@ export function cloneChatForImport(chat: ChatTree, id: string): ChatTree {
           ...node,
           messages: node.messages.map(importedMessage),
           definitions: node.definitions?.map(importedDefinition),
+          visualizations: node.visualizations?.map(importedVisualization),
           messageRevisions: node.messageRevisions
             ? Object.fromEntries(
                 Object.entries(node.messageRevisions).map(([groupId, group]) => [

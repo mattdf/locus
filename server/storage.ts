@@ -5,11 +5,12 @@ import {
   DEFAULT_DEFINITION_MODELS,
   DEFAULT_LOCAL_BASE_URL,
   DEFAULT_PROVIDER_MODELS,
+  DEFAULT_VISUALIZATION_MODELS,
   isProviderId,
 } from "../src/lib/providers.ts";
 import { normalizeChatRevisions } from "../src/lib/revisions.ts";
 
-const DATA_DIR = path.resolve("data");
+const DATA_DIR = path.resolve(process.env.DATA_DIR?.trim() || "data");
 const DATA_FILE = path.join(DATA_DIR, "chats.json");
 
 export const emptyState = (): WorkspaceState => ({
@@ -21,6 +22,8 @@ export const emptyState = (): WorkspaceState => ({
     provider: "openai",
     providerModels: { ...DEFAULT_PROVIDER_MODELS },
     definitionModels: { ...DEFAULT_DEFINITION_MODELS },
+    visualizationModels: { ...DEFAULT_VISUALIZATION_MODELS },
+    visualizationReasoningEfforts: { openai: "high", openrouter: "high", local: "medium" },
     localBaseUrl: DEFAULT_LOCAL_BASE_URL,
     model: "gpt-5.6-sol",
     reasoningEffort: "max",
@@ -79,6 +82,22 @@ function normalizeState(state: WorkspaceState): WorkspaceState {
     local:
       savedDefinitionModels?.local?.trim() || DEFAULT_DEFINITION_MODELS.local,
   };
+  const savedVisualizationModels = state.settings?.visualizationModels;
+  const visualizationModels = {
+    openai:
+      savedVisualizationModels?.openai?.trim() || DEFAULT_VISUALIZATION_MODELS.openai,
+    openrouter:
+      savedVisualizationModels?.openrouter?.trim() ||
+      DEFAULT_VISUALIZATION_MODELS.openrouter,
+    local:
+      savedVisualizationModels?.local?.trim() || DEFAULT_VISUALIZATION_MODELS.local,
+  };
+  const savedVisualizationEfforts = state.settings?.visualizationReasoningEfforts;
+  const visualizationReasoningEfforts = {
+    openai: savedVisualizationEfforts?.openai ?? "high",
+    openrouter: savedVisualizationEfforts?.openrouter ?? "high",
+    local: savedVisualizationEfforts?.local ?? "medium",
+  };
   return {
     ...state,
     categories,
@@ -95,6 +114,8 @@ function normalizeState(state: WorkspaceState): WorkspaceState {
       provider,
       providerModels,
       definitionModels,
+      visualizationModels,
+      visualizationReasoningEfforts,
       localBaseUrl:
         typeof state.settings?.localBaseUrl === "string" &&
         state.settings.localBaseUrl.trim()

@@ -16,6 +16,11 @@ import {
   saveProviderApiKey,
 } from "./providers.ts";
 import { readState, writeState } from "./storage.ts";
+import {
+  compileMetaPost,
+  MetaPostCompileError,
+  metapostImageAvailable,
+} from "./metapost.ts";
 import { isProviderId } from "../src/lib/providers.ts";
 import type {
   ContextNode,
@@ -41,6 +46,23 @@ app.use(express.json({ limit: "100mb" }));
 
 app.get("/api/health", (_request, response) => {
   response.json({ ok: true });
+});
+
+app.get("/api/metapost/status", async (_request, response) => {
+  response.json({ available: await metapostImageAvailable() });
+});
+
+app.post("/api/metapost/compile", async (request, response, next) => {
+  try {
+    response.json(await compileMetaPost(request.body?.source));
+  } catch (error) {
+    if (error instanceof MetaPostCompileError) {
+      if (error.status === 429) response.setHeader("Retry-After", "2");
+      response.status(error.status).json({ error: error.message, log: error.log });
+      return;
+    }
+    next(error);
+  }
 });
 
 app.get("/api/api-key", async (_request, response, next) => {
@@ -182,6 +204,7 @@ app.post("/api/respond", (request, response, next) => {
       context?: ContextNode[];
       message?: string;
       anchor?: HighlightAnchor;
+      purpose?: "chat" | "definition" | "visualization";
     };
     const provider = body.provider ?? "openai";
     const model = body.model?.trim() ?? "gpt-5.6-sol";
@@ -237,6 +260,7 @@ app.post("/api/respond", (request, response, next) => {
       maxOutputTokens,
       customInstructions: body.customInstructions ?? "",
       anchor: body.anchor,
+      purpose: body.purpose === "visualization" ? "visualization" : body.purpose === "definition" ? "definition" : "chat",
     });
     attachGenerationStream(response, job);
   } catch (error) {

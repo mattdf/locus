@@ -14,11 +14,13 @@ import {
   Sparkles,
   Square,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import type {
   ChatTree,
   HighlightAnchor,
   InlineDefinition,
+  InlineVisualization,
   SelectionDraft,
   ThreadNode,
   ReasoningEffort,
@@ -33,9 +35,11 @@ import { compatibleReasoningEffort } from "../lib/providers";
 import { Composer } from "./Composer";
 import { MarkdownMessage, type LinkedAnchor } from "./MarkdownMessage";
 import { MODEL_OPTIONS, REASONING_OPTIONS } from "./ModelPicker";
+import { VisualizationCard } from "./VisualizationCard";
 
 const EMPTY_LINKED_ANCHORS: LinkedAnchor[] = [];
 const EMPTY_DEFINITIONS: InlineDefinition[] = [];
+const EMPTY_VISUALIZATIONS: InlineVisualization[] = [];
 
 interface ThreadViewProps {
   chat: ChatTree;
@@ -48,6 +52,11 @@ interface ThreadViewProps {
     rect: SelectionDraft["rect"],
     getAnchorRect?: () => SelectionDraft["rect"],
   ) => void;
+  onGenerateVisualization: (visualizationId: string, hint: string) => void;
+  onFixVisualization: (visualizationId: string, instruction: string) => void;
+  onCompileVisualization: (visualizationId: string, source: string) => void;
+  onStopVisualization: (visualizationId: string) => void;
+  onDeleteVisualization: (visualizationId: string) => void;
   onSend: (message: string) => void;
   onStop: (assistantId: string) => void;
   onEditMessage: (revisionGroupId: string, content: string) => void;
@@ -111,6 +120,76 @@ function ThinkingIndicator({ startedAt }: { startedAt: string }) {
   );
 }
 
+function InlineVisualizationMount({
+  messagesRef,
+  messageId,
+  messageContent,
+  visualization,
+  sendShortcut,
+  onGenerate,
+  onFix,
+  onCompile,
+  onStop,
+  onDelete,
+}: {
+  messagesRef: RefObject<HTMLDivElement | null>;
+  messageId: string;
+  messageContent: string;
+  visualization: InlineVisualization;
+  sendShortcut: SendShortcut;
+  onGenerate: (visualizationId: string, hint: string) => void;
+  onFix: (visualizationId: string, instruction: string) => void;
+  onCompile: (visualizationId: string, source: string) => void;
+  onStop: (visualizationId: string) => void;
+  onDelete: (visualizationId: string) => void;
+}) {
+  const [mount, setMount] = useState<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const article = messagesRef.current?.querySelector<HTMLElement>(
+      `[data-message-id="${CSS.escape(messageId)}"]`,
+    );
+    const markdown = article?.querySelector<HTMLElement>(".markdown-message");
+    if (!markdown) return;
+    const blocks = Array.from(markdown.children).filter(
+      (element) => !element.classList.contains("inline-visualization-slot"),
+    );
+    const block = blocks[visualization.anchor.blockIndex];
+    if (!block) return;
+
+    const slot = document.createElement("div");
+    slot.className = "inline-visualization-slot";
+    slot.dataset.visualizationSlot = visualization.id;
+    slot.dataset.blockIndex = String(visualization.anchor.blockIndex);
+    const existingSlots = Array.from(
+      markdown.querySelectorAll<HTMLElement>(
+        `:scope > .inline-visualization-slot[data-block-index="${visualization.anchor.blockIndex}"]`,
+      ),
+    );
+    const lastSlot = existingSlots.at(-1);
+    markdown.insertBefore(slot, lastSlot ? lastSlot.nextSibling : block.nextSibling);
+    setMount(slot);
+    return () => {
+      setMount(null);
+      slot.remove();
+    };
+  }, [messageContent, messageId, visualization.anchor.blockIndex, visualization.id]);
+
+  return mount
+    ? createPortal(
+        <VisualizationCard
+          visualization={visualization}
+          sendShortcut={sendShortcut}
+          onGenerate={onGenerate}
+          onFix={onFix}
+          onCompile={onCompile}
+          onStop={onStop}
+          onDelete={onDelete}
+        />,
+        mount,
+      )
+    : null;
+}
+
 function RevisionSwitcher({
   label,
   activeIndex,
@@ -155,6 +234,11 @@ export function ThreadView({
   onSelect,
   onOpenElaboration,
   onOpenDefinition,
+  onGenerateVisualization,
+  onFixVisualization,
+  onCompileVisualization,
+  onStopVisualization,
+  onDeleteVisualization,
   onSend,
   onStop,
   onEditMessage,
@@ -216,6 +300,15 @@ export function ThreadView({
     });
     return definitions;
   }, [node.definitions]);
+  const visualizationsByMessage = useMemo(() => {
+    const visualizations = new Map<string, InlineVisualization[]>();
+    (node.visualizations ?? []).forEach((visualization) => {
+      const messageVisualizations = visualizations.get(visualization.anchor.sourceMessageId);
+      if (messageVisualizations) messageVisualizations.push(visualization);
+      else visualizations.set(visualization.anchor.sourceMessageId, [visualization]);
+    });
+    return visualizations;
+  }, [node.visualizations]);
   const pendingAssistant = messages.find(
     (message) => message.role === "assistant" && message.pending,
   );
@@ -325,7 +418,9 @@ export function ThreadView({
         container.querySelectorAll<HTMLElement>("[data-message-id]"),
       ).find((candidate) => candidate.dataset.messageId === scrollRequest.anchor.sourceMessageId);
       const markdown = article?.querySelector<HTMLElement>(".markdown-message");
-      const block = markdown?.children.item(scrollRequest.anchor.blockIndex) as HTMLElement | null;
+      const block = Array.from(markdown?.children ?? []).filter(
+        (element) => !element.classList.contains("inline-visualization-slot"),
+      )[scrollRequest.anchor.blockIndex] as HTMLElement | undefined;
       const target = block ?? article;
       if (target) {
         target.scrollIntoView({ behavior: "auto", block: "center" });
@@ -465,6 +560,8 @@ export function ThreadView({
           const linkedAnchors =
             linkedAnchorsByMessage.get(message.id) ?? EMPTY_LINKED_ANCHORS;
           const definitions = definitionsByMessage.get(message.id) ?? EMPTY_DEFINITIONS;
+          const visualizations =
+            visualizationsByMessage.get(message.id) ?? EMPTY_VISUALIZATIONS;
           return (
             <article
               className={`message message--${message.role} ${message.error ? "message--error" : ""}`}
@@ -738,10 +835,31 @@ export function ThreadView({
                   nodeId={node.id}
                   linkedAnchors={linkedAnchors}
                   definitions={definitions}
+                  visualizations={visualizations}
                   onSelect={onSelect}
                   onOpenElaboration={onOpenElaboration}
                   onOpenDefinition={onOpenDefinition}
+                  onOpenVisualization={(visualizationId) => {
+                    messagesRef.current
+                      ?.querySelector<HTMLElement>(`[data-visualization-id="${CSS.escape(visualizationId)}"]`)
+                      ?.scrollIntoView({ behavior: "smooth", block: "center" });
+                  }}
                 />
+                  {visualizations.map((visualization) => (
+                    <InlineVisualizationMount
+                      key={visualization.id}
+                      messagesRef={messagesRef}
+                      messageId={message.id}
+                      messageContent={message.content}
+                      visualization={visualization}
+                      sendShortcut={sendShortcut}
+                      onGenerate={onGenerateVisualization}
+                      onFix={onFixVisualization}
+                      onCompile={onCompileVisualization}
+                      onStop={onStopVisualization}
+                      onDelete={onDeleteVisualization}
+                    />
+                  ))}
                   {message.pending && (
                     <div className="streaming-status" aria-label="Locus is responding">
                       <span /> Streaming
@@ -790,7 +908,7 @@ export function ThreadView({
         />
         {!side && (
           <p className="selection-tip">
-            Select any passage or equation to define it, quote it, or open a focused elaboration.
+            Select any passage or equation to define, visualize, quote, or elaborate on it.
           </p>
         )}
       </div>
