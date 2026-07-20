@@ -2,6 +2,7 @@ import { betterAuth } from "better-auth";
 import { admin } from "better-auth/plugins";
 import { authSecret, isHosted, publicOrigin } from "./config.ts";
 import { getPool } from "./db.ts";
+import { deliverOnboardingEmail, prepareOnboardingEmail } from "./onboarding.ts";
 import { sendVerificationEmail as sendLocusVerificationEmail } from "./postmark.ts";
 
 export const auth = isHosted
@@ -24,6 +25,17 @@ export const auth = isHosted
         sendOnSignUp: true,
         autoSignInAfterVerification: true,
         expiresIn: 60 * 60 * 24,
+        beforeEmailVerification: async (user) => {
+          await prepareOnboardingEmail(user.id);
+        },
+        afterEmailVerification: async (user) => {
+          await deliverOnboardingEmail({
+            userId: user.id,
+            email: user.email,
+            name: user.name,
+            appUrl: publicOrigin!,
+          });
+        },
         sendVerificationEmail: async ({ user, url }) => {
           void sendLocusVerificationEmail({
             email: user.email,
