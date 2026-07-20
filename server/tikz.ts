@@ -22,6 +22,9 @@ let activeCompilations = 0;
 // validation is an additional boundary that rejects TeX primitives capable of
 // file access, shell/process access, macro obfuscation, or document mutation.
 const FORBIDDEN_COMMAND = /\\(?:documentclass|usepackage|RequirePackage|input|include|includeonly|includegraphics|openin|openout|read|write|closein|closeout|immediate|special|catcode|csname|endcsname|expandafter|noexpand|afterassignment|aftergroup|newcommand|renewcommand|providecommand|DeclareRobustCommand|def|edef|gdef|xdef|let|futurelet|newread|newwrite|everyjob|everyeof|everypar|everymath|everydisplay|shipout|output|font|fontdimen|pdfobj|pdfxform|pdfliteral|pdfcatalog|pdfinfo|pdfmapfile|directlua|luaexec|write18|ShellEscape|tikzexternalize|tikzexternalenable|pgfimage|href|url|file|jobname|typeout|message|errmessage|show|meaning|makeatletter|makeatother)\b/i;
+const ALLOWED_ENVIRONMENTS = new Set(["scope", "array"]);
+const MAX_ENVIRONMENTS = 64;
+const MAX_ARRAY_COLUMNS = 12;
 
 export interface TikzCompileResult {
   svg: string;
@@ -75,13 +78,42 @@ function validateBody(source: unknown): string {
       400,
     );
   }
-  for (const match of body.matchAll(/\\(begin|end)\s*\{([^}]+)\}/gi)) {
-    if (match[2].trim().toLowerCase() !== "scope") {
+  const environmentStack: string[] = [];
+  let environmentCount = 0;
+  for (const match of body.matchAll(/\\(begin|end)\s*\{([^}]+)\}/g)) {
+    const action = match[1];
+    const environment = match[2].trim();
+    if (!ALLOWED_ENVIRONMENTS.has(environment)) {
       throw new TikzCompileError(
-        `The TeX environment “${match[2].trim()}” is disabled in TikZ figure bodies.`,
+        `The TeX environment “${environment}” is disabled in TikZ figure bodies.`,
         400,
       );
     }
+    if (action === "begin") {
+      environmentCount += 1;
+      if (environmentCount > MAX_ENVIRONMENTS) {
+        throw new TikzCompileError("TikZ source contains too many nested environments.", 400);
+      }
+      if (environment === "array") {
+        const remainder = body.slice((match.index ?? 0) + match[0].length);
+        const columnSpec = remainder.match(/^\s*\{([lcr|\s]+)\}/)?.[1] ?? "";
+        const columns = columnSpec.match(/[lcr]/g)?.length ?? 0;
+        if (!columnSpec || columns < 1 || columns > MAX_ARRAY_COLUMNS) {
+          throw new TikzCompileError(
+            `TikZ array column specifications may contain only l, c, r, separators, and at most ${MAX_ARRAY_COLUMNS} columns.`,
+            400,
+          );
+        }
+      }
+      environmentStack.push(environment);
+      continue;
+    }
+    if (environmentStack.pop() !== environment) {
+      throw new TikzCompileError("TikZ source has mismatched TeX environments.", 400);
+    }
+  }
+  if (environmentStack.length) {
+    throw new TikzCompileError("TikZ source has unclosed TeX environments.", 400);
   }
 
   let braceDepth = 0;
