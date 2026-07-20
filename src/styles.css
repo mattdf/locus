@@ -1382,6 +1382,7 @@ a:focus-visible {
 }
 
 .copy-response-button,
+.print-response-button,
 .regenerate-response-button {
   display: inline-flex;
   min-height: 23px;
@@ -1500,6 +1501,7 @@ a:focus-visible {
 }
 
 .copy-response-button:hover,
+.print-response-button:hover,
 .regenerate-response-button:hover:not(:disabled),
 .regenerate-model-button:hover:not(:disabled),
 .copy-response-button--copied {
@@ -4085,6 +4087,7 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .revision-switcher > button,
 .app-shell[data-theme="dark"] .edit-message-button,
 .app-shell[data-theme="dark"] .copy-response-button,
+.app-shell[data-theme="dark"] .print-response-button,
 .app-shell[data-theme="dark"] .regenerate-response-button,
 .app-shell[data-theme="dark"] .regenerate-model-button {
   color: #92a09a;
@@ -4093,6 +4096,7 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .revision-switcher > button:hover:not(:disabled),
 .app-shell[data-theme="dark"] .edit-message-button:hover:not(:disabled),
 .app-shell[data-theme="dark"] .copy-response-button:hover,
+.app-shell[data-theme="dark"] .print-response-button:hover,
 .app-shell[data-theme="dark"] .regenerate-response-button:hover:not(:disabled),
 .app-shell[data-theme="dark"] .regenerate-model-button:hover:not(:disabled),
 .app-shell[data-theme="dark"] .copy-response-button--copied {
@@ -4595,4 +4599,195 @@ body.resizing-drawer {
 
 .app-shell[data-theme="dark"] .sidebar-scrim {
   background: rgba(0, 0, 0, 0.56);
+}
+
+@media print {
+  @page {
+    margin: 16mm 18mm;
+  }
+
+  html,
+  body,
+  body[data-printing-message="true"] #root {
+    width: auto !important;
+    height: auto !important;
+    min-width: 0 !important;
+    overflow: visible !important;
+    background: white !important;
+  }
+
+  body[data-printing-message="true"] {
+    color: #17201d;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  body[data-printing-message="true"]
+    *:not(:has([data-print-target="true"])):not([data-print-target="true"]):not(
+      [data-print-target="true"] *
+    ) {
+    display: none !important;
+  }
+
+  body[data-printing-message="true"] .app-shell,
+  body[data-printing-message="true"] .main-pane:has([data-print-target="true"]),
+  body[data-printing-message="true"] .focus-drawer:has([data-print-target="true"]),
+  body[data-printing-message="true"] .thread-view:has([data-print-target="true"]),
+  body[data-printing-message="true"] .thread-messages:has([data-print-target="true"]) {
+    position: static !important;
+    display: block !important;
+    width: auto !important;
+    max-width: none !important;
+    height: auto !important;
+    min-height: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    color: #17201d !important;
+    background: white !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    transform: none !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] {
+    position: static !important;
+    display: block !important;
+    width: 100% !important;
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    color: #17201d !important;
+    background: white !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .message__controls,
+  body[data-printing-message="true"] [data-print-target="true"] .elaboration-links {
+    display: none !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .message__meta {
+    margin-bottom: 14px;
+    color: #0d7065 !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message,
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message h1,
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message h2,
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message h3,
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message h4,
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message strong,
+  body[data-printing-message="true"] [data-print-target="true"] .katex {
+    color: #17201d !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message {
+    font-size: 11pt !important;
+    line-height: 1.6 !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message a {
+    color: #075f56 !important;
+    text-decoration: underline;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message blockquote {
+    color: #394541 !important;
+    background: #f6f5f1 !important;
+    border-left-color: #9bb9b1 !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message code {
+    color: #27312e !important;
+    background: #f1f0ec !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message pre {
+    overflow: visible !important;
+    color: #27312e !important;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    background: #f6f5f1 !important;
+    border-color: #d8d5cc !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message pre code {
+    background: transparent !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-comment,
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-quote {
+    color: #64716b !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-keyword,
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-selector-tag,
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-literal,
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-type {
+    color: #835500 !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-string,
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-regexp,
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-addition {
+    color: #216e45 !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-number,
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-symbol,
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-bullet,
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-variable {
+    color: #713e87 !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-title,
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-section,
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-function {
+    color: #17686f !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-built_in,
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-attribute,
+  body[data-printing-message="true"] [data-print-target="true"] .hljs-attr {
+    color: #91472b !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message th,
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message td {
+    color: #17201d !important;
+    border-color: #cbc8bf !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message th {
+    background: #efeee9 !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .has-linked-elaboration {
+    background: rgba(229, 184, 76, 0.11) !important;
+    border-left-color: rgba(191, 139, 28, 0.55) !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .has-linked-definition {
+    background: rgba(79, 151, 194, 0.1) !important;
+    border-left-color: rgba(56, 129, 172, 0.52) !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .katex-display {
+    overflow: visible !important;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message pre,
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message table,
+  body[data-printing-message="true"] [data-print-target="true"] .markdown-message blockquote,
+  body[data-printing-message="true"] [data-print-target="true"] .katex-display {
+    break-inside: avoid;
+  }
+
+  body[data-printing-message="true"] [data-print-target="true"] .generation-details {
+    color: #6e7773 !important;
+    border-top-color: #d8d5cc !important;
+  }
 }

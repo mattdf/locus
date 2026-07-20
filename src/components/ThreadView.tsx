@@ -9,6 +9,7 @@ import {
   Copy,
   MessageSquareText,
   Pencil,
+  Printer,
   RotateCcw,
   Sparkles,
   Square,
@@ -368,6 +369,39 @@ export function ThreadView({
     }, 1800);
   };
 
+  const printResponse = (messageId: string) => {
+    const article = Array.from(
+      messagesRef.current?.querySelectorAll<HTMLElement>("[data-message-id]") ?? [],
+    ).find((candidate) => candidate.dataset.messageId === messageId);
+    if (!article) return;
+
+    document
+      .querySelectorAll<HTMLElement>('[data-print-target="true"]')
+      .forEach((candidate) => candidate.removeAttribute("data-print-target"));
+    article.dataset.printTarget = "true";
+    document.body.dataset.printingMessage = "true";
+
+    let cleanupTimer: number | null = null;
+    const cleanup = () => {
+      article.removeAttribute("data-print-target");
+      delete document.body.dataset.printingMessage;
+      window.removeEventListener("afterprint", cleanup);
+      if (cleanupTimer !== null) window.clearTimeout(cleanupTimer);
+    };
+    window.addEventListener("afterprint", cleanup, { once: true });
+
+    try {
+      window.print();
+      // `afterprint` is widely supported; this also prevents stale print state
+      // in browsers that return from print without dispatching it.
+      if (article.dataset.printTarget === "true") {
+        cleanupTimer = window.setTimeout(cleanup, 60_000);
+      }
+    } catch {
+      cleanup();
+    }
+  };
+
   const jumpToMessage = (index: number) => {
     const container = messagesRef.current;
     const article = container?.querySelectorAll<HTMLElement>("[data-message-id]").item(index);
@@ -521,6 +555,17 @@ export function ThreadView({
                               : "Failed"
                             : "Copy"}
                         </span>
+                      </button>
+                    )}
+                    {message.content && (
+                      <button
+                        className="print-response-button"
+                        type="button"
+                        aria-label="Print response"
+                        onClick={() => printResponse(message.id)}
+                      >
+                        <Printer size={11} />
+                        <span>Print</span>
                       </button>
                     )}
                     <span
