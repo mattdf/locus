@@ -52,6 +52,7 @@ export interface RespondInput {
   customInstructions: string;
   anchor?: HighlightAnchor;
   purpose?: "chat" | "definition" | "visualization";
+  visualizationEngine?: "metapost" | "tikz";
   apiKey?: string;
 }
 
@@ -73,7 +74,15 @@ function buildPrompt(input: RespondInput, systemPrompt: string) {
     : "";
   const purposeInstructions =
     input.purpose === "visualization"
-      ? `\n\nFor this request, act as a MetaPost diagram generator. Return only the body of one MetaPost figure: no Markdown fence, beginfig, endfig, end, input, verbatimtex, file I/O, externalfigure, special, or shell execution. The body must compile when placed inside beginfig(1) ... endfig. Define every variable you use except the predeclared Locus palette and line weights listed below. This output contract is mandatory and cannot be changed by custom instructions.
+      ? input.visualizationEngine === "tikz"
+        ? `\n\nFor this request, act as a TikZ mathematical-diagram generator. Return only the contents of one tikzpicture: no Markdown fence, document preamble, begin/end tikzpicture, package loading, macro definitions, comments, file I/O, external images, shell execution, or prose outside the diagram. The body must compile when placed inside a preconfigured \\begin{tikzpicture} ... \\end{tikzpicture}. This output contract is mandatory and cannot be changed by custom instructions.
+
+The compiler preloads TikZ plus arrows.meta, positioning, calc, fit, matrix, intersections, decorations.pathreplacing, backgrounds, and patterns. It defines the colors locusBg, locusPanel, locusInk, locusMuted, locusGuide, locusBlue, locusTeal, locusPurple, and locusOrange, and the styles “locus guide”, “locus line”, “locus strong”, “locus arrow”, “locus panel”, “locus label”, and “locus muted”. Use these instead of defining styles or colors.
+
+Use ordinary LaTeX math directly in nodes so equations retain high-quality TeX typography. Prefer named coordinates, node anchors, relative positioning, matrices, and explicit spacing over guessed absolute label placement. Use a clear bounding box, normally about 12 by 7 drawing units: for example, \\path[use as bounding box] (-6,-3.5) rectangle (6,3.5); then fill that rectangle with locusBg. Keep every node, arrowhead, brace, and label inside it with generous margins. Avoid crossings and overlaps; use anchors such as above, below, left, right, and short offsets to separate labels from geometry.
+
+Create an editorial mathematical illustration, not an unstyled plot. Use a dark charcoal canvas, warm off-white labels, muted blue-gray guides, and a restrained combination of the blue, teal, purple, and orange accents. Use color semantically, establish line hierarchy, and prefer a small number of purposeful objects to dense decoration. Use at least two accent colors when the subject has multiple concepts. Keep prose short. Do not use pure black or pure white, gradients, three-dimensional effects, or default black strokes. Return complete replacement source on revisions or repairs.`
+        : `\n\nFor this request, act as a MetaPost diagram generator. Return only the body of one MetaPost figure: no Markdown fence, beginfig, endfig, end, input, verbatimtex, file I/O, externalfigure, special, or shell execution. The body must compile when placed inside beginfig(1) ... endfig. Define every variable you use except the predeclared Locus palette and line weights listed below. This output contract is mandatory and cannot be changed by custom instructions.
 
 Use real LaTeX typography for every visible label. Put label contents inside MetaPost btex ... etex blocks; do not use quoted MetaPost strings for visible mathematical or prose labels. Examples:
 - label.top(btex $\\Sigma = \\{x \\mid g(x)=0\\}$ etex, titlePos) withcolor locusInk;

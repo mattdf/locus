@@ -5,6 +5,7 @@ import {
   deploymentConfig,
   deploymentEnvironment,
   initialAdmin,
+  postmarkServerToken,
   projectRoot,
   writeJson,
 } from "./common.mjs";
@@ -102,6 +103,7 @@ const secrets = await deploymentEnvironment();
 const admin = await initialAdmin();
 const environment = {
   ...secrets,
+  POSTMARK_SERVER_TOKEN: await postmarkServerToken(),
   LOCUS_MODE: "hosted",
   LOCUS_PUBLIC_ORIGIN: config.domain,
   METAPOST_SERVICE_URL: "http://metapost:8090",

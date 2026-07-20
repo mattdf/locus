@@ -203,7 +203,7 @@ export function AdminAccountsModal({
                 <ShieldCheck size={15} />
                 <span>
                   <strong>Create an account</strong>
-                  <small>Public registration remains disabled.</small>
+                  <small>Public signup is available; administrator-created accounts are trusted immediately.</small>
                 </span>
               </div>
             </header>

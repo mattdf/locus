@@ -103,7 +103,9 @@ adminRouter.post("/users", async (request, response) => {
     response.status(409).json({ error: "An account with that email already exists" });
     return;
   }
-  const created = await auth.api.createUser({ body: { email, name, password, role } });
+  const created = await auth.api.createUser({
+    body: { email, name, password, role, data: { emailVerified: true } },
+  });
   const user = await managedUser(created.user.id);
   console.log(`[admin] ${administrator.email} created ${email} (${role})`);
   response.status(201).json({ user });

@@ -16,6 +16,11 @@ export const isHosted = locusMode === "hosted";
 export const publicOrigin = isHosted ? required("LOCUS_PUBLIC_ORIGIN").replace(/\/$/, "") : null;
 export const databaseUrl = isHosted ? required("DATABASE_URL") : null;
 export const authSecret = isHosted ? required("BETTER_AUTH_SECRET") : null;
+export const postmarkServerToken = isHosted
+  ? required("POSTMARK_SERVER_TOKEN")
+  : process.env.POSTMARK_SERVER_TOKEN?.trim() || null;
+export const postmarkFrom =
+  process.env.POSTMARK_FROM?.trim() || "Locus Chat <accounts@locuschat.io>";
 export const credentialEncryptionKeys = isHosted
   ? required("LOCUS_CREDENTIAL_KEYS")
       .split(",")

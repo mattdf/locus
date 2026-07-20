@@ -27,6 +27,7 @@ import type {
   SendShortcut,
   ProviderId,
   ProviderModelOption,
+  VisualizationEngine,
 } from "../types";
 import { childThreads, messagesForNode } from "../lib/tree";
 import { formatDuration, generationDetails } from "../lib/generation";
@@ -53,7 +54,11 @@ interface ThreadViewProps {
     rect: SelectionDraft["rect"],
     getAnchorRect?: () => SelectionDraft["rect"],
   ) => void;
-  onGenerateVisualization: (visualizationId: string, hint: string) => void;
+  onGenerateVisualization: (
+    visualizationId: string,
+    hint: string,
+    engine: VisualizationEngine,
+  ) => void;
   onFixVisualization: (visualizationId: string, instruction: string) => void;
   onCompileVisualization: (visualizationId: string, source: string) => void;
   onStopVisualization: (visualizationId: string) => void;
@@ -139,7 +144,11 @@ function InlineVisualizationMount({
   messageContent: string;
   visualization: InlineVisualization;
   sendShortcut: SendShortcut;
-  onGenerate: (visualizationId: string, hint: string) => void;
+  onGenerate: (
+    visualizationId: string,
+    hint: string,
+    engine: VisualizationEngine,
+  ) => void;
   onFix: (visualizationId: string, instruction: string) => void;
   onCompile: (visualizationId: string, source: string) => void;
   onStop: (visualizationId: string) => void;

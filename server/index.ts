@@ -28,6 +28,7 @@ import {
   MetaPostCompileError,
   metapostImageAvailable,
 } from "./metapost.ts";
+import { compileTikz, TikzCompileError, tikzImageAvailable } from "./tikz.ts";
 import { assertMigrationsCurrent } from "./migrate.ts";
 import { listProviderModels, normalizeLocalBaseUrl } from "./providers.ts";
 import { readState, writeState } from "./storage.ts";
@@ -203,7 +204,15 @@ app.post("/api/setup/bootstrap", async (request, response, next) => {
       response.status(409).json({ error: "Locus has already been initialized" });
       return;
     }
-    const created = await auth.api.createUser({ body: { email, name, password, role: "admin" } });
+    const created = await auth.api.createUser({
+      body: {
+        email,
+        name,
+        password,
+        role: "admin",
+        data: { emailVerified: true },
+      },
+    });
     response.setHeader("Cache-Control", "no-store");
     response.status(201).json({ created: true, email: created.user.email });
   } catch (error) {
@@ -258,6 +267,23 @@ app.post("/api/metapost/compile", async (request, response, next) => {
     response.json(await compileMetaPost(request.body?.source));
   } catch (error) {
     if (error instanceof MetaPostCompileError) {
+      if (error.status === 429) response.setHeader("Retry-After", "2");
+      response.status(error.status).json({ error: error.message, log: error.log });
+      return;
+    }
+    next(error);
+  }
+});
+
+app.get("/api/tikz/status", async (_request, response) => {
+  response.json({ available: await tikzImageAvailable() });
+});
+
+app.post("/api/tikz/compile", async (request, response, next) => {
+  try {
+    response.json(await compileTikz(request.body?.source));
+  } catch (error) {
+    if (error instanceof TikzCompileError) {
       if (error.status === 429) response.setHeader("Retry-After", "2");
       response.status(error.status).json({ error: error.message, log: error.log });
       return;
@@ -451,6 +477,7 @@ app.post("/api/respond", async (request, response, next) => {
       message?: string;
       anchor?: HighlightAnchor;
       purpose?: "chat" | "definition" | "visualization";
+      visualizationEngine?: "metapost" | "tikz";
     };
     const provider = body.provider ?? "openai";
     const model = body.model?.trim() ?? "gpt-5.6-sol";
@@ -510,6 +537,10 @@ app.post("/api/respond", async (request, response, next) => {
       customInstructions: body.customInstructions ?? "",
       anchor: body.anchor,
       purpose: body.purpose === "visualization" ? "visualization" : body.purpose === "definition" ? "definition" : "chat",
+      visualizationEngine:
+        body.purpose === "visualization" && body.visualizationEngine === "tikz"
+          ? "tikz"
+          : "metapost",
       apiKey: apiKey ?? undefined,
     });
     attachGenerationStream(response, job);

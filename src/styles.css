@@ -77,8 +77,32 @@ body {
 .auth-card header { margin-bottom: 24px; }
 .auth-card h1 { margin: 0; font-family: Georgia, "Times New Roman", serif; font-size: 27px; }
 .auth-card header p { margin: 6px 0 0; color: #77807c; font-size: 12px; }
+.auth-card__mode {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  padding: 3px;
+  background: #f0eee8;
+  border-radius: 7px;
+}
+.auth-card__mode button {
+  min-height: 34px;
+  color: #65706b;
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+.auth-card__mode button[aria-selected="true"] {
+  color: #244b3f;
+  background: #fffefa;
+  box-shadow: 0 1px 4px rgba(43, 49, 46, 0.1);
+}
 .auth-card label { display: block; margin-top: 14px; }
 .auth-card label span { display: block; margin-bottom: 6px; color: #5e6863; font-size: 10px; font-weight: 750; }
+.auth-card label span small { color: #8a918e; font-size: 9px; font-weight: 550; }
 .auth-card input {
   width: 100%;
   height: 42px;
@@ -107,8 +131,35 @@ body {
   font-weight: 750;
 }
 .auth-card > button:disabled { opacity: 0.55; cursor: default; }
+.auth-card > button.auth-card__secondary {
+  margin-top: 10px;
+  color: #2f6d59;
+  background: transparent;
+  border: 1px solid #b8cbc3;
+}
+.auth-card > button.auth-card__text-button {
+  min-height: auto;
+  margin-top: 12px;
+  padding: 4px;
+  color: #5e6863;
+  background: transparent;
+  font-size: 10px;
+}
 .auth-card > small { display: block; margin-top: 15px; color: #8a918e; text-align: center; font-size: 9px; }
 .auth-card__error { margin: 10px 0 0; color: #9e3e44; font-size: 11px; }
+.auth-card__notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 14px 0 0;
+  padding: 10px;
+  color: #275e4c;
+  background: #e8f2ed;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.45;
+}
+.auth-card__notice svg { flex: 0 0 auto; margin-top: 1px; }
 
 .loading-screen--error { gap: 8px; text-align: center; }
 .loading-screen--error button { margin-top: 8px; padding: 7px 14px; cursor: pointer; }
@@ -2082,6 +2133,17 @@ a:focus-visible {
   outline: 0;
   font-size: calc(11px * var(--text-scale, 1));
   line-height: 1.5;
+}
+
+.visualization-card__draft select {
+  min-width: 132px;
+  margin: 0 0 12px;
+  padding: 7px 28px 7px 9px;
+  color: #2b332f;
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid #cec2de;
+  border-radius: 6px;
+  font: inherit;
 }
 
 .visualization-card textarea:focus {
@@ -5420,6 +5482,12 @@ body.resizing-drawer {
 }
 
 .app-shell[data-theme="dark"] .visualization-card textarea {
+  color: #e2dde6;
+  background: #17141b;
+  border-color: #4b3b57;
+}
+
+.app-shell[data-theme="dark"] .visualization-card__draft select {
   color: #e2dde6;
   background: #17141b;
   border-color: #4b3b57;

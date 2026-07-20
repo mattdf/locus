@@ -17,13 +17,22 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { formatDuration, generationDetails } from "../lib/generation";
 import { applyMarkdownShortcut, isSendShortcut } from "../lib/textarea";
-import type { InlineVisualization, SendShortcut } from "../types";
+import {
+  visualizationEngine,
+  visualizationEngineLabel,
+  visualizationSource,
+} from "../lib/visualization";
+import type { InlineVisualization, SendShortcut, VisualizationEngine } from "../types";
 import { MathBlock } from "./MathText";
 
 interface VisualizationCardProps {
   visualization: InlineVisualization;
   sendShortcut: SendShortcut;
-  onGenerate: (visualizationId: string, hint: string) => void;
+  onGenerate: (
+    visualizationId: string,
+    hint: string,
+    engine: VisualizationEngine,
+  ) => void;
   onFix: (visualizationId: string, instruction: string) => void;
   onCompile: (visualizationId: string, source: string) => void;
   onStop: (visualizationId: string) => void;
@@ -66,7 +75,8 @@ export function VisualizationCard({
   readOnly = false,
 }: VisualizationCardProps) {
   const [hint, setHint] = useState(visualization.hint);
-  const [source, setSource] = useState(visualization.metapostSource ?? "");
+  const [engine, setEngine] = useState<VisualizationEngine>(visualizationEngine(visualization));
+  const [source, setSource] = useState(visualizationSource(visualization));
   const [editingSource, setEditingSource] = useState(false);
   const [fixing, setFixing] = useState(false);
   const [fixInstruction, setFixInstruction] = useState("");
@@ -89,7 +99,14 @@ export function VisualizationCard({
     if (svgUrl) URL.revokeObjectURL(svgUrl);
   }, [svgUrl]);
   useEffect(() => setHint(visualization.hint), [visualization.id, visualization.hint]);
-  useEffect(() => setSource(visualization.metapostSource ?? ""), [visualization.id, visualization.metapostSource]);
+  useEffect(
+    () => setEngine(visualizationEngine(visualization)),
+    [visualization.id, visualization.engine],
+  );
+  useEffect(
+    () => setSource(visualizationSource(visualization)),
+    [visualization.id, visualization.source, visualization.metapostSource],
+  );
   useLayoutEffect(() => {
     if (visualization.status === "draft") {
       hintRef.current?.focus({ preventScroll: true });
@@ -117,7 +134,9 @@ export function VisualizationCard({
   }, [enlarged]);
 
   const busy = visualization.status === "generating" || visualization.status === "compiling";
-  const generate = () => onGenerate(visualization.id, hint.trim());
+  const engineLabel = visualizationEngineLabel(engine);
+  const persistedSource = visualizationSource(visualization);
+  const generate = () => onGenerate(visualization.id, hint.trim(), engine);
   const applyFix = () => {
     const instruction = fixInstruction.trim();
     if (!instruction) return;
@@ -138,7 +157,7 @@ export function VisualizationCard({
       aria-label="Inline equation visualization"
     >
       <header>
-        <span><ImageIcon size={14} /> MetaPost visualization</span>
+        <span><ImageIcon size={14} /> {engineLabel} visualization</span>
         <div>
           {visualization.svg && svgUrl && !editingSource && (
             <button
@@ -151,7 +170,7 @@ export function VisualizationCard({
               <Maximize2 size={13} />
             </button>
           )}
-          {!readOnly && visualization.metapostSource && !busy && (
+          {!readOnly && persistedSource && !busy && (
             <button
               type="button"
               aria-label={fixing ? "Close visualization fix instructions" : "Fix visualization with AI"}
@@ -164,10 +183,10 @@ export function VisualizationCard({
               {fixing ? <X size={13} /> : <><Wrench size={12} /> Fix</>}
             </button>
           )}
-          {!readOnly && visualization.metapostSource && !busy && (
+          {!readOnly && persistedSource && !busy && (
             <button
               type="button"
-              aria-label={editingSource ? "Close MetaPost source editor" : "Edit MetaPost source"}
+              aria-label={editingSource ? `Close ${engineLabel} source editor` : `Edit ${engineLabel} source`}
               title={editingSource ? "Close source editor" : "Edit source"}
               onClick={() => {
                 setFixing(false);
@@ -228,6 +247,15 @@ export function VisualizationCard({
 
       {!readOnly && visualization.status === "draft" && (
         <div className="visualization-card__draft">
+          <label htmlFor={`visualization-engine-${visualization.id}`}>Renderer</label>
+          <select
+            id={`visualization-engine-${visualization.id}`}
+            value={engine}
+            onChange={(event) => setEngine(event.target.value as VisualizationEngine)}
+          >
+            <option value="metapost">MetaPost</option>
+            <option value="tikz">TikZ</option>
+          </select>
           <label htmlFor={`visualization-hint-${visualization.id}`}>Visualization hint <small>optional</small></label>
           <textarea
             ref={hintRef}
@@ -253,7 +281,7 @@ export function VisualizationCard({
       {!readOnly && busy && (
         <div className="visualization-card__progress">
           <WorkingStatus
-            label={visualization.status === "generating" ? "Writing MetaPost" : "Compiling in sandbox"}
+            label={visualization.status === "generating" ? `Writing ${engineLabel}` : "Compiling in sandbox"}
             startedAt={visualization.updatedAt}
           />
           {visualization.status === "generating" && (
@@ -273,9 +301,9 @@ export function VisualizationCard({
 
       {!readOnly && editingSource && (
         <div className="visualization-card__source-editor">
-          <label htmlFor={`metapost-source-${visualization.id}`}>MetaPost figure body</label>
+          <label htmlFor={`visualization-source-${visualization.id}`}>{engineLabel} figure body</label>
           <textarea
-            id={`metapost-source-${visualization.id}`}
+            id={`visualization-source-${visualization.id}`}
             value={source}
             rows={12}
             spellCheck={false}
@@ -317,7 +345,7 @@ export function VisualizationCard({
         </div>
       )}
 
-      {!readOnly && (visualization.status === "ready" || visualization.status === "error") && visualization.metapostSource && (
+      {!readOnly && (visualization.status === "ready" || visualization.status === "error") && persistedSource && (
         <footer>
           <span>
             {visualization.generation ? generationDetails(visualization.generation) : "Generated source"}
@@ -327,15 +355,22 @@ export function VisualizationCard({
             <button
               type="button"
               onClick={async () => {
-                await navigator.clipboard.writeText(visualization.metapostSource ?? "");
+                await navigator.clipboard.writeText(persistedSource);
                 setCopied(true);
                 window.setTimeout(() => setCopied(false), 1400);
               }}
             >
               {copied ? <Check size={12} /> : <Code2 size={12} />} {copied ? "Copied" : "Copy source"}
             </button>
-            <button type="button" onClick={() => downloadText(visualization.metapostSource ?? "", "visualization.mp", "text/plain") }>
-              <Download size={12} /> MP
+            <button
+              type="button"
+              onClick={() => downloadText(
+                persistedSource,
+                engine === "tikz" ? "visualization.tex" : "visualization.mp",
+                "text/plain",
+              )}
+            >
+              <Download size={12} /> {engine === "tikz" ? "TEX" : "MP"}
             </button>
             {visualization.svg && (
               <button type="button" onClick={() => downloadText(visualization.svg ?? "", "visualization.svg", "image/svg+xml") }>
@@ -360,7 +395,7 @@ export function VisualizationCard({
           >
             <header>
               <span id={`visualization-lightbox-title-${visualization.id}`}>
-                <ImageIcon size={15} /> MetaPost visualization
+                <ImageIcon size={15} /> {engineLabel} visualization
               </span>
               <button
                 ref={closeEnlargedButtonRef}

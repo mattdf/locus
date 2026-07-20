@@ -81,11 +81,18 @@ export type VisualizationStatus =
   | "ready"
   | "error";
 
+export type VisualizationEngine = "metapost" | "tikz";
+
 export interface InlineVisualization {
   id: string;
   anchor: HighlightAnchor;
   hint: string;
   status: VisualizationStatus;
+  /** Undefined on visualizations created before the engine selector was added. */
+  engine?: VisualizationEngine;
+  /** Engine-agnostic source used by current visualizations. */
+  source?: string;
+  /** Legacy MetaPost source retained for backwards-compatible imports. */
   metapostSource?: string;
   svg?: string;
   errorStage?: "model" | "compile";

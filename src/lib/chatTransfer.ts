@@ -71,6 +71,8 @@ function isVisualization(value: unknown): value is InlineVisualization {
     typeof value.anchor.sourceMessageId === "string" &&
     typeof value.anchor.quote === "string" &&
     Number.isSafeInteger(value.anchor.blockIndex) &&
+    (value.engine === undefined || value.engine === "metapost" || value.engine === "tikz") &&
+    (value.source === undefined || typeof value.source === "string") &&
     (value.metapostSource === undefined || typeof value.metapostSource === "string") &&
     (value.svg === undefined || typeof value.svg === "string")
   );

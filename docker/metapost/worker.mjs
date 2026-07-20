@@ -30,9 +30,9 @@ async function readBody(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-function compile(directory) {
+function compile(directory, engine) {
   return new Promise((resolve) => {
-    execFile("/usr/local/bin/locus-metapost", [], {
+    execFile(engine === "tikz" ? "/usr/local/bin/locus-tikz" : "/usr/local/bin/locus-metapost", [], {
       cwd: directory,
       timeout: 8_000,
       maxBuffer: MAX_LOG_BYTES,
@@ -60,8 +60,9 @@ const server = http.createServer(async (request, response) => {
   const startedAt = Date.now();
   try {
     const body = await readBody(request);
+    const engine = body.engine === "tikz" ? "tikz" : "metapost";
     if (typeof body.source !== "string" || !body.source.trim()) {
-      json(response, 400, { error: "MetaPost source is required" });
+      json(response, 400, { error: `${engine === "tikz" ? "TikZ" : "MetaPost"} source is required` });
       return;
     }
     if (Buffer.byteLength(body.source, "utf8") > MAX_SOURCE_BYTES) {
@@ -70,16 +71,16 @@ const server = http.createServer(async (request, response) => {
     }
     directory = await mkdtemp("/work/job-");
     await chmod(directory, 0o700);
-    await writeFile(path.join(directory, "figure.mp"), body.source, { mode: 0o400 });
-    const result = await compile(directory);
+    await writeFile(path.join(directory, engine === "tikz" ? "figure.tex" : "figure.mp"), body.source, { mode: 0o400 });
+    const result = await compile(directory, engine);
     const log = await readFile(path.join(directory, "compiler.log"), "utf8")
       .catch(() => result.stderr || "")
       .then((value) => value.slice(-MAX_LOG_BYTES));
     if (result.error) {
-      json(response, 422, { error: "MetaPost could not compile this visualization.", log });
+      json(response, 422, { error: `${engine === "tikz" ? "TikZ" : "MetaPost"} could not compile this visualization.`, log });
       return;
     }
-    const svg = await readFile(path.join(directory, "figure-1.svg"), "utf8");
+    const svg = await readFile(path.join(directory, engine === "tikz" ? "figure.svg" : "figure-1.svg"), "utf8");
     if (Buffer.byteLength(svg, "utf8") > MAX_SVG_BYTES || !svg.includes("<svg")) {
       json(response, 422, { error: "The compiler produced an invalid artifact", log });
       return;

@@ -68,6 +68,11 @@ import { markdownBlockquote } from "./lib/markdown";
 import { generationDetails } from "./lib/generation";
 import { applyMarkdownShortcut, isSendShortcut } from "./lib/textarea";
 import {
+  visualizationEngine,
+  visualizationEngineLabel,
+  visualizationSource,
+} from "./lib/visualization";
+import {
   childThreads,
   contextBeforeMessage,
   contextFor,
@@ -94,6 +99,7 @@ import type {
   ReasoningEffort,
   SelectionDraft,
   ThreadNode,
+  VisualizationEngine,
   WorkspaceState,
 } from "./types";
 import {
@@ -152,7 +158,7 @@ interface GenerationResult {
   generation: GenerationMetrics;
 }
 
-interface MetaPostCompileResult {
+interface VisualizationCompileResult {
   svg: string;
   log: string;
   durationMs: number;
@@ -162,7 +168,7 @@ type VisualizationFollowup =
   | { kind: "repair"; source: string; diagnostic: string }
   | { kind: "revision"; source: string; instruction: string };
 
-class MetaPostRequestError extends Error {
+class VisualizationCompileError extends Error {
   constructor(message: string, readonly log = "") {
     super(message);
   }
@@ -523,38 +529,49 @@ async function resumeModelRequest(
   return readGenerationStream(response, onDelta, onSnapshot);
 }
 
-function extractMetaPostSource(response: string): string {
-  const fenced = response.match(/```(?:metapost|mp)?\s*\n([\s\S]*?)```/i)?.[1];
+function extractVisualizationSource(response: string, engine: VisualizationEngine): string {
+  const fenceLanguage = engine === "tikz" ? "(?:tikz|latex|tex)?" : "(?:metapost|mp)?";
+  const fenced = response.match(
+    new RegExp("```" + fenceLanguage + "\\s*\\n([\\s\\S]*?)```", "i"),
+  )?.[1];
   let source = (fenced ?? response).trim();
-  source = source
-    .replace(/^\s*outputformat\s*:=\s*["']svg["']\s*;\s*/i, "")
-    .replace(/^\s*outputtemplate\s*:=\s*[^;]+;\s*/i, "")
-    .replace(/^\s*prologues\s*:=\s*[^;]+;\s*/i, "")
-    .replace(/^\s*beginfig\s*\(\s*1\s*\)\s*;\s*/i, "")
-    .replace(/\s*endfig\s*;\s*end\s*\.\s*$/i, "")
-    .trim();
-  if (!source) throw new Error("The model returned no MetaPost source");
+  if (engine === "tikz") {
+    source = source.match(/\\begin\s*\{tikzpicture\}(?:\[[^\]]*\])?([\s\S]*?)\\end\s*\{tikzpicture\}/i)?.[1]?.trim() ?? source;
+  } else {
+    source = source
+      .replace(/^\s*outputformat\s*:=\s*["']svg["']\s*;\s*/i, "")
+      .replace(/^\s*outputtemplate\s*:=\s*[^;]+;\s*/i, "")
+      .replace(/^\s*prologues\s*:=\s*[^;]+;\s*/i, "")
+      .replace(/^\s*beginfig\s*\(\s*1\s*\)\s*;\s*/i, "")
+      .replace(/\s*endfig\s*;\s*end\s*\.\s*$/i, "")
+      .trim();
+  }
+  if (!source) throw new Error(`The model returned no ${visualizationEngineLabel(engine)} source`);
   return source;
 }
 
-async function compileMetaPostRequest(
+async function compileVisualizationRequest(
+  engine: VisualizationEngine,
   source: string,
   signal?: AbortSignal,
-): Promise<MetaPostCompileResult> {
-  const response = await fetch("/api/metapost/compile", {
+): Promise<VisualizationCompileResult> {
+  const response = await fetch(`/api/${engine}/compile`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source }),
     signal,
   });
   const data = (await response.json().catch(() => ({}))) as
-    | MetaPostCompileResult
+    | VisualizationCompileResult
     | { error?: string; log?: string };
   if (!response.ok) {
     const error = data as { error?: string; log?: string };
-    throw new MetaPostRequestError(error.error ?? "MetaPost compilation failed", error.log);
+    throw new VisualizationCompileError(
+      error.error ?? `${visualizationEngineLabel(engine)} compilation failed`,
+      error.log,
+    );
   }
-  return data as MetaPostCompileResult;
+  return data as VisualizationCompileResult;
 }
 
 function SelectionToolbar({
@@ -1905,17 +1922,23 @@ export default function App({
     visualizationId: string,
     source: string,
     generation?: GenerationMetrics,
-  ): Promise<MetaPostRequestError | null> => {
+    engineOverride?: VisualizationEngine,
+  ): Promise<VisualizationCompileError | null> => {
+    const storedVisualization = workspaceRef.current.chats
+      .find((chat) => chat.id === chatId)
+      ?.nodes[nodeId]?.visualizations?.find((item) => item.id === visualizationId);
+    const engine = engineOverride ?? visualizationEngine(storedVisualization ?? { engine: undefined });
     const compileKey = `${chatId}:${nodeId}:${visualizationId}`;
     if (visualizationCompiles.current.has(compileKey)) {
-      return new MetaPostRequestError("This visualization is already compiling.");
+      return new VisualizationCompileError("This visualization is already compiling.");
     }
     visualizationCompiles.current.add(compileKey);
     const updatedAt = timestamp();
     updateVisualization(chatId, nodeId, visualizationId, (current) => ({
       ...current,
       status: "compiling",
-      metapostSource: source,
+      engine,
+      source,
       svg: undefined,
       errorStage: undefined,
       errorMessage: undefined,
@@ -1925,7 +1948,7 @@ export default function App({
       updatedAt,
     }));
     try {
-      const result = await compileMetaPostRequest(source);
+      const result = await compileVisualizationRequest(engine, source);
       updateVisualization(chatId, nodeId, visualizationId, (current) => ({
         ...current,
         status: "ready",
@@ -1941,15 +1964,20 @@ export default function App({
         ...current,
         status: "error",
         errorStage: "compile",
-        errorMessage: error instanceof Error ? error.message : "MetaPost compilation failed",
-        compilerLog: error instanceof MetaPostRequestError ? error.log : "",
+        errorMessage:
+          error instanceof Error
+            ? error.message
+            : `${visualizationEngineLabel(engine)} compilation failed`,
+        compilerLog: error instanceof VisualizationCompileError ? error.log : "",
         updatedAt: timestamp(),
       }));
       visualizationCompiles.current.delete(compileKey);
-      return error instanceof MetaPostRequestError
+      return error instanceof VisualizationCompileError
         ? error
-        : new MetaPostRequestError(
-            error instanceof Error ? error.message : "MetaPost compilation failed",
+        : new VisualizationCompileError(
+            error instanceof Error
+              ? error.message
+              : `${visualizationEngineLabel(engine)} compilation failed`,
           );
     }
   };
@@ -1959,6 +1987,7 @@ export default function App({
     nodeId: string,
     visualizationId: string,
     hint: string,
+    engineOverride?: VisualizationEngine,
     followup?: VisualizationFollowup,
   ): Promise<void> => {
     const chat = workspaceRef.current.chats.find((item) => item.id === chatId);
@@ -1970,10 +1999,12 @@ export default function App({
         )
       : null;
     if (!chat || !node || !visualization || !sourceMessage) return;
+    const engine = engineOverride ?? visualizationEngine(visualization);
+    const engineLabel = visualizationEngineLabel(engine);
 
     if (followup?.kind !== "repair") {
       try {
-        const statusResponse = await fetch("/api/metapost/status");
+        const statusResponse = await fetch(`/api/${engine}/status`);
         const status = (await statusResponse.json()) as { available?: boolean } & ApiError;
         if (!statusResponse.ok || !status.available) {
           updateVisualization(chatId, nodeId, visualizationId, (current) => ({
@@ -1993,7 +2024,7 @@ export default function App({
           hint,
           status: "error",
           errorStage: "compile",
-          errorMessage: "Could not verify the MetaPost compiler before generation.",
+          errorMessage: `Could not verify the ${engineLabel} compiler before generation.`,
           updatedAt: timestamp(),
         }));
         return;
@@ -2004,6 +2035,7 @@ export default function App({
     updateVisualization(chatId, nodeId, visualizationId, (current) => ({
       ...current,
       hint,
+      engine,
       status: "generating",
       requestId,
       svg: followup ? current.svg : undefined,
@@ -2020,9 +2052,9 @@ export default function App({
           workspaceRef.current.settings.provider
         ]?.trim() || workspaceRef.current.settings.model;
       const prompt = followup?.kind === "repair"
-        ? `Repair the following MetaPost figure body so it compiles under the required restricted output contract. Preserve its intended content and return only the corrected body.\n\n<failed_source>\n${followup.source}\n</failed_source>\n\n<compiler_log>\n${followup.diagnostic.slice(-12_000)}\n</compiler_log>`
+        ? `Repair the following ${engineLabel} figure body so it compiles under the required restricted output contract. Preserve its intended content and return only the corrected body.\n\n<failed_source>\n${followup.source}\n</failed_source>\n\n<compiler_log>\n${followup.diagnostic.slice(-12_000)}\n</compiler_log>`
         : followup?.kind === "revision"
-          ? `Revise the following existing MetaPost figure body according to the one-time instruction. Return the complete replacement figure body, preserve everything that already works, and make only the changes needed to satisfy the instruction. Do not describe the changes.\n\n<existing_source>\n${followup.source}\n</existing_source>\n\n<revision_request>\n${followup.instruction}\n</revision_request>`
+          ? `Revise the following existing ${engineLabel} figure body according to the one-time instruction. Return the complete replacement figure body, preserve everything that already works, and make only the changes needed to satisfy the instruction. Do not describe the changes.\n\n<existing_source>\n${followup.source}\n</existing_source>\n\n<revision_request>\n${followup.instruction}\n</revision_request>`
           : `Create a clear, static mathematical diagram of the highlighted passage. Use the containing message to resolve symbols. ${
               hint
                 ? `Follow this visualization hint:\n<visualization_hint>\n${hint}\n</visualization_hint>`
@@ -2052,6 +2084,7 @@ export default function App({
           message: prompt,
           anchor: visualization.anchor,
           purpose: "visualization",
+          visualizationEngine: engine,
         },
         () => undefined,
         () => undefined,
@@ -2070,19 +2103,18 @@ export default function App({
         }));
         return;
       }
-      const source = extractMetaPostSource(result.content);
+      const source = extractVisualizationSource(result.content, engine);
       const compileError = await compileVisualization(
         chatId,
         nodeId,
         visualizationId,
         source,
         result.generation,
+        engine,
       );
       if (compileError && followup?.kind !== "repair") {
-        await generateVisualization(chatId, nodeId, visualizationId, hint, {
-          kind: "repair",
-          source,
-          diagnostic: compileError.log || compileError.message,
+        await generateVisualization(chatId, nodeId, visualizationId, hint, engine, {
+          kind: "repair", source, diagnostic: compileError.log || compileError.message,
         });
       }
     } catch (error) {
@@ -2112,14 +2144,21 @@ export default function App({
     const visualization = workspaceRef.current.chats
       .find((chat) => chat.id === chatId)
       ?.nodes[nodeId]?.visualizations?.find((item) => item.id === visualizationId);
-    const source = visualization?.metapostSource?.trim();
+    const source = visualization ? visualizationSource(visualization).trim() : "";
     const revisionInstruction = instruction.trim();
     if (!visualization || !source || !revisionInstruction) return;
-    await generateVisualization(chatId, nodeId, visualizationId, visualization.hint, {
+    await generateVisualization(
+      chatId,
+      nodeId,
+      visualizationId,
+      visualization.hint,
+      visualizationEngine(visualization),
+      {
       kind: "revision",
       source,
       instruction: revisionInstruction,
-    });
+      },
+    );
   };
 
   const stopVisualization = async (
@@ -2377,6 +2416,12 @@ export default function App({
   };
 
   const resumeVisualization = async (pending: PendingGeneration) => {
+    const visualization = workspaceRef.current.chats
+      .find((chat) => chat.id === pending.chatId)
+      ?.nodes[pending.nodeId]?.visualizations?.find(
+        (item) => item.id === pending.assistantId,
+      );
+    const engine = visualizationEngine(visualization ?? { engine: undefined });
     const controller = new AbortController();
     responseControllers.current.set(pending.assistantId, controller);
     try {
@@ -2408,8 +2453,9 @@ export default function App({
         pending.chatId,
         pending.nodeId,
         pending.assistantId,
-        extractMetaPostSource(result.content),
+        extractVisualizationSource(result.content, engine),
         result.generation,
+        engine,
       );
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -2447,17 +2493,19 @@ export default function App({
       Object.values(chat.nodes).forEach((node) => {
         (node.visualizations ?? []).forEach((visualization) => {
           const compileKey = `${chat.id}:${node.id}:${visualization.id}`;
+          const source = visualizationSource(visualization);
           if (
             visualization.status === "compiling" &&
-            visualization.metapostSource &&
+            source &&
             !visualizationCompiles.current.has(compileKey)
           ) {
             void compileVisualization(
               chat.id,
               node.id,
               visualization.id,
-              visualization.metapostSource,
+              source,
               visualization.generation,
+              visualizationEngine(visualization),
             );
           }
         });
@@ -3449,6 +3497,7 @@ export default function App({
       },
       hint: "",
       status: "draft",
+      engine: "metapost",
       createdAt,
       updatedAt: createdAt,
     };
@@ -4130,8 +4179,10 @@ export default function App({
                 getAnchorRect,
               })
             }
-            onGenerateVisualization={(visualizationId, hint) =>
-              void generateVisualization(activeChat.id, leftPaneNode.id, visualizationId, hint)
+            onGenerateVisualization={(visualizationId, hint, engine) =>
+              void generateVisualization(
+                activeChat.id, leftPaneNode.id, visualizationId, hint, engine,
+              )
             }
             onFixVisualization={(visualizationId, instruction) =>
               void reviseVisualization(activeChat.id, leftPaneNode.id, visualizationId, instruction)
@@ -4398,8 +4449,10 @@ export default function App({
                 getAnchorRect,
               })
             }
-            onGenerateVisualization={(visualizationId, hint) =>
-              void generateVisualization(activeChat.id, sideNode.id, visualizationId, hint)
+            onGenerateVisualization={(visualizationId, hint, engine) =>
+              void generateVisualization(
+                activeChat.id, sideNode.id, visualizationId, hint, engine,
+              )
             }
             onFixVisualization={(visualizationId, instruction) =>
               void reviseVisualization(activeChat.id, sideNode.id, visualizationId, instruction)
@@ -4661,7 +4714,7 @@ export default function App({
                       <small>Visualization model · {providerLabel(workspace.settings.provider)}</small>
                       {workspace.settings.provider === "openai" ? (
                         <select
-                          aria-label="Model used for MetaPost visualizations"
+                          aria-label="Model used for visualizations"
                           value={
                             workspace.settings.visualizationModels[
                               workspace.settings.provider
@@ -4678,7 +4731,7 @@ export default function App({
                       ) : (
                         <>
                           <input
-                            aria-label="Model used for MetaPost visualizations"
+                            aria-label="Model used for visualizations"
                             value={
                               workspace.settings.visualizationModels[
                                 workspace.settings.provider
@@ -4704,7 +4757,7 @@ export default function App({
                       )}
                       <select
                         className="visualization-reasoning-select"
-                        aria-label="Reasoning effort used for MetaPost visualizations"
+                        aria-label="Reasoning effort used for visualizations"
                         value={
                           workspace.settings.visualizationReasoningEfforts[
                             workspace.settings.provider

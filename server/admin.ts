@@ -20,7 +20,9 @@ async function main(): Promise<void> {
     if (!email || !name || !password) {
       throw new Error("Usage: LOCUS_ADMIN_PASSWORD=... npm run admin -- create-user --email ... --name ... [--role admin]");
     }
-    const created = await auth.api.createUser({ body: { email, name, password, role } });
+    const created = await auth.api.createUser({
+      body: { email, name, password, role, data: { emailVerified: true } },
+    });
     console.log(`Created ${created.user.email} (${role})`);
     return;
   }

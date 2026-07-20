@@ -37,6 +37,14 @@ async function gandi(pathname, options = {}) {
 const records = [
   { name: "@", type: "A", values: [config.serverIp] },
   { name: "www", type: "CNAME", values: ["locuschat.io."] },
+  {
+    name: "20260720174426pm._domainkey",
+    type: "TXT",
+    values: [
+      '"k=rsa;p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQCHZAzgzudQgJ4ucUXGxmmC06pqovQyCULVyvqIsFnLGSQO1wVHjnTUkCir4J2dp9ybtTAtAwrncLPAgfUEzwxjGrHVk71k+96Bal66iP3ak/trzyqVL4TkG+rO/YQymFB+TspnCXgoo8kWMw7ipEntxfgvCUCAKERgBMHIM0NLJwIDAQAB"',
+    ],
+  },
+  { name: "pm-bounces", type: "CNAME", values: ["pm.mtasv.net."] },
 ];
 for (const record of records) {
   await gandi(`/domains/locuschat.io/records/${record.name}/${record.type}`, {

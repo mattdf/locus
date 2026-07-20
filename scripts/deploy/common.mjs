@@ -75,6 +75,26 @@ export async function deploymentEnvironment() {
   return entries;
 }
 
+export async function postmarkServerToken() {
+  const fromEnvironment = process.env.POSTMARK_SERVER_TOKEN?.trim();
+  if (fromEnvironment) return fromEnvironment;
+
+  const target = path.resolve(projectRoot, "secret/POSTMARK_API.txt");
+  const lines = (await readFile(target, "utf8"))
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const assignment = lines.find((line) => /^POSTMARK_SERVER_TOKEN\s*=/i.test(line));
+  if (assignment) return assignment.slice(assignment.indexOf("=") + 1).trim();
+
+  const labelIndex = lines.findIndex((line) => /server.*(?:api|token)|(?:api|token).*server/i.test(line));
+  const token = labelIndex >= 0 ? lines[labelIndex + 1] : lines.at(-1);
+  if (!token || token.length < 20 || /\s/.test(token)) {
+    throw new Error("Postmark Server API token is not configured in secret/POSTMARK_API.txt");
+  }
+  return token;
+}
+
 function parseEnvironmentFile(contents) {
   return Object.fromEntries(
     contents
