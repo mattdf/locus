@@ -508,6 +508,7 @@ export function ThreadView({
         `[data-visualization-id="${CSS.escape(visualizationId)}"]`,
       );
       if (target) {
+        target.dispatchEvent(new CustomEvent("locus:expand-visualization"));
         target.scrollIntoView({ behavior: "smooth", block: "center" });
         return;
       }

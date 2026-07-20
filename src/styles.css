@@ -2038,6 +2038,15 @@ a:focus-visible {
   letter-spacing: 0.025em;
 }
 
+.visualization-card--collapsed > header {
+  border-bottom: 0;
+}
+
+.visualization-card > header .visualization-card__collapse {
+  width: 28px;
+  padding: 0;
+}
+
 .visualization-card > header > span,
 .visualization-card > header > div,
 .visualization-card footer > div,
@@ -3125,18 +3134,40 @@ body.resizing-drawer {
   text-transform: uppercase;
 }
 
+.definition-popover__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
 .definition-popover > header button {
   display: grid;
   width: 24px;
   height: 24px;
   place-items: center;
   padding: 0;
-  margin-left: auto;
+  margin-left: 0;
   color: #78929e;
   background: transparent;
   border: 0;
   border-radius: 5px;
   cursor: pointer;
+}
+
+.definition-popover > header button:disabled {
+  opacity: 0.38;
+  cursor: default;
+}
+
+.definition-popover > header button:disabled:hover {
+  color: #78929e;
+  background: transparent;
+}
+
+.definition-popover > header .definition-popover__delete:not(:disabled):hover {
+  color: var(--danger);
+  background: #f6e9e6;
 }
 
 .definition-popover > header button:hover {
@@ -5531,6 +5562,16 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .definition-popover > header button:hover {
   color: #e3eff4;
   background: #27383f;
+}
+
+.app-shell[data-theme="dark"] .definition-popover > header button:disabled:hover {
+  color: #91a8b2;
+  background: transparent;
+}
+
+.app-shell[data-theme="dark"] .definition-popover > header .definition-popover__delete:not(:disabled):hover {
+  color: var(--danger);
+  background: #382522;
 }
 
 .app-shell[data-theme="dark"] .definition-popover__loading {

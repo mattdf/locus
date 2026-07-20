@@ -1,5 +1,7 @@
 import {
   Check,
+  ChevronDown,
+  ChevronRight,
   Code2,
   Download,
   Image as ImageIcon,
@@ -83,10 +85,13 @@ export function VisualizationCard({
   const [showLog, setShowLog] = useState(false);
   const [copied, setCopied] = useState(false);
   const [enlarged, setEnlarged] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const cardRef = useRef<HTMLElement>(null);
   const hintRef = useRef<HTMLTextAreaElement>(null);
   const fixInstructionRef = useRef<HTMLTextAreaElement>(null);
   const enlargeButtonRef = useRef<HTMLButtonElement>(null);
   const closeEnlargedButtonRef = useRef<HTMLButtonElement>(null);
+  const busy = visualization.status === "generating" || visualization.status === "compiling";
   const svgUrl = useMemo(
     () =>
       visualization.svg
@@ -99,6 +104,16 @@ export function VisualizationCard({
     if (svgUrl) URL.revokeObjectURL(svgUrl);
   }, [svgUrl]);
   useEffect(() => setHint(visualization.hint), [visualization.id, visualization.hint]);
+  useEffect(() => {
+    const card = cardRef.current;
+    if (!card) return;
+    const expand = () => setCollapsed(false);
+    card.addEventListener("locus:expand-visualization", expand);
+    return () => card.removeEventListener("locus:expand-visualization", expand);
+  }, [visualization.id]);
+  useEffect(() => {
+    if (busy) setCollapsed(false);
+  }, [busy]);
   useEffect(
     () => setEngine(visualizationEngine(visualization)),
     [visualization.id, visualization.engine],
@@ -133,7 +148,6 @@ export function VisualizationCard({
     };
   }, [enlarged]);
 
-  const busy = visualization.status === "generating" || visualization.status === "compiling";
   const engineLabel = visualizationEngineLabel(engine);
   const persistedSource = visualizationSource(visualization);
   const generate = () => onGenerate(visualization.id, hint.trim(), engine);
@@ -152,7 +166,8 @@ export function VisualizationCard({
 
   return (
     <section
-      className={`visualization-card visualization-card--${visualization.status}`}
+      ref={cardRef}
+      className={`visualization-card visualization-card--${visualization.status} ${collapsed ? "visualization-card--collapsed" : ""}`}
       data-visualization-id={visualization.id}
       aria-label="Inline equation visualization"
     >
@@ -176,6 +191,7 @@ export function VisualizationCard({
               aria-label={fixing ? "Close visualization fix instructions" : "Fix visualization with AI"}
               title={fixing ? "Close fix instructions" : "Fix with AI"}
               onClick={() => {
+                setCollapsed(false);
                 setEditingSource(false);
                 setFixing((open) => !open);
               }}
@@ -189,6 +205,7 @@ export function VisualizationCard({
               aria-label={editingSource ? `Close ${engineLabel} source editor` : `Edit ${engineLabel} source`}
               title={editingSource ? "Close source editor" : "Edit source"}
               onClick={() => {
+                setCollapsed(false);
                 setFixing(false);
                 setEditingSource((open) => !open);
               }}
@@ -205,9 +222,21 @@ export function VisualizationCard({
           >
             <Trash2 size={13} />
           </button>}
+          <button
+            className="visualization-card__collapse"
+            type="button"
+            aria-label={collapsed ? "Expand visualization" : "Collapse visualization"}
+            title={collapsed ? "Expand visualization" : "Collapse visualization"}
+            aria-expanded={!collapsed}
+            disabled={busy}
+            onClick={() => setCollapsed((value) => !value)}
+          >
+            {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+          </button>
         </div>
       </header>
 
+      {!collapsed && <>
       <details className="visualization-card__selection">
         <summary>Visualizing this selection</summary>
         <MathBlock source={visualization.anchor.quote} />
@@ -380,6 +409,7 @@ export function VisualizationCard({
           </div>
         </footer>
       )}
+      </>}
       {enlarged && visualization.svg && svgUrl && createPortal(
         <div
           className="visualization-lightbox"

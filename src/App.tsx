@@ -28,6 +28,7 @@ import {
   Pin,
   Plus,
   Quote,
+  RotateCcw,
   Search,
   Share2,
   ServerCog,
@@ -687,12 +688,16 @@ function DefinitionPopover({
   rect,
   getAnchorRect,
   onStop,
+  onRegenerate,
+  onDelete,
   onDismiss,
 }: {
   definition: InlineDefinition;
   rect: SelectionDraft["rect"];
   getAnchorRect?: () => SelectionDraft["rect"];
   onStop: () => void;
+  onRegenerate: () => void;
+  onDelete: () => void;
   onDismiss: () => void;
 }) {
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -776,9 +781,30 @@ function DefinitionPopover({
     >
       <header>
         <span><BookOpen size={13} /> Definition</span>
-        <button type="button" aria-label="Close definition" onClick={onDismiss}>
-          <X size={13} />
-        </button>
+        <div className="definition-popover__actions">
+          <button
+            type="button"
+            aria-label="Regenerate definition"
+            title="Regenerate definition"
+            disabled={definition.pending}
+            onClick={onRegenerate}
+          >
+            <RotateCcw size={13} />
+          </button>
+          <button
+            className="definition-popover__delete"
+            type="button"
+            aria-label="Delete definition"
+            title="Delete definition"
+            disabled={definition.pending}
+            onClick={onDelete}
+          >
+            <Trash2 size={13} />
+          </button>
+          <button type="button" aria-label="Close definition" title="Close" onClick={onDismiss}>
+            <X size={13} />
+          </button>
+        </div>
       </header>
       {definition.pending ? (
         <div className="definition-popover__loading" aria-live="polite">
@@ -1914,6 +1940,86 @@ export default function App({
         error instanceof Error ? error.message : "The definition could not be stopped",
       );
     }
+  };
+
+  const regenerateDefinition = (
+    chatId: string,
+    nodeId: string,
+    definitionId: string,
+  ) => {
+    const chat = workspaceRef.current.chats.find((item) => item.id === chatId);
+    const node = chat?.nodes[nodeId];
+    const definition = node?.definitions?.find((item) => item.id === definitionId);
+    if (!chat || !node || !definition || definition.pending) return;
+
+    const regenerated: InlineDefinition = {
+      ...definition,
+      content: "",
+      pending: true,
+      error: false,
+      requestId: newId(),
+      generation: undefined,
+    };
+    const updatedAt = timestamp();
+    const nextChat: ChatTree = {
+      ...chat,
+      updatedAt,
+      nodes: {
+        ...chat.nodes,
+        [nodeId]: {
+          ...node,
+          updatedAt,
+          definitions: (node.definitions ?? []).map((item) =>
+            item.id === definitionId ? regenerated : item,
+          ),
+        },
+      },
+    };
+    setWorkspace((current) => ({
+      ...current,
+      chats: current.chats.map((item) => item.id === chatId ? nextChat : item),
+    }));
+    void askDefinition(nextChat, nodeId, regenerated);
+  };
+
+  const deleteDefinition = (
+    chatId: string,
+    nodeId: string,
+    definitionId: string,
+  ) => {
+    const chat = workspaceRef.current.chats.find((item) => item.id === chatId);
+    const definition = chat?.nodes[nodeId]?.definitions?.find(
+      (item) => item.id === definitionId,
+    );
+    if (!chat || !definition || definition.pending) return;
+    if (!window.confirm("Delete this definition?")) return;
+
+    updateChat(chatId, (current) => {
+      const node = current.nodes[nodeId];
+      if (!node) return current;
+      const updatedAt = timestamp();
+      return {
+        ...current,
+        updatedAt,
+        nodes: {
+          ...current.nodes,
+          [nodeId]: {
+            ...node,
+            updatedAt,
+            definitions: (node.definitions ?? []).filter(
+              (item) => item.id !== definitionId,
+            ),
+          },
+        },
+      };
+    });
+    setDefinitionPopover((current) =>
+      current?.chatId === chatId &&
+      current.nodeId === nodeId &&
+      current.definitionId === definitionId
+        ? null
+        : current,
+    );
   };
 
   const compileVisualization = async (
@@ -5444,6 +5550,20 @@ export default function App({
           getAnchorRect={definitionPopover.getAnchorRect}
           onStop={() =>
             void stopDefinition(
+              definitionPopover.chatId,
+              definitionPopover.nodeId,
+              definitionPopover.definitionId,
+            )
+          }
+          onRegenerate={() =>
+            regenerateDefinition(
+              definitionPopover.chatId,
+              definitionPopover.nodeId,
+              definitionPopover.definitionId,
+            )
+          }
+          onDelete={() =>
+            deleteDefinition(
               definitionPopover.chatId,
               definitionPopover.nodeId,
               definitionPopover.definitionId,
