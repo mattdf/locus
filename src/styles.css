@@ -5007,7 +5007,7 @@ body.resizing-drawer {
   border-right: 1px solid #d8d4c9;
 }
 
-.shared-chat-branches > strong {
+.shared-chat-branches__body > strong {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -5017,6 +5017,8 @@ body.resizing-drawer {
   letter-spacing: .1em;
   text-transform: uppercase;
 }
+
+.shared-chat-branches > .shared-chat-branches__toggle { display: none; }
 
 .shared-chat-branches ul { padding: 0; margin: 0; list-style: none; }
 .shared-chat-branches button {
@@ -5094,7 +5096,47 @@ body.resizing-drawer {
   .shared-chat-header > time { display: none; }
   .shared-chat-brand > span { display: none; }
   .shared-chat-layout { display: flex; flex-direction: column; }
-  .shared-chat-branches { max-height: 150px; flex: 0 0 auto; border-right: 0; border-bottom: 1px solid #d8d4c9; }
+  .shared-chat-branches {
+    max-height: none;
+    flex: 0 0 auto;
+    padding: 0;
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid #d8d4c9;
+  }
+  .shared-chat-branches .shared-chat-branches__toggle {
+    display: flex;
+    min-height: 42px;
+    padding: 0 14px;
+    border-radius: 0;
+    font-family: Inter, ui-sans-serif, sans-serif;
+  }
+  .shared-chat-branches__toggle > span {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: #74807a;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: .09em;
+    text-transform: uppercase;
+  }
+  .shared-chat-branches__toggle > svg {
+    margin-left: auto;
+    transition: transform 140ms ease;
+  }
+  .shared-chat-branches--open .shared-chat-branches__toggle > svg {
+    transform: rotate(180deg);
+  }
+  .shared-chat-branches__body {
+    display: none;
+    max-height: 150px;
+    padding: 8px 10px 10px;
+    overflow-y: auto;
+    border-top: 1px solid rgba(216, 212, 201, .75);
+  }
+  .shared-chat-branches--open .shared-chat-branches__body { display: block; }
+  .shared-chat-branches__body > strong { display: none; }
   .shared-chat-main { flex: 1; }
   .shared-chats__list article { grid-template-columns: 1fr; }
   .shared-chats__list nav { flex-wrap: wrap; }

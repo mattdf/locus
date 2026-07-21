@@ -1,5 +1,6 @@
 import {
   BookOpen,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   GitBranch,
@@ -8,12 +9,13 @@ import {
   LockKeyhole,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { generationDetails } from "../lib/generation";
 import { childThreads, threadPath } from "../lib/tree";
 import type { ChatTree, InlineDefinition, SelectionDraft } from "../types";
 import { InlineMath, MathBlock } from "./MathText";
 import { ThreadView } from "./ThreadView";
+import { useAnchoredPopover } from "./useAnchoredPopover";
 
 interface SharedChatResponse {
   title: string;
@@ -70,20 +72,28 @@ function SharedBranchTree({
 function SharedDefinition({
   definition,
   rect,
+  getAnchorRect,
   onClose,
 }: {
   definition: Pick<InlineDefinition, "content" | "generation">;
   rect: SelectionDraft["rect"];
+  getAnchorRect?: () => SelectionDraft["rect"];
   onClose: () => void;
 }) {
-  const width = Math.min(420, window.innerWidth - 24);
-  const left = Math.min(
-    window.innerWidth - width - 12,
-    Math.max(12, rect.left + rect.width / 2 - width / 2),
-  );
-  const top = Math.min(window.innerHeight - 220, Math.max(12, rect.top + rect.height + 10));
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const position = useAnchoredPopover({
+    anchorRect: rect,
+    getAnchorRect,
+    popoverRef,
+    onDismiss: onClose,
+  });
   return (
-    <div className="definition-popover shared-definition" role="dialog" style={{ left, top, width }}>
+    <div
+      className="definition-popover shared-definition"
+      ref={popoverRef}
+      role="dialog"
+      style={{ left: position.left, top: position.top }}
+    >
       <header>
         <span><BookOpen size={13} /> Definition</span>
         <button type="button" aria-label="Close definition" onClick={onClose}><X size={13} /></button>
@@ -100,7 +110,9 @@ export function SharedChatView({ token }: { token: string }) {
   const [definition, setDefinition] = useState<{
     value: Pick<InlineDefinition, "content" | "generation">;
     rect: SelectionDraft["rect"];
+    getAnchorRect?: () => SelectionDraft["rect"];
   } | null>(null);
+  const [mobileContentsOpen, setMobileContentsOpen] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -131,6 +143,7 @@ export function SharedChatView({ token }: { token: string }) {
   const openNode = useCallback((nodeId: string) => {
     setActiveNodeId(nodeId);
     setDefinition(null);
+    setMobileContentsOpen(false);
     const url = new URL(window.location.href);
     if (share && nodeId === share.chat.rootId) url.searchParams.delete("thread");
     else url.searchParams.set("thread", nodeId);
@@ -188,21 +201,35 @@ export function SharedChatView({ token }: { token: string }) {
         </time>
       </header>
       <div className="shared-chat-layout">
-        <aside className="shared-chat-branches">
-          <strong><Link2 size={13} /> Contents</strong>
+        <aside
+          className={`shared-chat-branches ${mobileContentsOpen ? "shared-chat-branches--open" : ""}`}
+        >
           <button
-            className={node.id === share.chat.rootId ? "active" : ""}
+            className="shared-chat-branches__toggle"
             type="button"
-            onClick={() => openNode(share.chat.rootId)}
+            aria-controls="shared-chat-branch-tree"
+            aria-expanded={mobileContentsOpen}
+            onClick={() => setMobileContentsOpen((open) => !open)}
           >
-            <BookOpen size={12} /> Main thread
+            <span><Link2 size={13} /> Contents</span>
+            <ChevronDown size={14} />
           </button>
-          <SharedBranchTree
-            chat={share.chat}
-            parentId={share.chat.rootId}
-            activeId={node.id}
-            onOpen={openNode}
-          />
+          <div className="shared-chat-branches__body" id="shared-chat-branch-tree">
+            <strong><Link2 size={13} /> Contents</strong>
+            <button
+              className={node.id === share.chat.rootId ? "active" : ""}
+              type="button"
+              onClick={() => openNode(share.chat.rootId)}
+            >
+              <BookOpen size={12} /> Main thread
+            </button>
+            <SharedBranchTree
+              chat={share.chat}
+              parentId={share.chat.rootId}
+              activeId={node.id}
+              onOpen={openNode}
+            />
+          </div>
         </aside>
         <main className="shared-chat-main">
           <header className="shared-thread-header">
@@ -234,7 +261,7 @@ export function SharedChatView({ token }: { token: string }) {
             node={node}
             onSelect={NOOP}
             onOpenElaboration={openNode}
-            onOpenDefinition={(definitionId, rect) => {
+            onOpenDefinition={(definitionId, rect, getAnchorRect) => {
               const value = node.definitions?.find((candidate) => candidate.id === definitionId);
               if (value) {
                 setDefinition({
@@ -243,6 +270,7 @@ export function SharedChatView({ token }: { token: string }) {
                     ...(value.generation ? { generation: value.generation } : {}),
                   },
                   rect,
+                  getAnchorRect,
                 });
               }
             }}
@@ -278,6 +306,7 @@ export function SharedChatView({ token }: { token: string }) {
         <SharedDefinition
           definition={definition.value}
           rect={definition.rect}
+          getAnchorRect={definition.getAnchorRect}
           onClose={() => setDefinition(null)}
         />
       )}

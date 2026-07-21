@@ -59,6 +59,7 @@ import {
 import { InlineMath, MathBlock } from "./components/MathText";
 import { MODEL_OPTIONS, ModelPicker, REASONING_OPTIONS } from "./components/ModelPicker";
 import { ThreadView } from "./components/ThreadView";
+import { useAnchoredPopover } from "./components/useAnchoredPopover";
 import { ProviderManagementView } from "./components/ProviderManagementView";
 import { SaveFailureModal } from "./components/SaveFailureModal";
 import {
@@ -934,80 +935,18 @@ function DefinitionPopover({
 }) {
   const popoverRef = useRef<HTMLDivElement>(null);
   const hintRef = useRef<HTMLInputElement>(null);
-  const [anchorRect, setAnchorRect] = useState(rect);
-  const [position, setPosition] = useState({ left: rect.left, top: rect.top });
   const [hint, setHint] = useState(definition.hint ?? "");
+  const position = useAnchoredPopover({
+    anchorRect: rect,
+    getAnchorRect,
+    popoverRef,
+    onDismiss,
+  });
 
-  useEffect(() => setAnchorRect(rect), [rect]);
   useEffect(() => setHint(definition.hint ?? ""), [definition.id, definition.hint]);
   useEffect(() => {
     if (definition.draft) hintRef.current?.focus({ preventScroll: true });
   }, [definition.id, definition.draft]);
-
-  useEffect(() => {
-    const popover = popoverRef.current;
-    if (!popover) return;
-    const place = () => {
-      const bounds = popover.getBoundingClientRect();
-      const left = Math.min(
-        window.innerWidth - bounds.width - 12,
-        Math.max(12, anchorRect.left + anchorRect.width / 2 - bounds.width / 2),
-      );
-      const below = anchorRect.top + anchorRect.height + 10;
-      const preferredTop =
-        below + bounds.height <= window.innerHeight - 12
-          ? below
-          : anchorRect.top - bounds.height - 10;
-      const top = Math.min(
-        window.innerHeight - bounds.height - 12,
-        Math.max(12, preferredTop),
-      );
-      setPosition({ left, top });
-    };
-    place();
-    const observer = new ResizeObserver(place);
-    observer.observe(popover);
-    window.addEventListener("resize", place);
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("resize", place);
-    };
-  }, [definition.id, definition.content, definition.pending, anchorRect]);
-
-  useEffect(() => {
-    const dismissOnPointer = (event: PointerEvent) => {
-      if (popoverRef.current?.contains(event.target as Node)) return;
-      if (definition.pending) return;
-      onDismiss();
-    };
-    const dismissOnKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onDismiss();
-    };
-    const dismissOnScroll = (event: Event) => {
-      if (
-        event.target instanceof Node &&
-        popoverRef.current?.contains(event.target)
-      ) {
-        return;
-      }
-      if (definition.pending) {
-        const nextRect = getAnchorRect?.();
-        if (nextRect && (nextRect.width || nextRect.height)) {
-          setAnchorRect(nextRect);
-        }
-        return;
-      }
-      onDismiss();
-    };
-    document.addEventListener("pointerdown", dismissOnPointer);
-    document.addEventListener("keydown", dismissOnKey);
-    document.addEventListener("scroll", dismissOnScroll, true);
-    return () => {
-      document.removeEventListener("pointerdown", dismissOnPointer);
-      document.removeEventListener("keydown", dismissOnKey);
-      document.removeEventListener("scroll", dismissOnScroll, true);
-    };
-  }, [definition.pending, getAnchorRect, onDismiss]);
 
   return (
     <div
