@@ -59,6 +59,36 @@ export function containingMarkdownSection(
   return { start, end, content: source.slice(start, end) };
 }
 
+/**
+ * Resolves rendered Markdown block indices back into the original stored
+ * source. Rendering may normalize copied math delimiters and thereby change
+ * the parser's top-level block count, so the two index spaces cannot safely
+ * be treated as identical.
+ */
+export function containingOriginalMarkdownSection(
+  source: string,
+  renderedSource: string,
+  startBlockIndex: number,
+  endBlockIndex = startBlockIndex,
+): SourceRange & { content: string } {
+  const rendered = containingMarkdownSection(
+    renderedSource,
+    startBlockIndex,
+    endBlockIndex,
+  );
+  if (source === renderedSource) {
+    return { ...rendered, content: source.slice(rendered.start, rendered.end) };
+  }
+
+  const mapper = createPositionMapper(renderedSource, source);
+  let start = mapper.map(rendered.start);
+  let end = mapper.map(rendered.end);
+  if (end < start) [start, end] = [end, start];
+  start = Math.max(0, Math.min(source.length, start));
+  end = Math.max(start, Math.min(source.length, end));
+  return { start, end, content: source.slice(start, end) };
+}
+
 function quoteVariants(quote: string): string[] {
   const trimmed = quote.trim();
   const variants = new Set([quote, trimmed]);
@@ -130,8 +160,10 @@ export function anchorForSelection(
   source: string,
   anchor: Pick<HighlightAnchor, "sourceNodeId" | "sourceMessageId" | "quote" | "blockIndex">,
   endBlockIndex = anchor.blockIndex,
+  sourceSection?: SourceRange,
 ): HighlightAnchor {
-  const section = containingMarkdownSection(source, anchor.blockIndex, endBlockIndex);
+  const section = sourceSection ??
+    containingMarkdownSection(source, anchor.blockIndex, endBlockIndex);
   const range =
     closestOccurrence(source, quoteVariants(anchor.quote), section.start, section) ?? section;
   return {

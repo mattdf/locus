@@ -6,7 +6,10 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { normalizeMathDelimiters } from "../lib/markdown";
-import { anchorForSelection, containingMarkdownSection } from "../lib/sourceEditing";
+import {
+  anchorForSelection,
+  containingOriginalMarkdownSection,
+} from "../lib/sourceEditing";
 import type {
   HighlightAnchor,
   InlineDefinition,
@@ -504,8 +507,9 @@ function MarkdownMessageComponent({
     const bounds = range.getBoundingClientRect();
     const startBlockIndex = topLevelBlockIndex(container, range.startContainer);
     const endBlockIndex = topLevelBlockIndex(container, range.endContainer);
-    const section = containingMarkdownSection(
+    const section = containingOriginalMarkdownSection(
       message.content,
+      normalizedContent,
       startBlockIndex,
       endBlockIndex,
     );
@@ -518,6 +522,7 @@ function MarkdownMessageComponent({
         blockIndex: startBlockIndex,
       },
       endBlockIndex,
+      section,
     );
     onSelect({
       ...anchor,
