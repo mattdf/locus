@@ -1267,7 +1267,7 @@ export default function App({
     useState<"idle" | "loading" | "loaded" | "error">("idle");
   const [drawerWidth, setDrawerWidth] = useState(440);
   const [chatMenuOpen, setChatMenuOpen] = useState(false);
-  const [branchMenuOpen, setBranchMenuOpen] = useState(false);
+  const [branchMenuOpen, setBranchMenuOpen] = useState<"main" | "focus" | null>(null);
   const [renamingNodeId, setRenamingNodeId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [categoryMenuId, setCategoryMenuId] = useState<string | null>(null);
@@ -1490,7 +1490,7 @@ export default function App({
     setRenamingNodeId((current) =>
       current && removedIds.has(current) ? null : current,
     );
-    setBranchMenuOpen(false);
+    setBranchMenuOpen(null);
 
     if (draftWasRemoved) {
       draftReturnView.current = null;
@@ -1595,7 +1595,7 @@ export default function App({
       setSelection(null);
       setDefinitionPopover(null);
       setChatMenuOpen(false);
-      setBranchMenuOpen(false);
+      setBranchMenuOpen(null);
     };
     window.addEventListener("popstate", applyLocation);
     return () => window.removeEventListener("popstate", applyLocation);
@@ -1780,7 +1780,7 @@ export default function App({
         setProvidersOpen(false);
         setCustomInstructionsOpen(false);
         setChatMenuOpen(false);
-        setBranchMenuOpen(false);
+        setBranchMenuOpen(null);
         setRenamingNodeId(null);
         setCategoryMenuId(null);
         setCategoryEditor(null);
@@ -4316,7 +4316,7 @@ export default function App({
     setRenameDraft(node.title);
     setRenamingNodeId(nodeId);
     setChatMenuOpen(false);
-    setBranchMenuOpen(false);
+    setBranchMenuOpen(null);
     if (navigateToNode && nodeId !== activeChat.rootId) {
       historyAction.current = "push";
       setActiveNodeId(nodeId);
@@ -4613,7 +4613,7 @@ export default function App({
     setDraft(null);
     setSelection(null);
     setChatMenuOpen(false);
-    setBranchMenuOpen(false);
+    setBranchMenuOpen(null);
     setRenamingNodeId(null);
     setFocusMaximized(false);
   };
@@ -4645,7 +4645,7 @@ export default function App({
     setSelection(null);
     setSidebarOpen(false);
     setChatMenuOpen(false);
-    setBranchMenuOpen(false);
+    setBranchMenuOpen(null);
     setRenamingNodeId(null);
     setCategoryMenuId(null);
     setFocusMaximized(false);
@@ -4659,7 +4659,7 @@ export default function App({
     setDraft(null);
     setSidebarOpen(false);
     setChatMenuOpen(false);
-    setBranchMenuOpen(false);
+    setBranchMenuOpen(null);
     setRenamingNodeId(null);
     setCategoryMenuId(null);
     setFocusMaximized(false);
@@ -5002,6 +5002,60 @@ export default function App({
       onKeyDown={resizeDrawerWithKeyboard}
     />
   );
+  const renderBranchMenuControl = (placement: "main" | "focus") => {
+    if (!activeChat) return null;
+    const open = branchMenuOpen === placement;
+    return (
+      <div className="header-popover-anchor">
+        <button
+          className="branch-stat branch-stat--button"
+          type="button"
+          aria-label="Show branches"
+          aria-haspopup="true"
+          aria-expanded={open}
+          onClick={() => {
+            setBranchMenuOpen((current) => current === placement ? null : placement);
+            setChatMenuOpen(false);
+            setRenamingNodeId(null);
+          }}
+        >
+          <GitBranch size={14} /> {activeBranchCount}
+        </button>
+        {open && (
+          <section className="branch-menu" aria-label="Branch tree">
+            <header>
+              <span>Branches</span>
+              <strong>{activeBranchCount}</strong>
+            </header>
+            <div className="branch-menu__body">
+              {activeBranchCount ? (
+                <BranchTree
+                  chat={activeChat}
+                  parentId={activeChat.rootId}
+                  activeNodeId={activeNodeId}
+                  root
+                  onRename={openRenameNode}
+                  onDelete={deleteBranchSubtree}
+                  onOpen={(nodeId) => {
+                    historyAction.current = "push";
+                    setActiveNodeId(nodeId);
+                    setDraft(null);
+                    setSelection(null);
+                    setFocusMaximized(
+                      placement === "focus" && focusMaximized && nodeId !== activeChat.rootId,
+                    );
+                    setBranchMenuOpen(null);
+                  }}
+                />
+              ) : (
+                <p>No branches yet.</p>
+              )}
+            </div>
+          </section>
+        )}
+      </div>
+    );
+  };
   const renderChatRow = (chat: ChatTree) => {
     const branchCount = Object.keys(chat.nodes).length - 1;
     return (
@@ -5302,6 +5356,19 @@ export default function App({
 
       {sidebarOpen && <button className="sidebar-scrim" type="button" aria-label="Close menu" onClick={() => setSidebarOpen(false)} />}
 
+      {(chatMenuOpen || branchMenuOpen) && (
+        <button
+          className="chat-menu-scrim"
+          type="button"
+          aria-label="Close header menu"
+          onClick={() => {
+            setChatMenuOpen(false);
+            setBranchMenuOpen(null);
+            setRenamingNodeId(null);
+          }}
+        />
+      )}
+
       {!activeChat || !rootNode || !leftPaneNode ? (
         <NewChatScreen
           initialMode={newMode}
@@ -5318,18 +5385,6 @@ export default function App({
         />
       ) : (
         <main className={`main-pane ${leftPaneIsRoot ? "" : "main-pane--stacked"}`}>
-          {(chatMenuOpen || branchMenuOpen) && (
-            <button
-              className="chat-menu-scrim"
-              type="button"
-              aria-label="Close header menu"
-              onClick={() => {
-                setChatMenuOpen(false);
-                setBranchMenuOpen(false);
-                setRenamingNodeId(null);
-              }}
-            />
-          )}
           <header className="pane-header">
             <button className="menu-button" type="button" aria-label="Open studies" onClick={openSidebar}>
               <Menu size={19} />
@@ -5392,52 +5447,7 @@ export default function App({
                   <span>{shareCreating ? "Sharing…" : "Share"}</span>
                 </button>
               )}
-              <div className="header-popover-anchor">
-                <button
-                  className="branch-stat branch-stat--button"
-                  type="button"
-                  aria-label="Show branches"
-                  aria-haspopup="true"
-                  aria-expanded={branchMenuOpen}
-                  onClick={() => {
-                    setBranchMenuOpen((open) => !open);
-                    setChatMenuOpen(false);
-                    setRenamingNodeId(null);
-                  }}
-                >
-                  <GitBranch size={14} /> {activeBranchCount}
-                </button>
-                {branchMenuOpen && (
-                  <section className="branch-menu" aria-label="Branch tree">
-                    <header>
-                      <span>Branches</span>
-                      <strong>{activeBranchCount}</strong>
-                    </header>
-                    <div className="branch-menu__body">
-                      {activeBranchCount ? (
-                        <BranchTree
-                          chat={activeChat}
-                          parentId={activeChat.rootId}
-                          activeNodeId={activeNodeId}
-                          root
-                          onRename={openRenameNode}
-                          onDelete={deleteBranchSubtree}
-                          onOpen={(nodeId) => {
-                            historyAction.current = "push";
-                            setActiveNodeId(nodeId);
-                            setDraft(null);
-                            setSelection(null);
-                            setFocusMaximized(false);
-                            setBranchMenuOpen(false);
-                          }}
-                        />
-                      ) : (
-                        <p>No branches yet.</p>
-                      )}
-                    </div>
-                  </section>
-                )}
-              </div>
+              {renderBranchMenuControl("main")}
               <button
                 className="icon-button"
                 type="button"
@@ -5446,7 +5456,7 @@ export default function App({
                 aria-expanded={chatMenuOpen}
                 onClick={() => {
                   setChatMenuOpen((open) => !open);
-                  setBranchMenuOpen(false);
+                  setBranchMenuOpen(null);
                   setRenamingNodeId(null);
                 }}
               >
@@ -5735,6 +5745,7 @@ export default function App({
                   <span>{shareCreating ? "Sharing…" : "Share"}</span>
                 </button>
               )}
+              {renderBranchMenuControl("focus")}
               <button
                 className="icon-button danger"
                 type="button"

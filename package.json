@@ -18,6 +18,7 @@
     "typecheck": "tsc --noEmit",
     "test:hosted": "node scripts/test/hosted-integration.mjs",
     "test:assistant-edits": "tsx scripts/test/assistant-edit-variants.ts",
+    "test:share-flattening": "tsx scripts/test/share-flattening.ts",
     "test:access": "node scripts/test/access-control.mjs",
     "metapost:build": "docker build -t locus-metapost:1 docker/metapost",
     "metapost:check": "docker image inspect locus-metapost:1 >/dev/null"

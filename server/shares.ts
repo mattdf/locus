@@ -40,8 +40,15 @@ function owner(response: express.Response): string {
 
 function completedMessage(message: Message): Message | null {
   if (!message.content.trim()) return null;
-  const { pending: _pending, requestId: _requestId, ...rest } = message;
-  return rest;
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    createdAt: message.createdAt,
+    ...(message.error ? { error: true } : {}),
+    ...(message.stopped ? { stopped: true } : {}),
+    ...(message.generation ? { generation: message.generation } : {}),
+  };
 }
 
 function completedDefinition(definition: InlineDefinition): InlineDefinition | null {
@@ -108,15 +115,16 @@ export function createPublicSnapshot(chat: ChatTree): ChatTree {
       return [
         node.id,
         {
-          ...node,
+          id: node.id,
+          parentId: node.parentId,
+          title: node.title,
+          ...(node.anchor ? { anchor: node.anchor } : {}),
           messages,
           definitions,
           visualizations,
           inlineElaborations,
-          messageRevisions: undefined,
-          responseRevisions: undefined,
-          assistantEdits: undefined,
-          sourceEditUndo: undefined,
+          createdAt: node.createdAt,
+          updatedAt: node.updatedAt,
         },
       ];
     }),

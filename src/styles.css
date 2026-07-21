@@ -2980,6 +2980,8 @@ body.resizing-drawer {
 }
 
 .focus-header__actions {
+  position: relative;
+  z-index: 31;
   display: flex;
   flex: 0 0 auto;
   align-items: center;
