@@ -33,9 +33,13 @@ address. Do not expose `app:8787` directly while trusting a client-supplied IP h
 
 ## Accounts
 
-Public email/password signup is enabled in hosted mode. New accounts must follow the Postmark
-verification link before signing in. Existing and administrator-created accounts are marked
-verified by the migration/admin flow. To create an account administratively, use:
+Hosted mode starts with public email/password signup enabled. Administrators can switch the site
+to waitlist mode, issue single-use invite links, assign server-managed model credentials to an
+invite, revoke those credentials, and suspend accounts from the administration interface. New
+public accounts must follow the Postmark verification link before signing in. A valid single-use
+invite acts as verification, so invited accounts can sign in immediately without an email round
+trip. Administrator-created accounts are also marked verified immediately. To create an
+administrator from the command line, use:
 
 ```bash
 LOCUS_ADMIN_PASSWORD='use-a-long-unique-password' \
@@ -52,6 +56,13 @@ node build/server/admin.mjs create-user --email you@example.com --name 'Your Nam
 - Cookies are HTTP-only, secure, and bound to the configured HTTPS origin.
 - State-changing application requests require the exact configured origin.
 - BYOK credentials use AES-256-GCM with per-record nonces and owner/provider authenticated data.
+- Administrator-managed provider keys use the same authenticated encryption, are referenced by
+  invited accounts, and are never returned by an application endpoint. Revocation takes effect on
+  the next provider request for every assigned account.
+- Invite capability tokens are returned only when created and stored as SHA-256 hashes. Each link
+  can create at most one account.
+- Suspension deletes every session, stops in-flight model generations, and is checked again on
+  every protected request.
 - The MetaPost service accepts only the server-validated wrapped source over the private Compose
   network and executes compilation without a shell.
 

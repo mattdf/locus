@@ -15,7 +15,8 @@ export const auth = isHosted
       trustedOrigins: [publicOrigin!],
       emailAndPassword: {
         enabled: true,
-        disableSignUp: false,
+        // Account creation is routed through the server-enforced public/invite policy.
+        disableSignUp: true,
         requireEmailVerification: true,
         autoSignIn: false,
         minPasswordLength: 12,
@@ -70,6 +71,6 @@ export const auth = isHosted
           ipAddressHeaders: ["x-real-ip"],
         },
       },
-      plugins: [admin()],
+      plugins: [admin({ bannedUserMessage: "This account is suspended." })],
     })
   : null;

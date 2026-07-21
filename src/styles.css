@@ -160,6 +160,10 @@ body {
   line-height: 1.45;
 }
 .auth-card__notice svg { flex: 0 0 auto; margin-top: 1px; }
+.auth-card__notice--invite { background: #eef0fb; color: #514a85; }
+.auth-card--suspended { text-align: center; }
+.auth-card--suspended .auth-card__mark { margin-right: auto; margin-left: auto; background: #8d4747; }
+.auth-card--suspended header { margin-bottom: 0; }
 
 .loading-screen--error { gap: 8px; text-align: center; }
 .loading-screen--error button { margin-top: 8px; padding: 7px 14px; cursor: pointer; }
@@ -4248,6 +4252,165 @@ body.resizing-drawer {
   overflow-y: auto;
 }
 
+.admin-tabs {
+  display: flex;
+  gap: 4px;
+  margin-top: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e1ddd3;
+}
+
+.admin-tabs button {
+  display: inline-flex;
+  min-height: 31px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  color: #6a746f;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.admin-tabs button[aria-current="page"] {
+  color: var(--accent-dark);
+  background: rgba(13, 112, 101, .07);
+  border-color: rgba(13, 112, 101, .18);
+}
+
+.admin-access {
+  min-height: 0;
+  margin-top: 10px;
+  overflow-y: auto;
+}
+
+.admin-access__section {
+  padding: 13px;
+  background: rgba(255, 255, 255, .34);
+  border: 1px solid #ddd9cf;
+  border-radius: 9px;
+}
+
+.admin-access__section + .admin-access__section { margin-top: 10px; }
+
+.admin-access__section > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.admin-access__section > header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #394640;
+  font-size: 10px;
+}
+
+.admin-access__section > header > button,
+.admin-access__toggle {
+  display: inline-flex;
+  min-height: 29px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  color: #59655f;
+  background: white;
+  border: 1px solid #d8d5cc;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.admin-access__toggle[aria-pressed="true"] { color: var(--accent-dark); border-color: rgba(13, 112, 101, .35); }
+.admin-access__section > p { margin: 7px 0 0; color: #7b8580; font-size: 9px; line-height: 1.45; }
+
+.admin-access__fields {
+  display: grid;
+  gap: 7px;
+  margin-top: 11px;
+}
+
+.admin-access__fields--key { grid-template-columns: 1fr 125px minmax(200px, 1.4fr) auto; }
+.admin-access__fields--invite { grid-template-columns: minmax(190px, 1.2fr) 105px minmax(170px, 1fr) auto; }
+
+.admin-access__fields input,
+.admin-access__fields select,
+.admin-access__created-link input {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 9px;
+  color: var(--ink);
+  background: white;
+  border: 1px solid #d8d5cc;
+  border-radius: 6px;
+  outline: 0;
+  font-size: 9px;
+}
+
+.admin-access__fields .primary-button { min-height: 34px; margin: 0; white-space: nowrap; }
+
+.admin-access__created-link {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 6px;
+  padding: 8px;
+  margin-top: 9px;
+  background: rgba(13, 112, 101, .06);
+  border: 1px solid rgba(13, 112, 101, .18);
+  border-radius: 7px;
+}
+
+.admin-access__created-link button,
+.admin-access__rows article button {
+  display: inline-flex;
+  min-height: 29px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
+  color: #59655f;
+  background: white;
+  border: 1px solid #d8d5cc;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.admin-access__rows { margin-top: 9px; border-top: 1px solid #e3dfd6; }
+.admin-access__rows > small { display: block; padding: 12px 0 3px; color: #8a928e; font-size: 8px; }
+.admin-access__rows article {
+  display: grid;
+  min-height: 50px;
+  grid-template-columns: minmax(220px, 1fr) minmax(90px, auto) auto;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 0;
+  color: #606c66;
+  border-bottom: 1px solid #e3dfd6;
+  font-size: 8px;
+}
+
+.admin-access__rows article[data-disabled] { opacity: .58; }
+.admin-access__rows article > span:first-child { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.admin-access__rows article strong { overflow: hidden; color: #35413c; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.admin-access__rows article small { overflow: hidden; color: #8a928e; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.admin-access__rows article > div { display: flex; gap: 5px; }
+
+@media (max-width: 760px) {
+  .admin-access__fields--key,
+  .admin-access__fields--invite,
+  .admin-access__rows article { grid-template-columns: 1fr; }
+  .admin-access__rows article > div { justify-content: flex-start; }
+}
+
 .admin-account-create,
 .admin-account-list,
 .admin-password-reset {
@@ -6142,7 +6305,8 @@ body.resizing-drawer {
 
 .app-shell[data-theme="dark"] .admin-account-create,
 .app-shell[data-theme="dark"] .admin-account-list,
-.app-shell[data-theme="dark"] .admin-password-reset {
+.app-shell[data-theme="dark"] .admin-password-reset,
+.app-shell[data-theme="dark"] .admin-access__section {
   background: rgba(255, 255, 255, 0.025);
   border-color: #3a433f;
 }
@@ -6163,7 +6327,10 @@ body.resizing-drawer {
 }
 
 .app-shell[data-theme="dark"] .admin-account-list__rows,
-.app-shell[data-theme="dark"] .admin-account-row {
+.app-shell[data-theme="dark"] .admin-account-row,
+.app-shell[data-theme="dark"] .admin-tabs,
+.app-shell[data-theme="dark"] .admin-access__rows,
+.app-shell[data-theme="dark"] .admin-access__rows article {
   border-color: #303835;
 }
 
@@ -6174,6 +6341,23 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .admin-account-row__actions button,
 .app-shell[data-theme="dark"] .admin-password-reset footer button:not(.primary-button),
 .app-shell[data-theme="dark"] .admin-account-list > header > button {
+  color: #c7d0cb;
+  background: #151a18;
+  border-color: #3a433f;
+}
+
+.app-shell[data-theme="dark"] .admin-access__section > header > span,
+.app-shell[data-theme="dark"] .admin-access__rows article strong { color: #d5ddd9; }
+.app-shell[data-theme="dark"] .admin-access__section > p,
+.app-shell[data-theme="dark"] .admin-access__rows article small { color: #7e8883; }
+.app-shell[data-theme="dark"] .admin-tabs button,
+.app-shell[data-theme="dark"] .admin-access__section > header > button,
+.app-shell[data-theme="dark"] .admin-access__toggle,
+.app-shell[data-theme="dark"] .admin-access__fields input,
+.app-shell[data-theme="dark"] .admin-access__fields select,
+.app-shell[data-theme="dark"] .admin-access__created-link input,
+.app-shell[data-theme="dark"] .admin-access__created-link button,
+.app-shell[data-theme="dark"] .admin-access__rows article button {
   color: #c7d0cb;
   background: #151a18;
   border-color: #3a433f;

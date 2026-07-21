@@ -163,7 +163,7 @@ interface ApiError {
 interface ProviderCredentialStatus {
   configured: boolean;
   required: boolean;
-  source: "saved" | "project-file" | null;
+  source: "saved" | "project-file" | "managed" | null;
 }
 
 type ProviderStatuses = Record<ProviderId, ProviderCredentialStatus>;
@@ -1189,6 +1189,7 @@ export default function App({
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const activeNodeIdRef = useRef(activeNodeId);
   const historyAction = useRef<"push" | "replace">("replace");
+  const managedProviderAppliedRef = useRef(false);
   workspaceRef.current = workspace;
   activeNodeIdRef.current = activeNodeId;
 
@@ -1494,6 +1495,47 @@ export default function App({
       .then(setProviderStatuses)
       .catch(() => setProviderStatuses(null));
   }, []);
+
+  useEffect(() => {
+    if (
+      managedProviderAppliedRef.current ||
+      runtime.mode !== "hosted" ||
+      !loaded ||
+      !providerStatuses ||
+      workspace.chats.length > 0
+    ) return;
+    const currentProvider = workspace.settings.provider;
+    if (providerStatuses[currentProvider].configured) {
+      managedProviderAppliedRef.current = true;
+      return;
+    }
+    const managedProvider = (["openai", "openrouter"] as const).find(
+      (provider) => providerStatuses[provider].source === "managed",
+    );
+    if (!managedProvider) return;
+    managedProviderAppliedRef.current = true;
+    setWorkspace((current) => {
+      const providerModels = {
+        ...current.settings.providerModels,
+        [current.settings.provider]: current.settings.model,
+      };
+      const model = providerModels[managedProvider] || DEFAULT_PROVIDER_MODELS[managedProvider];
+      return {
+        ...current,
+        settings: {
+          ...current.settings,
+          provider: managedProvider,
+          providerModels,
+          model,
+          reasoningEffort: compatibleReasoningEffort(
+            managedProvider,
+            model,
+            current.settings.reasoningEffort,
+          ),
+        },
+      };
+    });
+  }, [loaded, providerStatuses, runtime.mode, workspace.chats.length, workspace.settings.provider]);
 
   useEffect(() => {
     if (!loaded || workspace.settings.provider === "openai") {
@@ -5209,7 +5251,7 @@ export default function App({
                         <ShieldCheck size={15} />
                         <span>
                           <small>Administration</small>
-                          <strong>Manage accounts</strong>
+                          <strong>Manage access and accounts</strong>
                         </span>
                         <ChevronRight size={13} />
                       </button>
@@ -5480,6 +5522,8 @@ export default function App({
                           ? "Checking…"
                           : providerStatuses[workspace.settings.provider].source === "saved"
                             ? "Saved in Locus"
+                            : providerStatuses[workspace.settings.provider].source === "managed"
+                              ? "Provided by administrator"
                             : providerStatuses[workspace.settings.provider].source === "project-file"
                               ? "Project file"
                               : workspace.settings.provider === "local"
@@ -5999,13 +6043,19 @@ export default function App({
               spellCheck={false}
             />
             <p className="api-key-storage-note">
-              Stored at <code>
-                {credentialProvider === "openai"
-                  ? "data/openai-api-key.txt"
-                  : credentialProvider === "openrouter"
-                    ? "data/openrouter-api-key.txt"
-                    : "data/local-api-key.txt"}
-              </code> with owner-only permissions.
+              {runtime.mode === "hosted"
+                ? providerStatuses?.[credentialProvider].source === "managed"
+                  ? "An administrator-managed key is available. It is decrypted only for server-side model calls and is never sent to this browser. Saving your own key overrides it."
+                  : "Saved keys are encrypted at rest and are returned to this browser only as availability metadata."
+                : <>
+                    Stored at <code>
+                      {credentialProvider === "openai"
+                        ? "data/openai-api-key.txt"
+                        : credentialProvider === "openrouter"
+                          ? "data/openrouter-api-key.txt"
+                          : "data/local-api-key.txt"}
+                    </code> with owner-only permissions.
+                  </>}
             </p>
             {apiKeyError && <p className="api-key-error" role="alert">{apiKeyError}</p>}
             <footer>

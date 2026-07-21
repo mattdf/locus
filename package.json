@@ -17,6 +17,7 @@
     "admin": "tsx server/admin.ts",
     "typecheck": "tsc --noEmit",
     "test:hosted": "node scripts/test/hosted-integration.mjs",
+    "test:access": "node scripts/test/access-control.mjs",
     "metapost:build": "docker build -t locus-metapost:1 docker/metapost",
     "metapost:check": "docker image inspect locus-metapost:1 >/dev/null"
   },

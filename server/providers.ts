@@ -33,7 +33,7 @@ const PROVIDER_KEYS: Record<
 export interface ProviderCredentialStatus {
   configured: boolean;
   required: boolean;
-  source: "saved" | "project-file" | null;
+  source: "saved" | "project-file" | "managed" | null;
 }
 
 export type ProviderStatuses = Record<ProviderId, ProviderCredentialStatus>;

@@ -13,8 +13,14 @@ LOCUS_ADMIN_PASSWORD='a-new-long-password' node build/server/admin.mjs \
 node build/server/admin.mjs disable-user --email person@example.com
 ```
 
-Disabling an account revokes its sessions immediately. The admin role does not grant a route for
-reading another user's workspace.
+Suspending an account revokes its sessions, stops its in-flight model generations, and blocks all
+subsequent protected requests immediately. The admin role does not grant a route for reading
+another user's workspace or provider credentials.
+
+The in-app administration view also controls public signup versus waitlist mode, waitlist entries,
+single-use invite links, and administrator-managed provider keys. Managed key plaintext is accepted
+only when the key is created. Later API responses expose only its label, provider, status, and usage
+counts. Revoking a managed key immediately removes provider access from every account relying on it.
 
 ## Backups
 
@@ -35,7 +41,7 @@ before reopening traffic.
 1. Generate a new base64url 32-byte key.
 2. Prepend it to `LOCUS_CREDENTIAL_KEYS`; keep every existing key in its old relative position.
 3. Redeploy and verify existing saved credentials still resolve.
-4. Re-saving a provider credential encrypts it with key version `0`.
+4. Re-saving a user or managed provider credential encrypts it with key version `0`.
 
 Do not remove an old key until every row using its version has been re-encrypted and verified.
 The database stores only a key-version number, not a copy of a key.

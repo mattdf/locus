@@ -18,8 +18,12 @@ exact ancestor path supplied to the model while keeping individual updates inexp
 - `server/providers.ts` manages provider credentials, base URLs, and model discovery.
 - `server/storage.ts` atomically persists the local mode's versioned JSON document.
 - `server/workspaces.ts` applies owner-scoped, optimistic PostgreSQL workspace updates in hosted mode.
-- `server/credentials.ts` supports file-backed local credentials and per-user AES-256-GCM
-  credential storage in hosted mode.
+- `server/credentials.ts` supports file-backed local credentials plus per-user and administrator-
+  managed AES-256-GCM credential storage in hosted mode. Decrypted secrets remain inside provider
+  request construction and are never serialized to clients.
+- `server/access.ts` owns signup policy, waitlist, hashed single-use invites, and managed-credential
+  assignment. `server/access-routes.ts` and `server/admin-access-routes.ts` expose the public and
+  administrator portions of that policy.
 - `server/metapost.ts` and `server/tikz.ts` validate engine-specific figure bodies and dispatch
   them to an isolated compiler.
 

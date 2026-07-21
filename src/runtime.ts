@@ -8,5 +8,7 @@ export interface RuntimeInfo {
   mode: "local" | "hosted";
   authenticated: boolean;
   localProviderEnabled: boolean;
+  signupMode?: "public" | "waitlist";
+  suspended?: boolean;
   user?: RuntimeUser | null;
 }

@@ -1,5 +1,6 @@
 import {
   KeyRound,
+  Link2,
   LoaderCircle,
   Plus,
   RefreshCw,
@@ -11,6 +12,8 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { adminRequest } from "../lib/admin";
+import { AdminAccessPanel } from "./AdminAccessPanel";
 
 interface ManagedUser {
   id: string;
@@ -28,21 +31,6 @@ interface UsersResponse {
 
 interface UserResponse {
   user: ManagedUser;
-}
-
-async function adminRequest<T>(pathname: string, options: RequestInit = {}): Promise<T> {
-  const response = await fetch(pathname, {
-    ...options,
-    credentials: "same-origin",
-    cache: "no-store",
-    headers: {
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
-      ...options.headers,
-    },
-  });
-  const result = (await response.json().catch(() => ({}))) as { error?: string };
-  if (!response.ok) throw new Error(result.error ?? `Account request failed (${response.status})`);
-  return result as T;
 }
 
 function accountRole(user: ManagedUser): "admin" | "user" {
@@ -66,6 +54,7 @@ export function AdminAccountsModal({
   const [role, setRole] = useState<"admin" | "user">("user");
   const [passwordTarget, setPasswordTarget] = useState<ManagedUser | null>(null);
   const [replacementPassword, setReplacementPassword] = useState("");
+  const [activeTab, setActiveTab] = useState<"accounts" | "access">("accounts");
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -189,21 +178,30 @@ export function AdminAccountsModal({
         <header>
           <div>
             <span>Administration</span>
-            <h2 id="account-management-title">Account management</h2>
+            <h2 id="account-management-title">Administration</h2>
           </div>
           <button className="icon-button" type="button" aria-label="Close account management" onClick={onClose}>
             <X size={17} />
           </button>
         </header>
 
-        <div className="admin-accounts">
+        <nav className="admin-tabs" aria-label="Administration sections">
+          <button type="button" aria-current={activeTab === "accounts" ? "page" : undefined} onClick={() => setActiveTab("accounts")}>
+            <UserRound size={14} /> Accounts
+          </button>
+          <button type="button" aria-current={activeTab === "access" ? "page" : undefined} onClick={() => setActiveTab("access")}>
+            <Link2 size={14} /> Access and invites
+          </button>
+        </nav>
+
+        {activeTab === "accounts" ? <div className="admin-accounts">
           <form className="admin-account-create" onSubmit={createAccount}>
             <header>
               <div>
                 <ShieldCheck size={15} />
                 <span>
                   <strong>Create an account</strong>
-                  <small>Public signup is available; administrator-created accounts are trusted immediately.</small>
+                  <small>Administrator-created accounts are trusted immediately.</small>
                 </span>
               </div>
             </header>
@@ -278,7 +276,7 @@ export function AdminAccountsModal({
                         </span>
                       </div>
                       <div className="admin-account-row__status">
-                        <span>{user.disabled ? "Disabled" : `${user.activeSessions} active ${user.activeSessions === 1 ? "session" : "sessions"}`}</span>
+                        <span>{user.disabled ? "Suspended" : `${user.activeSessions} active ${user.activeSessions === 1 ? "session" : "sessions"}`}</span>
                         <small>Created {new Date(user.createdAt).toLocaleDateString()}</small>
                       </div>
                       <div className="admin-account-row__actions">
@@ -303,7 +301,7 @@ export function AdminAccountsModal({
                               onClick={() => void updateAccount(user, { disabled: !user.disabled })}
                             >
                               {user.disabled ? <UserCheck size={12} /> : <UserX size={12} />}
-                              {user.disabled ? "Enable" : "Disable"}
+                              {user.disabled ? "Restore" : "Suspend"}
                             </button>
                             <button
                               type="button"
@@ -372,7 +370,7 @@ export function AdminAccountsModal({
           )}
 
           {error && <p className="admin-account-error" role="alert">{error}</p>}
-        </div>
+        </div> : <AdminAccessPanel />}
 
         <footer>
           <span>Only administrators can access this view.</span>

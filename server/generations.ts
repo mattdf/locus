@@ -260,3 +260,13 @@ export function abortGeneration(job: GenerationJob): GenerationMetrics | null {
   finish(job, "stopped");
   return job.generation ?? null;
 }
+
+export function abortOwnerGenerations(ownerUserId: string): number {
+  let stopped = 0;
+  for (const job of generations.values()) {
+    if (job.ownerUserId !== ownerUserId || job.status !== "running") continue;
+    abortGeneration(job);
+    stopped += 1;
+  }
+  return stopped;
+}

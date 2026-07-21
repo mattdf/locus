@@ -5,6 +5,8 @@ dist
 build
 data
 secret
+local
+deploy
 .env*
 *.log
 .DS_Store

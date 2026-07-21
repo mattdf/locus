@@ -1,6 +1,22 @@
-import { GitBranch, LoaderCircle, LockKeyhole, MailCheck, UserPlus } from "lucide-react";
+import {
+  Clock3,
+  GitBranch,
+  KeyRound,
+  LoaderCircle,
+  LockKeyhole,
+  MailCheck,
+  UserPlus,
+} from "lucide-react";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { RuntimeInfo } from "../runtime";
+
+interface PublicInvite {
+  valid: true;
+  email: string | null;
+  expiresAt: string | null;
+  managedProvider: string | null;
+  managedCredentialLabel: string | null;
+}
 
 export function AuthGate({
   children,
@@ -16,7 +32,12 @@ export function AuthGate({
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [signupComplete, setSignupComplete] = useState(false);
+  const [signupNeedsVerification, setSignupNeedsVerification] = useState(true);
+  const [waitlistComplete, setWaitlistComplete] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [invite, setInvite] = useState<PublicInvite | null>(null);
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const inviteToken = new URLSearchParams(window.location.search).get("invite")?.trim() || "";
 
   const refresh = useCallback(async () => {
     const response = await fetch("/api/runtime", { credentials: "same-origin", cache: "no-store" });
@@ -29,6 +50,34 @@ export function AuthGate({
       setError(reason instanceof Error ? reason.message : "Could not connect to Locus");
     });
   }, [refresh]);
+
+  useEffect(() => {
+    if (!inviteToken) return;
+    let cancelled = false;
+    setInviteLoading(true);
+    fetch(`/api/access/invites/${encodeURIComponent(inviteToken)}`, {
+      credentials: "same-origin",
+      cache: "no-store",
+    })
+      .then(async (response) => {
+        const result = (await response.json().catch(() => ({}))) as {
+          invite?: PublicInvite;
+          error?: string;
+        };
+        if (!response.ok || !result.invite) throw new Error(result.error ?? "This invite is no longer available");
+        if (cancelled) return;
+        setInvite(result.invite);
+        setMode("sign-up");
+        if (result.invite.email) setEmail(result.invite.email);
+      })
+      .catch((reason) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : "This invite is no longer available");
+      })
+      .finally(() => {
+        if (!cancelled) setInviteLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [inviteToken]);
 
   const signIn = async () => {
     if (!email.trim() || !password) return;
@@ -75,7 +124,7 @@ export function AuthGate({
     setError("");
     setNotice("");
     try {
-      const response = await fetch("/api/auth/sign-up/email", {
+      const response = await fetch("/api/access/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "same-origin",
@@ -83,22 +132,49 @@ export function AuthGate({
           name: normalizedName,
           email: normalizedEmail,
           password,
-          callbackURL: "/",
+          ...(invite ? { inviteToken } : {}),
         }),
       });
       const result = (await response.json().catch(() => ({}))) as {
-        message?: string;
-        error?: { message?: string };
+        error?: string;
+        verificationRequired?: boolean;
       };
-      if (!response.ok) {
-        throw new Error(result.message ?? result.error?.message ?? "Could not create the account");
-      }
+      if (!response.ok) throw new Error(result.error ?? "Could not create the account");
+      const verificationRequired = result.verificationRequired !== false;
       setPassword("");
       setPasswordConfirmation("");
+      setSignupNeedsVerification(verificationRequired);
       setSignupComplete(true);
-      setNotice(`We sent a verification link to ${normalizedEmail}.`);
+      setNotice(
+        verificationRequired
+          ? `We sent a verification link to ${normalizedEmail}.`
+          : "Account created. You can sign in now.",
+      );
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not create the account");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const joinWaitlist = async () => {
+    if (!email.trim() || !name.trim()) return;
+    setSubmitting(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch("/api/access/waitlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ email: email.trim(), name: name.trim() }),
+      });
+      const result = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(result.error ?? "Could not join the waitlist");
+      setWaitlistComplete(true);
+      setNotice("You’re on the waitlist. We’ll use this email when access becomes available.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not join the waitlist");
     } finally {
       setSubmitting(false);
     }
@@ -138,6 +214,8 @@ export function AuthGate({
     setError("");
     setNotice("");
     setSignupComplete(false);
+    setSignupNeedsVerification(true);
+    setWaitlistComplete(false);
   };
 
   const signOut = useCallback(async () => {
@@ -159,40 +237,63 @@ export function AuthGate({
     );
   }
 
+  if (runtime.mode === "hosted" && runtime.suspended) {
+    return (
+      <main className="auth-screen">
+        <section className="auth-card auth-card--suspended">
+          <div className="auth-card__mark"><LockKeyhole size={22} /></div>
+          <header>
+            <h1>Account suspended</h1>
+            <p>This account cannot access Locus or perform actions. Contact the administrator to restore access.</p>
+          </header>
+        </section>
+      </main>
+    );
+  }
+
   if (runtime.mode === "hosted" && !runtime.authenticated) {
+    const waitlistMode = mode === "sign-up" && runtime.signupMode === "waitlist" && !invite;
+    const complete = signupComplete || waitlistComplete;
     return (
       <main className="auth-screen">
         <form
           className="auth-card"
           onSubmit={(event) => {
             event.preventDefault();
-            void (mode === "sign-in" ? signIn() : signUp());
+            if (mode === "sign-in") void signIn();
+            else if (waitlistMode) void joinWaitlist();
+            else void signUp();
           }}
         >
           <div className="auth-card__mark"><GitBranch size={22} /></div>
           <header>
             <h1>Locus Chat</h1>
-            <p>{mode === "sign-in" ? "Sign in to your private workspace." : "Create a private workspace."}</p>
+            <p>
+              {mode === "sign-in"
+                ? "Sign in to your private workspace."
+                : waitlistMode
+                  ? "Public signup is closed. Join the waitlist for access."
+                  : invite
+                    ? "Create your account using this invite."
+                    : "Create a private workspace."}
+            </p>
           </header>
           <div className="auth-card__mode" role="tablist" aria-label="Account access">
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === "sign-in"}
-              onClick={() => switchMode("sign-in")}
-            >
-              Sign in
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={mode === "sign-up"}
-              onClick={() => switchMode("sign-up")}
-            >
-              Create account
+            <button type="button" role="tab" aria-selected={mode === "sign-in"} onClick={() => switchMode("sign-in")}>Sign in</button>
+            <button type="button" role="tab" aria-selected={mode === "sign-up"} onClick={() => switchMode("sign-up")}>
+              {runtime.signupMode === "waitlist" && !invite ? "Join waitlist" : "Create account"}
             </button>
           </div>
-          {mode === "sign-up" && !signupComplete && (
+          {inviteLoading && <p className="auth-card__notice"><LoaderCircle className="auth-screen__spinner" size={15} /> Checking invite…</p>}
+          {invite && mode === "sign-up" && (
+            <p className="auth-card__notice auth-card__notice--invite">
+              <KeyRound size={15} />
+              {invite.managedProvider
+                ? `Invite includes administrator-managed ${invite.managedProvider} access; no API key is required.`
+                : "Invite accepted."}
+            </p>
+          )}
+          {mode === "sign-up" && !complete && (
             <label>
               <span>Name</span>
               <input type="text" autoComplete="name" maxLength={200} value={name} onChange={(event) => setName(event.target.value)} autoFocus />
@@ -200,9 +301,16 @@ export function AuthGate({
           )}
           <label>
             <span>Email</span>
-            <input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} autoFocus={mode === "sign-in"} disabled={signupComplete} />
+            <input
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              autoFocus={mode === "sign-in"}
+              disabled={complete || Boolean(mode === "sign-up" && invite?.email)}
+            />
           </label>
-          {!signupComplete && (
+          {!complete && !waitlistMode && (
             <>
               <label>
                 <span>Password {mode === "sign-up" && <small>12–128 characters</small>}</span>
@@ -218,36 +326,42 @@ export function AuthGate({
           )}
           {error && <p className="auth-card__error" role="alert">{error}</p>}
           {notice && <p className="auth-card__notice" role="status"><MailCheck size={15} /> {notice}</p>}
-          {!signupComplete && (
+          {!complete && (
             <button
               type="submit"
               disabled={
-                submitting ||
-                !email.trim() ||
-                !password ||
-                (mode === "sign-up" && (!name.trim() || !passwordConfirmation))
+                submitting || inviteLoading || !email.trim() ||
+                (mode === "sign-in" && !password) ||
+                (mode === "sign-up" && (
+                  !name.trim() || (!waitlistMode && (!password || !passwordConfirmation))
+                ))
               }
             >
               {submitting
                 ? <LoaderCircle className="auth-screen__spinner" size={15} />
-                : mode === "sign-in" ? <LockKeyhole size={15} /> : <UserPlus size={15} />}
-              {submitting ? (mode === "sign-in" ? "Signing in…" : "Creating account…") : (mode === "sign-in" ? "Sign in" : "Create account")}
+                : mode === "sign-in"
+                  ? <LockKeyhole size={15} />
+                  : waitlistMode ? <Clock3 size={15} /> : <UserPlus size={15} />}
+              {submitting
+                ? mode === "sign-in" ? "Signing in…" : waitlistMode ? "Joining…" : "Creating account…"
+                : mode === "sign-in" ? "Sign in" : waitlistMode ? "Join waitlist" : "Create account"}
             </button>
           )}
-          {(signupComplete || (mode === "sign-in" && /verif/i.test(error))) && (
-            <button
-              className="auth-card__secondary"
-              type="button"
-              disabled={submitting || !email.trim()}
-              onClick={() => void resendVerification()}
-            >
+          {((signupComplete && signupNeedsVerification) || (mode === "sign-in" && /verif/i.test(error))) && (
+            <button className="auth-card__secondary" type="button" disabled={submitting || !email.trim()} onClick={() => void resendVerification()}>
               {submitting ? "Sending…" : "Resend verification email"}
             </button>
           )}
-          {signupComplete && (
-            <button className="auth-card__text-button" type="button" onClick={() => switchMode("sign-in")}>Back to sign in</button>
+          {complete && (
+            <button className="auth-card__text-button" type="button" onClick={() => switchMode("sign-in")}>Continue to sign in</button>
           )}
-          <small>New accounts must verify their email before signing in.</small>
+          <small>
+            {waitlistMode
+              ? "Joining the waitlist does not create an account."
+              : invite
+                ? "Invite accounts can sign in immediately."
+                : "New accounts must verify their email before signing in."}
+          </small>
         </form>
       </main>
     );

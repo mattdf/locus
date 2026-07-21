@@ -13,6 +13,7 @@ conversation.
 - Markdown, syntax-highlighted code, and KaTeX rendering throughout the interface
 - Streaming responses with cancellation, regeneration variants, editable prompts, usage, and cost details
 - OpenAI, OpenRouter, and local OpenAI-compatible model providers with BYOK credentials
+- Hosted access controls with public signup, waitlists, invite links, managed API access, and account suspension
 - Markdown import plus portable JSON import and export
 - Categories, sharing, search-friendly URLs, and persistent navigation through nested threads
 - Local single-user mode by default, with an optional private multi-user deployment
@@ -51,4 +52,3 @@ Local mode requires no login or database. Chats and settings are stored in `data
 - [Architecture](docs/ARCHITECTURE.md)
 - [Hosted deployment](docs/DEPLOYMENT.md)
 - [Hosted operations](docs/OPERATIONS.md)
-

@@ -7,6 +7,9 @@ import helmet from "helmet";
 import { fromNodeHeaders, toNodeHandler } from "better-auth/node";
 import { auth } from "./auth.ts";
 import { adminRouter } from "./admin-routes.ts";
+import { adminAccessRouter } from "./admin-access-routes.ts";
+import { accessRouter } from "./access-routes.ts";
+import { getAccessPolicy } from "./access.ts";
 import { publicSharesRouter, sharesRouter } from "./shares.ts";
 import { closePool, getPool, query } from "./db.ts";
 import { isHosted, locusMode, publicOrigin } from "./config.ts";
@@ -16,6 +19,7 @@ import {
   createGeneration,
   GenerationLimitError,
   getGeneration,
+  abortOwnerGenerations,
 } from "./generations.ts";
 import {
   clearCredential,
@@ -61,7 +65,13 @@ const allowedReasoningEfforts = new Set<ReasoningEffort>([
   "max",
 ]);
 
-type AuthUser = { id: string; email: string; name: string; role?: string | null };
+type AuthUser = {
+  id: string;
+  email: string;
+  name: string;
+  role?: string | null;
+  banned?: boolean | null;
+};
 
 app.disable("x-powered-by");
 if (isHosted) app.set("trust proxy", 1);
@@ -126,12 +136,20 @@ app.get("/api/runtime", async (request, response, next) => {
       return;
     }
     const session = await auth.api.getSession({ headers: fromNodeHeaders(request.headers) });
+    const policy = await getAccessPolicy();
+    const suspended = Boolean(session?.user?.banned);
+    if (suspended && session?.user) {
+      await query(`delete from "session" where "userId" = $1`, [session.user.id]);
+      abortOwnerGenerations(session.user.id);
+    }
     response.setHeader("Cache-Control", "no-store");
     response.json({
       mode: "hosted",
-      authenticated: Boolean(session?.user),
+      authenticated: Boolean(session?.user) && !suspended,
+      suspended,
+      signupMode: policy.signupMode,
       localProviderEnabled: false,
-      user: session?.user
+      user: session?.user && !suspended
         ? { id: session.user.id, email: session.user.email, name: session.user.name, role: session.user.role }
         : null,
     });
@@ -173,6 +191,8 @@ if (isHosted) {
     next();
   });
 }
+
+app.use("/api/access", accessRouter);
 
 function matchesBootstrapToken(candidate: unknown): boolean {
   const expected = process.env.LOCUS_BOOTSTRAP_TOKEN?.trim();
@@ -227,7 +247,8 @@ app.use("/api/public/shares", publicSharesRouter);
 app.use("/api", async (request, response, next) => {
   if (
     ["/health", "/ready", "/runtime", "/setup/bootstrap"].includes(request.path) ||
-    request.path.startsWith("/auth/")
+    request.path.startsWith("/auth/") ||
+    request.path.startsWith("/access/")
   ) {
     next();
     return;
@@ -243,6 +264,16 @@ app.use("/api", async (request, response, next) => {
       response.status(401).json({ error: "Sign in required" });
       return;
     }
+    const account = await query<{ suspended: boolean }>(
+      `select coalesce("banned", false) as "suspended" from "user" where "id" = $1`,
+      [session.user.id],
+    );
+    if (account.rows[0]?.suspended) {
+      await query(`delete from "session" where "userId" = $1`, [session.user.id]);
+      abortOwnerGenerations(session.user.id);
+      response.status(403).json({ error: "This account is suspended", code: "ACCOUNT_SUSPENDED" });
+      return;
+    }
     response.locals.ownerUserId = session.user.id;
     response.locals.user = session.user satisfies AuthUser;
     next();
@@ -256,6 +287,7 @@ function owner(response: express.Response): string {
 }
 
 app.use("/api/admin", adminRouter);
+app.use("/api/admin/access", adminAccessRouter);
 app.use("/api/shares", sharesRouter);
 
 app.get("/api/metapost/status", async (_request, response) => {

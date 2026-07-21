@@ -1,8 +1,9 @@
 import express from "express";
 import { fromNodeHeaders } from "better-auth/node";
 import { auth } from "./auth.ts";
-import { isHosted } from "./config.ts";
 import { query } from "./db.ts";
+import { isAdministrator, requireAdmin, validIdentifier } from "./admin-auth.ts";
+import { abortOwnerGenerations } from "./generations.ts";
 
 type ManagedUserRow = {
   id: string;
@@ -13,26 +14,6 @@ type ManagedUserRow = {
   createdAt: Date;
   activeSessions: number;
 };
-
-function isAdministrator(role: unknown): boolean {
-  return typeof role === "string" && role.split(",").includes("admin");
-}
-
-function currentAdmin(response: express.Response): { id: string; email: string } | null {
-  const user = response.locals.user as { id?: unknown; email?: unknown; role?: unknown } | undefined;
-  if (
-    typeof user?.id !== "string" ||
-    typeof user.email !== "string" ||
-    !isAdministrator(user.role)
-  ) {
-    return null;
-  }
-  return { id: user.id, email: user.email };
-}
-
-function validUserId(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0 && value.length <= 256;
-}
 
 async function managedUser(userId: string): Promise<ManagedUserRow | null> {
   const result = await query<ManagedUserRow>(
@@ -46,19 +27,6 @@ async function managedUser(userId: string): Promise<ManagedUserRow | null> {
     [userId],
   );
   return result.rows[0] ?? null;
-}
-
-function requireAdmin(response: express.Response): { id: string; email: string } | null {
-  if (!isHosted || !auth) {
-    response.status(404).json({ error: "Not found" });
-    return null;
-  }
-  const admin = currentAdmin(response);
-  if (!admin) {
-    response.status(403).json({ error: "Administrator access required" });
-    return null;
-  }
-  return admin;
 }
 
 export const adminRouter = express.Router();
@@ -115,7 +83,7 @@ adminRouter.patch("/users/:userId", async (request, response) => {
   const administrator = requireAdmin(response);
   const userId = request.params.userId;
   if (!administrator) return;
-  if (!validUserId(userId)) {
+  if (!validIdentifier(userId)) {
     response.status(400).json({ error: "Invalid account identifier" });
     return;
   }
@@ -135,7 +103,7 @@ adminRouter.patch("/users/:userId", async (request, response) => {
     target.id === administrator.id &&
     ((hasDisabled && request.body.disabled) || (hasRole && request.body.role !== "admin"))
   ) {
-    response.status(400).json({ error: "You cannot disable or demote your own administrator account" });
+    response.status(400).json({ error: "You cannot suspend or demote your own administrator account" });
     return;
   }
 
@@ -151,7 +119,7 @@ adminRouter.patch("/users/:userId", async (request, response) => {
     await query(
       `update "user"
        set "banned" = $2,
-           "banReason" = case when $2 then 'Disabled by administrator' else null end,
+           "banReason" = case when $2 then 'Suspended by administrator' else null end,
            "banExpires" = null,
            "updatedAt" = current_timestamp
        where "id" = $1`,
@@ -159,6 +127,7 @@ adminRouter.patch("/users/:userId", async (request, response) => {
     );
     if (request.body.disabled) {
       await query(`delete from "session" where "userId" = $1`, [target.id]);
+      abortOwnerGenerations(target.id);
     }
   }
 
@@ -171,7 +140,7 @@ adminRouter.post("/users/:userId/password", async (request, response) => {
   const administrator = requireAdmin(response);
   const userId = request.params.userId;
   if (!administrator || !auth) return;
-  if (!validUserId(userId)) {
+  if (!validIdentifier(userId)) {
     response.status(400).json({ error: "Invalid account identifier" });
     return;
   }
@@ -202,7 +171,7 @@ adminRouter.delete("/users/:userId", async (request, response) => {
   const administrator = requireAdmin(response);
   const userId = request.params.userId;
   if (!administrator) return;
-  if (!validUserId(userId)) {
+  if (!validIdentifier(userId)) {
     response.status(400).json({ error: "Invalid account identifier" });
     return;
   }
