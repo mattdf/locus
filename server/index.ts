@@ -1,5 +1,5 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import express from "express";
 import rateLimit from "express-rate-limit";
@@ -10,7 +10,12 @@ import { adminRouter } from "./admin-routes.ts";
 import { adminAccessRouter } from "./admin-access-routes.ts";
 import { accessRouter } from "./access-routes.ts";
 import { getAccessPolicy } from "./access.ts";
-import { publicSharesRouter, sharesRouter } from "./shares.ts";
+import {
+  publicSharesRouter,
+  readPublicShareMetadata,
+  sharesRouter,
+} from "./shares.ts";
+import { sharedPageHtml } from "./social-meta.ts";
 import { closePool, getPool, query } from "./db.ts";
 import { isHosted, locusMode, publicOrigin } from "./config.ts";
 import {
@@ -677,12 +682,29 @@ app.post("/api/respond", async (request, response, next) => {
 
 const dist = path.resolve("dist");
 if (existsSync(dist)) {
+  const applicationDocument = readFileSync(path.join(dist, "index.html"), "utf8");
   app.use(express.static(dist, { index: false, maxAge: isHosted ? "1h" : 0 }));
   const sendApplication = (_request: express.Request, response: express.Response) => {
     response.setHeader("Cache-Control", "no-cache");
     response.sendFile(path.join(dist, "index.html"));
   };
   app.get("/", sendApplication);
+  app.get("/share/:token", async (request, response, next) => {
+    try {
+      const metadata = await readPublicShareMetadata(request.params.token);
+      if (!metadata) {
+        response.status(404);
+        sendApplication(request, response);
+        return;
+      }
+      const origin = publicOrigin ?? `${request.protocol}://${request.get("host")}`;
+      const url = new URL(`/share/${request.params.token}`, origin).toString();
+      response.setHeader("Cache-Control", "public, max-age=60, s-maxage=300");
+      response.type("html").send(sharedPageHtml(applicationDocument, { ...metadata, url }));
+    } catch (error) {
+      next(error);
+    }
+  });
   app.get("/*splat", sendApplication);
 }
 

@@ -34,6 +34,13 @@ export interface SharedChatSummary {
   createdAt: string;
 }
 
+export interface PublicShareMetadata {
+  title: string;
+  createdAt: string;
+}
+
+const SHARE_TOKEN = /^[A-Za-z0-9_-]{43}$/;
+
 function owner(response: express.Response): string {
   return String(response.locals.ownerUserId ?? "");
 }
@@ -153,9 +160,23 @@ function summary(row: Omit<SharedChatRow, "snapshot">): SharedChatSummary {
 
 export const publicSharesRouter = express.Router();
 
+export async function readPublicShareMetadata(
+  token: string,
+): Promise<PublicShareMetadata | null> {
+  if (!isHosted || !SHARE_TOKEN.test(token)) return null;
+  const result = await query<Pick<SharedChatRow, "title" | "createdAt">>(
+    `select "title", "createdAt" from "locus_shared_chats" where "token" = $1`,
+    [token],
+  );
+  const share = result.rows[0];
+  return share
+    ? { title: share.title, createdAt: new Date(share.createdAt).toISOString() }
+    : null;
+}
+
 publicSharesRouter.get("/:token", async (request, response, next) => {
   try {
-    if (!isHosted || !/^[A-Za-z0-9_-]{43}$/.test(request.params.token)) {
+    if (!isHosted || !SHARE_TOKEN.test(request.params.token)) {
       response.status(404).json({ error: "Shared chat not found" });
       return;
     }

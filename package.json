@@ -19,6 +19,7 @@
     "test:hosted": "node scripts/test/hosted-integration.mjs",
     "test:assistant-edits": "tsx scripts/test/assistant-edit-variants.ts",
     "test:share-flattening": "tsx scripts/test/share-flattening.ts",
+    "test:social-meta": "tsx scripts/test/social-meta.ts",
     "test:source-edit-selection": "tsx scripts/test/source-edit-selection.ts",
     "test:access": "node scripts/test/access-control.mjs",
     "metapost:build": "docker build -t locus-metapost:1 docker/metapost",
