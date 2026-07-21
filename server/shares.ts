@@ -173,7 +173,9 @@ publicSharesRouter.get("/:token", async (request, response, next) => {
     response.json({
       title: share.title,
       createdAt: new Date(share.createdAt).toISOString(),
-      chat: share.snapshot,
+      // Re-sanitize on read so snapshots created by older releases cannot
+      // expose private guidance fields after the share format is tightened.
+      chat: createPublicSnapshot(share.snapshot),
     });
   } catch (error) {
     next(error);

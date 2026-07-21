@@ -72,7 +72,7 @@ function SharedDefinition({
   rect,
   onClose,
 }: {
-  definition: InlineDefinition;
+  definition: Pick<InlineDefinition, "content" | "generation">;
   rect: SelectionDraft["rect"];
   onClose: () => void;
 }) {
@@ -98,7 +98,7 @@ export function SharedChatView({ token }: { token: string }) {
   const [share, setShare] = useState<SharedChatResponse | null>(null);
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [definition, setDefinition] = useState<{
-    value: InlineDefinition;
+    value: Pick<InlineDefinition, "content" | "generation">;
     rect: SelectionDraft["rect"];
   } | null>(null);
   const [error, setError] = useState("");
@@ -236,7 +236,15 @@ export function SharedChatView({ token }: { token: string }) {
             onOpenElaboration={openNode}
             onOpenDefinition={(definitionId, rect) => {
               const value = node.definitions?.find((candidate) => candidate.id === definitionId);
-              if (value) setDefinition({ value, rect });
+              if (value) {
+                setDefinition({
+                  value: {
+                    content: value.content,
+                    ...(value.generation ? { generation: value.generation } : {}),
+                  },
+                  rect,
+                });
+              }
             }}
             onGenerateVisualization={NOOP}
             onFixVisualization={NOOP}

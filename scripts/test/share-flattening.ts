@@ -89,6 +89,23 @@ const chat: ChatTree = {
           updatedAt: createdAt,
         },
       ],
+      definitions: [
+        {
+          id: "definition-share",
+          anchor: {
+            sourceNodeId: "root",
+            sourceMessageId: "assistant-regenerated",
+            quote: "answer",
+            blockIndex: 0,
+            start: 21,
+            end: 27,
+            status: "resolved",
+          },
+          content: "A public definition.",
+          hint: "Private definition guidance",
+          createdAt,
+        },
+      ],
       sourceEditUndo: {
         id: "source-undo",
         sourceMessageId: "source-root",
@@ -123,6 +140,11 @@ assert.equal(
   "Active rewritten inline explanation",
   "A share must flatten the active inline-elaboration rewrite",
 );
+assert.equal(
+  Object.hasOwn(node.definitions?.[0] ?? {}, "hint"),
+  false,
+  "Definition guidance must never be included in a public snapshot",
+);
 
 for (const privateField of [
   "messageRevisions",
@@ -151,6 +173,7 @@ for (const hiddenContent of [
   "Original imported Markdown",
   "Original inline explanation",
   "private hint",
+  "Private definition guidance",
 ]) {
   assert.equal(
     serialized.includes(hiddenContent),
