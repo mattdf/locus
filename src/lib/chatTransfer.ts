@@ -314,6 +314,21 @@ export function downloadChatExport(payload: ChatExport, name: string): void {
   URL.revokeObjectURL(url);
 }
 
+export function downloadWorkspaceRecovery(workspace: WorkspaceState): void {
+  const blob = new Blob([`${JSON.stringify(workspace, null, 2)}\n`], {
+    type: "application/json",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  link.href = url;
+  link.download = `locus-unsaved-recovery-${stamp}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 function importedMessage(message: Message): Message {
   if (!message.pending) return { ...message };
   const { requestId: _requestId, ...rest } = message;

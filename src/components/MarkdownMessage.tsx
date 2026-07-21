@@ -11,6 +11,7 @@ import {
   containingOriginalMarkdownSection,
 } from "../lib/sourceEditing";
 import type {
+  AnnotationTarget,
   HighlightAnchor,
   InlineDefinition,
   InlineElaboration,
@@ -51,6 +52,10 @@ interface MarkdownMessageProps {
   ) => void;
   onOpenVisualization: (visualizationId: string) => void;
   onOpenInlineElaboration: (elaborationId: string) => void;
+  onAnnotationContextMenu?: (
+    target: AnnotationTarget,
+    point: { left: number; top: number },
+  ) => void;
   selectionSurface?: SelectionDraft["surface"];
 }
 
@@ -226,6 +231,7 @@ function MarkdownMessageComponent({
   onOpenDefinition,
   onOpenVisualization,
   onOpenInlineElaboration,
+  onAnnotationContextMenu,
   selectionSurface = "message",
 }: MarkdownMessageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -540,6 +546,55 @@ function MarkdownMessageComponent({
     });
   };
 
+  const annotationAtPoint = (
+    targetNode: EventTarget | null,
+    clientX: number,
+    clientY: number,
+  ): AnnotationTarget | null => {
+    const rangeContainsPoint = (range: Range) =>
+      Array.from(range.getClientRects()).some(
+        (rect) =>
+          clientX >= rect.left &&
+          clientX <= rect.right &&
+          clientY >= rect.top &&
+          clientY <= rect.bottom,
+      );
+    const elementContainsTarget = (element: Element) =>
+      targetNode instanceof Node && element.contains(targetNode);
+
+    const definition =
+      definitionTargetsRef.current.find((target) => rangeContainsPoint(target.range)) ??
+      definitionBlockTargetsRef.current.find((target) =>
+        elementContainsTarget(target.element),
+      );
+    if (definition) return { kind: "definition", id: definition.definitionId };
+
+    const inlineElaboration =
+      inlineElaborationTargetsRef.current.find((target) =>
+        rangeContainsPoint(target.range),
+      ) ??
+      inlineElaborationBlockTargetsRef.current.find((target) =>
+        elementContainsTarget(target.element),
+      );
+    if (inlineElaboration) {
+      return { kind: "inline-elaboration", id: inlineElaboration.elaborationId };
+    }
+
+    const visualization =
+      visualizationTargetsRef.current.find((target) => rangeContainsPoint(target.range)) ??
+      visualizationBlockTargetsRef.current.find((target) =>
+        elementContainsTarget(target.element),
+      );
+    if (visualization) {
+      return { kind: "visualization", id: visualization.visualizationId };
+    }
+
+    const branch =
+      targetsRef.current.find((target) => rangeContainsPoint(target.range)) ??
+      blockTargetsRef.current.find((target) => elementContainsTarget(target.element));
+    return branch ? { kind: "branch", id: branch.childId } : null;
+  };
+
   return (
     <div
       className="markdown-message"
@@ -561,6 +616,18 @@ function MarkdownMessageComponent({
         ) return;
         captureSelection();
         if (selectionSurface === "inline-elaboration") event.stopPropagation();
+      }}
+      onContextMenu={(event) => {
+        if (!onAnnotationContextMenu) return;
+        const annotation = annotationAtPoint(event.target, event.clientX, event.clientY);
+        if (!annotation) return;
+        event.preventDefault();
+        event.stopPropagation();
+        window.getSelection()?.removeAllRanges();
+        onAnnotationContextMenu(annotation, {
+          left: event.clientX,
+          top: event.clientY,
+        });
       }}
       onClickCapture={(event) => {
         if (

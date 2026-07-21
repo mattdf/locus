@@ -5,6 +5,7 @@ import {
   materializeAnnotationSnapshots,
   type AssistantAnnotationRef,
 } from "../../src/lib/assistantEdits.ts";
+import { moveAnnotation } from "../../src/lib/annotations.ts";
 import { makeChatExport, parseChatImport } from "../../src/lib/chatTransfer.ts";
 import { activeEditContent, messagesForNode } from "../../src/lib/tree.ts";
 import type { ChatTree, HighlightAnchor, ThreadNode, WorkspaceState } from "../../src/types.ts";
@@ -210,6 +211,57 @@ assert.equal(
   imported.chats[0].nodes.root.definitions?.[1].anchor.sourceMessageId,
   "inline-1",
   "Definitions anchored inside inline elaborations must survive transfer",
+);
+
+const movedBranchAnchor = anchor("generation-b", "gamma", 11);
+const movedBranchChat = moveAnnotation(
+  chat,
+  "root",
+  { kind: "branch", id: "branch-1" },
+  movedBranchAnchor,
+  createdAt,
+);
+assert.equal(movedBranchChat.nodes["branch-1"].anchor?.quote, "gamma");
+assert.equal(
+  movedBranchChat.nodes.root.assistantEdits?.["generation-b"].variants
+    .find((variant) => variant.id === "rewrite-b")
+    ?.anchors.branches.find((snapshot) => snapshot.id === "branch-1")
+    ?.anchor.quote,
+  "gamma",
+  "Moving an annotation must update the active generated-content edit snapshot",
+);
+
+const movedInlineDefinitionAnchor = anchor("inline-1", "elaboration", 18);
+const movedInlineDefinitionChat = moveAnnotation(
+  chat,
+  "root",
+  { kind: "definition", id: "inline-def-1" },
+  movedInlineDefinitionAnchor,
+  createdAt,
+);
+assert.equal(
+  movedInlineDefinitionChat.nodes.root.definitions?.[1].anchor.quote,
+  "elaboration",
+  "Definitions inside inline elaborations must be movable",
+);
+assert.equal(
+  movedInlineDefinitionChat.nodes.root.assistantEdits?.["inline-1"].variants
+    .find((variant) => variant.id === "inline-rewrite")
+    ?.anchors.definitions.find((snapshot) => snapshot.id === "inline-def-1")
+    ?.anchor.quote,
+  "elaboration",
+);
+
+assert.equal(
+  moveAnnotation(
+    chat,
+    "root",
+    { kind: "definition", id: "def-1" },
+    anchor("another-message", "beta", 0),
+    createdAt,
+  ),
+  chat,
+  "An annotation cannot be moved into a different message",
 );
 
 console.log("Assistant edit variant invariants passed");

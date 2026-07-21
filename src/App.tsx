@@ -60,6 +60,7 @@ import { InlineMath, MathBlock } from "./components/MathText";
 import { MODEL_OPTIONS, ModelPicker, REASONING_OPTIONS } from "./components/ModelPicker";
 import { ThreadView } from "./components/ThreadView";
 import { ProviderManagementView } from "./components/ProviderManagementView";
+import { SaveFailureModal } from "./components/SaveFailureModal";
 import {
   SourceRewriteModal,
   type SourceRewriteMode,
@@ -67,11 +68,16 @@ import {
 import {
   cloneChatForImport,
   downloadChatExport,
+  downloadWorkspaceRecovery,
   makeChatExport,
   parseChatImport,
   type ParsedChatImport,
 } from "./lib/chatTransfer";
 import { markdownBlockquote } from "./lib/markdown";
+import {
+  annotationAnchor,
+  moveAnnotation,
+} from "./lib/annotations";
 import {
   anchorForSelection,
   anchorFromReplacementRange,
@@ -111,6 +117,7 @@ import {
   treeDepth,
 } from "./lib/tree";
 import type {
+  AnnotationTarget,
   AssistantEditGroup,
   ChatCategory,
   ChatTree,
@@ -177,6 +184,15 @@ const DEFAULT_STATE: WorkspaceState = {
 
 interface ApiError {
   error?: string;
+  requestId?: string;
+}
+
+function saveFailureMessage(error: unknown): string {
+  if (typeof navigator !== "undefined" && !navigator.onLine) {
+    return "The browser is offline. Reconnect, then retry the save.";
+  }
+  if (error instanceof Error && error.message.trim()) return error.message;
+  return "The workspace could not be saved for an unknown reason.";
 }
 
 interface GenerationResult {
@@ -268,6 +284,24 @@ interface SourceRewriteState {
   generating: boolean;
   reviewCount: number;
   requestId?: string;
+  error: string;
+}
+
+interface AnnotationMenuState {
+  chatId: string;
+  nodeId: string;
+  target: AnnotationTarget;
+  anchor: HighlightAnchor;
+  left: number;
+  top: number;
+}
+
+interface AnnotationMoveState {
+  chatId: string;
+  nodeId: string;
+  target: AnnotationTarget;
+  originalAnchor: HighlightAnchor;
+  candidate?: SelectionDraft;
   error: string;
 }
 
@@ -435,6 +469,13 @@ function anchorFromDraft(selection: SelectionDraft): HighlightAnchor {
     suffix: selection.suffix,
     status: selection.status,
   };
+}
+
+function annotationLabel(kind: AnnotationTarget["kind"]): string {
+  if (kind === "branch") return "branch";
+  if (kind === "definition") return "definition";
+  if (kind === "visualization") return "visualization";
+  return "inline elaboration";
 }
 
 function visualizationContextContent(
@@ -1234,6 +1275,8 @@ export default function App({
   const [search, setSearch] = useState("");
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [selection, setSelection] = useState<SelectionDraft | null>(null);
+  const [annotationMenu, setAnnotationMenu] = useState<AnnotationMenuState | null>(null);
+  const [annotationMove, setAnnotationMove] = useState<AnnotationMoveState | null>(null);
   const [draft, setDraft] = useState<SelectionDraft | null>(null);
   const [sourceRewrite, setSourceRewrite] = useState<SourceRewriteState | null>(null);
   const [definitionPopover, setDefinitionPopover] = useState<{
@@ -1265,6 +1308,8 @@ export default function App({
   const [shareResult, setShareResult] = useState<SharedChatSummary | null>(null);
   const [shareError, setShareError] = useState("");
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
+  const [saveFailure, setSaveFailure] = useState<string | null>(null);
+  const [saveAttempt, setSaveAttempt] = useState(0);
   const [customInstructionsOpen, setCustomInstructionsOpen] = useState(false);
   const [customInstructionsDraft, setCustomInstructionsDraft] = useState("");
   const [providerConnections, setProviderConnections] = useState<ProviderConnectionSummary[]>([]);
@@ -1604,6 +1649,8 @@ export default function App({
       setFocusMaximized(Boolean(chat && nodeId !== chat.rootId && requestedView.maximized));
       setDraft(null);
       setSelection(null);
+      setAnnotationMenu(null);
+      setAnnotationMove(null);
       setDefinitionPopover(null);
       setChatMenuOpen(false);
       setBranchMenuOpen(null);
@@ -1729,6 +1776,11 @@ export default function App({
     setSaveState("saving");
     const timeout = window.setTimeout(() => {
       const target = workspace;
+      const markTargetSaved = () => {
+        if (workspaceRef.current !== target) return;
+        setSaveState("saved");
+        setSaveFailure(null);
+      };
       saveQueueRef.current = saveQueueRef.current
         .catch(() => undefined)
         .then(async () => {
@@ -1738,9 +1790,15 @@ export default function App({
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(target),
             });
-            if (!response.ok) throw new Error("Save failed");
+            if (!response.ok) {
+              const result = (await response.json().catch(() => ({}))) as ApiError;
+              const detail = result.error || `Save request failed with HTTP ${response.status}`;
+              throw new Error(
+                result.requestId ? `${detail} (request ${result.requestId})` : detail,
+              );
+            }
             lastSavedWorkspaceRef.current = target;
-            setSaveState("saved");
+            markTargetSaved();
             return;
           }
 
@@ -1748,7 +1806,7 @@ export default function App({
           if (!baseline) throw new Error("Workspace has not finished loading");
           const changes = workspaceSyncChanges(baseline, target, hostedRevisionRef.current);
           if (!changes) {
-            setSaveState("saved");
+            markTargetSaved();
             return;
           }
           const response = await fetch("/api/workspace/sync", {
@@ -1762,28 +1820,47 @@ export default function App({
             error?: string;
           };
           if (response.status === 401) {
-            window.location.reload();
-            throw new Error("Session expired");
+            throw new Error(
+              "Your session expired. Download an unsaved backup before signing in again or reloading this tab.",
+            );
           }
           if (response.status === 409) {
-            throw new Error("This workspace changed in another tab. Reload before editing further.");
+            throw new Error(
+              "This workspace changed in another tab. Download an unsaved backup before reloading or resolving the conflict.",
+            );
           }
           if (!response.ok || !Number.isSafeInteger(result.revision)) {
-            throw new Error(result.error ?? "Save failed");
+            const detail = result.error ?? `Save request failed with HTTP ${response.status}`;
+            throw new Error(detail);
           }
           hostedRevisionRef.current = result.revision!;
           lastSavedWorkspaceRef.current = target;
-          setSaveState("saved");
+          markTargetSaved();
         })
-        .catch(() => setSaveState("error"));
+        .catch((error: unknown) => {
+          setSaveState("error");
+          setSaveFailure(saveFailureMessage(error));
+        });
     }, 350);
     return () => window.clearTimeout(timeout);
-  }, [loaded, loadError, runtime.mode, workspace]);
+  }, [loaded, loadError, runtime.mode, saveAttempt, workspace]);
+
+  useEffect(() => {
+    if (saveState === "saved") return;
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeLeaving);
+    return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
+  }, [saveState]);
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setSelection(null);
+        setAnnotationMenu(null);
+        setAnnotationMove(null);
         setDefinitionPopover(null);
         window.getSelection()?.removeAllRanges();
         closeElaborationDraft();
@@ -1811,6 +1888,98 @@ export default function App({
       ...current,
       chats: current.chats.map((chat) => (chat.id === chatId ? update(chat) : chat)),
     }));
+  };
+
+  const openAnnotationContextMenu = (
+    nodeId: string,
+    target: AnnotationTarget,
+    point: { left: number; top: number },
+  ) => {
+    const chat = workspaceRef.current.chats.find(
+      (candidate) => candidate.id === workspaceRef.current.activeChatId,
+    );
+    if (!chat) return;
+    const anchor = annotationAnchor(chat, nodeId, target);
+    if (!anchor) return;
+    setSelection(null);
+    setDefinitionPopover(null);
+    setAnnotationMove(null);
+    setAnnotationMenu({
+      chatId: chat.id,
+      nodeId,
+      target,
+      anchor,
+      left: point.left,
+      top: point.top,
+    });
+  };
+
+  const beginAnnotationMove = () => {
+    if (!annotationMenu) return;
+    setAnnotationMove({
+      chatId: annotationMenu.chatId,
+      nodeId: annotationMenu.nodeId,
+      target: annotationMenu.target,
+      originalAnchor: annotationMenu.anchor,
+      error: "",
+    });
+    setAnnotationMenu(null);
+    setSelection(null);
+    window.getSelection()?.removeAllRanges();
+  };
+
+  const handlePassageSelection = (nextSelection: SelectionDraft) => {
+    if (!annotationMove) {
+      setAnnotationMenu(null);
+      setSelection(nextSelection);
+      return;
+    }
+    if (annotationMove.candidate) return;
+    if (
+      nextSelection.sourceNodeId !== annotationMove.nodeId ||
+      nextSelection.sourceMessageId !== annotationMove.originalAnchor.sourceMessageId
+    ) {
+      setAnnotationMove((current) =>
+        current
+          ? {
+              ...current,
+              error: "Select a new passage inside the same message as the annotation.",
+            }
+          : current,
+      );
+      window.getSelection()?.removeAllRanges();
+      return;
+    }
+    setAnnotationMove((current) =>
+      current ? { ...current, candidate: nextSelection, error: "" } : current,
+    );
+    setSelection(null);
+    window.requestAnimationFrame(() => window.getSelection()?.removeAllRanges());
+  };
+
+  const cancelAnnotationMove = () => {
+    setAnnotationMenu(null);
+    setAnnotationMove(null);
+    setSelection(null);
+    window.getSelection()?.removeAllRanges();
+  };
+
+  const confirmAnnotationMove = () => {
+    if (!annotationMove?.candidate) return;
+    const updatedAt = timestamp();
+    const nextAnchor = anchorFromDraft(annotationMove.candidate);
+    updateChat(annotationMove.chatId, (chat) =>
+      moveAnnotation(
+        chat,
+        annotationMove.nodeId,
+        annotationMove.target,
+        nextAnchor,
+        updatedAt,
+      ),
+    );
+    setAnnotationMove(null);
+    setSelection(null);
+    window.getSelection()?.removeAllRanges();
   };
 
   const shareActiveChat = async () => {
@@ -5572,7 +5741,8 @@ export default function App({
             node={leftPaneNode}
             provider={chatProviderKind}
             modelOptions={providerModels}
-            onSelect={setSelection}
+            onSelect={handlePassageSelection}
+            onAnnotationContextMenu={openAnnotationContextMenu}
             onOpenElaboration={(id) => {
               historyAction.current = "push";
               setActiveNodeId(id);
@@ -5877,7 +6047,8 @@ export default function App({
             side
             provider={chatProviderKind}
             modelOptions={providerModels}
-            onSelect={setSelection}
+            onSelect={handlePassageSelection}
+            onAnnotationContextMenu={openAnnotationContextMenu}
             onOpenElaboration={(id) => {
               historyAction.current = "push";
               setActiveNodeId(id);
@@ -6314,6 +6485,20 @@ export default function App({
         </div>
       )}
 
+      {saveFailure && (
+        <SaveFailureModal
+          error={saveFailure}
+          retrying={saveState === "saving"}
+          storageLabel={runtime.mode === "hosted" ? "to your account" : "on disk"}
+          onRetry={() => {
+            setSaveState("saving");
+            setSaveAttempt((attempt) => attempt + 1);
+          }}
+          onDownload={() => downloadWorkspaceRecovery(workspaceRef.current)}
+          onDismiss={() => setSaveFailure(null)}
+        />
+      )}
+
       {categoryEditor && (
         <div
           className="settings-modal-backdrop"
@@ -6604,7 +6789,85 @@ export default function App({
         </div>
       )}
 
-      {selection && !draft && (
+      {annotationMenu && (
+        <div
+          className="annotation-context-backdrop"
+          onPointerDown={() => setAnnotationMenu(null)}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <div
+            className="annotation-context-menu"
+            role="menu"
+            aria-label={`${annotationLabel(annotationMenu.target.kind)} annotation options`}
+            style={{
+              left: Math.max(
+                8,
+                Math.min(annotationMenu.left, window.innerWidth - 220),
+              ),
+              top: Math.max(
+                8,
+                Math.min(annotationMenu.top, window.innerHeight - 110),
+              ),
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <span>{annotationLabel(annotationMenu.target.kind)}</span>
+            <button type="button" role="menuitem" onClick={beginAnnotationMove}>
+              <CornerUpRight size={14} /> Move annotation
+            </button>
+          </div>
+        </div>
+      )}
+
+      {annotationMove && (
+        <aside
+          className={`annotation-move-prompt ${annotationMove.candidate ? "annotation-move-prompt--confirm" : ""}`}
+          role={annotationMove.candidate ? "dialog" : "status"}
+          aria-label={`Move ${annotationLabel(annotationMove.target.kind)} annotation`}
+        >
+          <header>
+            <div>
+              <strong>Move {annotationLabel(annotationMove.target.kind)}</strong>
+              <span>
+                {annotationMove.candidate
+                  ? "Confirm the new highlighted passage."
+                  : "Highlight the new passage in the same message."}
+              </span>
+            </div>
+            <button type="button" aria-label="Cancel annotation move" onClick={cancelAnnotationMove}>
+              <X size={14} />
+            </button>
+          </header>
+          {annotationMove.error && <p className="annotation-move-prompt__error">{annotationMove.error}</p>}
+          {annotationMove.candidate ? (
+            <>
+              <div className="annotation-move-prompt__comparison">
+                <div>
+                  <span>Current</span>
+                  <MathBlock source={annotationMove.originalAnchor.quote} />
+                </div>
+                <CornerUpRight size={15} />
+                <div>
+                  <span>Move to</span>
+                  <MathBlock source={annotationMove.candidate.quote} />
+                </div>
+              </div>
+              <footer>
+                <button type="button" onClick={cancelAnnotationMove}>Cancel</button>
+                <button className="primary" type="button" onClick={confirmAnnotationMove}>
+                  Confirm move
+                </button>
+              </footer>
+            </>
+          ) : (
+            <footer>
+              <button type="button" onClick={cancelAnnotationMove}>Cancel</button>
+            </footer>
+          )}
+        </aside>
+      )}
+
+      {selection && !draft && !annotationMove && (
         <SelectionToolbar
           selection={selection}
           onDismiss={() => setSelection(null)}

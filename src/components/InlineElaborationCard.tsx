@@ -13,6 +13,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatDuration, generationDetails } from "../lib/generation";
 import type {
+  AnnotationTarget,
   AssistantEditGroup,
   InlineDefinition,
   InlineElaboration,
@@ -40,6 +41,10 @@ interface InlineElaborationCardProps {
   onElaborateFurther: (elaborationId: string) => void;
   editGroup?: AssistantEditGroup;
   onSwitchEdit: (elaborationId: string, variantId: string) => void;
+  onAnnotationContextMenu?: (
+    target: AnnotationTarget,
+    point: { left: number; top: number },
+  ) => void;
   onOpenFurtherElaboration: () => void;
   furtherElaborationState?: "pending" | "ready";
   readOnly?: boolean;
@@ -70,6 +75,7 @@ export function InlineElaborationCard({
   onElaborateFurther,
   editGroup,
   onSwitchEdit,
+  onAnnotationContextMenu,
   onOpenFurtherElaboration,
   furtherElaborationState,
   readOnly = false,
@@ -240,6 +246,7 @@ export function InlineElaborationCard({
               onOpenDefinition={onOpenDefinition}
               onOpenVisualization={NOOP}
               onOpenInlineElaboration={NOOP}
+              onAnnotationContextMenu={onAnnotationContextMenu}
               selectionSurface="inline-elaboration"
             />
           </div>

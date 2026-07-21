@@ -26,6 +26,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import type {
+  AnnotationTarget,
   ChatTree,
   HighlightAnchor,
   InlineDefinition,
@@ -101,6 +102,11 @@ interface ThreadViewProps {
   onSwitchMessageRevision: (revisionGroupId: string, variantId: string) => void;
   onSwitchResponseRevision: (responseGroupId: string, responseId: string) => void;
   onSwitchAssistantEdit: (assistantMessageId: string, variantId: string) => void;
+  onAnnotationContextMenu?: (
+    nodeId: string,
+    target: AnnotationTarget,
+    point: { left: number; top: number },
+  ) => void;
   provider: ProviderId;
   modelOptions?: ProviderModelOption[];
   model: string;
@@ -298,6 +304,7 @@ export function ThreadView({
   onSwitchMessageRevision,
   onSwitchResponseRevision,
   onSwitchAssistantEdit,
+  onAnnotationContextMenu,
   provider,
   modelOptions,
   model,
@@ -1009,6 +1016,11 @@ export function ThreadView({
                   onOpenDefinition={onOpenDefinition}
                   onOpenVisualization={focusVisualization}
                   onOpenInlineElaboration={focusInlineElaboration}
+                  onAnnotationContextMenu={
+                    onAnnotationContextMenu
+                      ? (target, point) => onAnnotationContextMenu(node.id, target, point)
+                      : undefined
+                  }
                 />
                   {message.role === "source" &&
                     node.sourceEditUndo?.sourceMessageId === message.id && (
@@ -1079,6 +1091,12 @@ export function ThreadView({
                           onElaborateFurther={onElaborateFurther}
                           editGroup={inlineEditGroup}
                           onSwitchEdit={onSwitchAssistantEdit}
+                          onAnnotationContextMenu={
+                            onAnnotationContextMenu
+                              ? (target, point) =>
+                                  onAnnotationContextMenu(node.id, target, point)
+                              : undefined
+                          }
                           onOpenFurtherElaboration={() => {
                             if (furtherNode) onOpenElaboration(furtherNode.id);
                           }}

@@ -273,6 +273,17 @@ export interface SelectionDraft extends HighlightAnchor {
   sectionContent?: string;
 }
 
+export type AnnotationKind =
+  | "branch"
+  | "definition"
+  | "visualization"
+  | "inline-elaboration";
+
+export interface AnnotationTarget {
+  kind: AnnotationKind;
+  id: string;
+}
+
 export interface ContextNode {
   title: string;
   messages: Array<Pick<Message, "role" | "content">>;
