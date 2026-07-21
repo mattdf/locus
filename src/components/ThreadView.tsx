@@ -14,12 +14,22 @@ import {
   Sparkles,
   Square,
 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import { createPortal } from "react-dom";
 import type {
   ChatTree,
   HighlightAnchor,
   InlineDefinition,
+  InlineElaboration,
   InlineVisualization,
   SelectionDraft,
   ThreadNode,
@@ -38,10 +48,12 @@ import { Composer } from "./Composer";
 import { MarkdownMessage, type LinkedAnchor } from "./MarkdownMessage";
 import { MODEL_OPTIONS, REASONING_OPTIONS } from "./ModelPicker";
 import { VisualizationCard } from "./VisualizationCard";
+import { InlineElaborationCard } from "./InlineElaborationCard";
 
 const EMPTY_LINKED_ANCHORS: LinkedAnchor[] = [];
 const EMPTY_DEFINITIONS: InlineDefinition[] = [];
 const EMPTY_VISUALIZATIONS: InlineVisualization[] = [];
+const EMPTY_INLINE_ELABORATIONS: InlineElaboration[] = [];
 
 interface ThreadViewProps {
   chat: ChatTree;
@@ -65,6 +77,9 @@ interface ThreadViewProps {
   onCompileVisualization: (visualizationId: string, source: string) => void;
   onStopVisualization: (visualizationId: string) => void;
   onDeleteVisualization: (visualizationId: string) => void;
+  onGenerateInlineElaboration: (elaborationId: string, hint: string) => void;
+  onStopInlineElaboration: (elaborationId: string) => void;
+  onDeleteInlineElaboration: (elaborationId: string) => void;
   onSend: (message: string) => void;
   onStop: (assistantId: string) => void;
   onEditMessage: (revisionGroupId: string, content: string) => void;
@@ -130,42 +145,27 @@ function ThinkingIndicator({ startedAt }: { startedAt: string }) {
   );
 }
 
-function InlineVisualizationMount({
+function AnchoredInlineMount({
   messagesRef,
   messageId,
   messageContent,
-  visualization,
-  sendShortcut,
-  onGenerate,
-  onFix,
-  onCompile,
-  onStop,
-  onDelete,
-  readOnly,
+  annotationId,
+  blockIndex,
+  children,
 }: {
   messagesRef: RefObject<HTMLDivElement | null>;
   messageId: string;
   messageContent: string;
-  visualization: InlineVisualization;
-  sendShortcut: SendShortcut;
-  onGenerate: (
-    visualizationId: string,
-    hint: string,
-    engine: VisualizationEngine,
-    contextScope: VisualizationContextScope,
-  ) => void;
-  onFix: (visualizationId: string, instruction: string) => void;
-  onCompile: (visualizationId: string, source: string) => void;
-  onStop: (visualizationId: string) => void;
-  onDelete: (visualizationId: string) => void;
-  readOnly?: boolean;
+  annotationId: string;
+  blockIndex: number;
+  children: ReactNode;
 }) {
   const [mount, setMount] = useState<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
     const slot = document.createElement("div");
-    slot.className = "inline-visualization-slot";
-    slot.dataset.visualizationSlot = visualization.id;
-    slot.dataset.blockIndex = String(visualization.anchor.blockIndex);
+    slot.className = "inline-annotation-slot";
+    slot.dataset.annotationSlot = annotationId;
+    slot.dataset.blockIndex = String(blockIndex);
     let frame: number | null = null;
     let attempts = 0;
     let disposed = false;
@@ -177,15 +177,15 @@ function InlineVisualizationMount({
       const markdown = article?.querySelector<HTMLElement>(".markdown-message");
       if (!markdown) return false;
       const blocks = Array.from(markdown.children).filter(
-        (element) => !element.classList.contains("inline-visualization-slot"),
+        (element) => !element.classList.contains("inline-annotation-slot"),
       );
-      const block = blocks[visualization.anchor.blockIndex];
+      const block = blocks[blockIndex];
       if (!block) return false;
       if (slot.parentElement === markdown) return true;
 
       const existingSlots = Array.from(
         markdown.querySelectorAll<HTMLElement>(
-          `:scope > .inline-visualization-slot[data-block-index="${visualization.anchor.blockIndex}"]`,
+          `:scope > .inline-annotation-slot[data-block-index="${blockIndex}"]`,
         ),
       ).filter((candidate) => candidate !== slot);
       const lastSlot = existingSlots.at(-1);
@@ -220,23 +220,9 @@ function InlineVisualizationMount({
       setMount(null);
       slot.remove();
     };
-  }, [messageContent, messageId, visualization.anchor.blockIndex, visualization.id]);
+  }, [annotationId, blockIndex, messageContent, messageId, messagesRef]);
 
-  return mount
-    ? createPortal(
-        <VisualizationCard
-          visualization={visualization}
-          sendShortcut={sendShortcut}
-          onGenerate={onGenerate}
-          onFix={onFix}
-          onCompile={onCompile}
-          onStop={onStop}
-          onDelete={onDelete}
-          readOnly={readOnly}
-        />,
-        mount,
-      )
-    : null;
+  return mount ? createPortal(children, mount) : null;
 }
 
 function RevisionSwitcher({
@@ -289,6 +275,9 @@ export function ThreadView({
   onCompileVisualization,
   onStopVisualization,
   onDeleteVisualization,
+  onGenerateInlineElaboration,
+  onStopInlineElaboration,
+  onDeleteInlineElaboration,
   onSend,
   onStop,
   onEditMessage,
@@ -362,6 +351,15 @@ export function ThreadView({
     });
     return visualizations;
   }, [node.visualizations]);
+  const inlineElaborationsByMessage = useMemo(() => {
+    const elaborations = new Map<string, InlineElaboration[]>();
+    (node.inlineElaborations ?? []).forEach((elaboration) => {
+      const messageElaborations = elaborations.get(elaboration.anchor.sourceMessageId);
+      if (messageElaborations) messageElaborations.push(elaboration);
+      else elaborations.set(elaboration.anchor.sourceMessageId, [elaboration]);
+    });
+    return elaborations;
+  }, [node.inlineElaborations]);
   const pendingAssistant = messages.find(
     (message) => message.role === "assistant" && message.pending,
   );
@@ -472,7 +470,7 @@ export function ThreadView({
       ).find((candidate) => candidate.dataset.messageId === scrollRequest.anchor.sourceMessageId);
       const markdown = article?.querySelector<HTMLElement>(".markdown-message");
       const block = Array.from(markdown?.children ?? []).filter(
-        (element) => !element.classList.contains("inline-visualization-slot"),
+        (element) => !element.classList.contains("inline-annotation-slot"),
       )[scrollRequest.anchor.blockIndex] as HTMLElement | undefined;
       const target = block ?? article;
       if (target) {
@@ -516,6 +514,29 @@ export function ThreadView({
       );
       if (target) {
         target.dispatchEvent(new CustomEvent("locus:expand-visualization"));
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
+      attempts += 1;
+      if (attempts < 30) {
+        visualizationScrollFrame.current = window.requestAnimationFrame(focus);
+      }
+    };
+    focus();
+  }, []);
+
+  const focusInlineElaboration = useCallback((elaborationId: string) => {
+    if (visualizationScrollFrame.current !== null) {
+      window.cancelAnimationFrame(visualizationScrollFrame.current);
+    }
+    let attempts = 0;
+    const focus = () => {
+      visualizationScrollFrame.current = null;
+      const target = messagesRef.current?.querySelector<HTMLElement>(
+        `[data-inline-elaboration-id="${CSS.escape(elaborationId)}"]`,
+      );
+      if (target) {
+        target.dispatchEvent(new CustomEvent("locus:expand-inline-elaboration"));
         target.scrollIntoView({ behavior: "smooth", block: "center" });
         return;
       }
@@ -641,6 +662,8 @@ export function ThreadView({
           const definitions = definitionsByMessage.get(message.id) ?? EMPTY_DEFINITIONS;
           const visualizations =
             visualizationsByMessage.get(message.id) ?? EMPTY_VISUALIZATIONS;
+          const inlineElaborations =
+            inlineElaborationsByMessage.get(message.id) ?? EMPTY_INLINE_ELABORATIONS;
           return (
             <article
               className={`message message--${message.role} ${message.error ? "message--error" : ""}`}
@@ -929,10 +952,12 @@ export function ThreadView({
                   linkedAnchors={linkedAnchors}
                   definitions={definitions}
                   visualizations={visualizations}
+                  inlineElaborations={inlineElaborations}
                   onSelect={onSelect}
                   onOpenElaboration={onOpenElaboration}
                   onOpenDefinition={onOpenDefinition}
                   onOpenVisualization={focusVisualization}
+                  onOpenInlineElaboration={focusInlineElaboration}
                 />
                   {message.role === "source" &&
                     node.sourceEditUndo?.sourceMessageId === message.id && (
@@ -944,20 +969,43 @@ export function ThreadView({
                       </div>
                     )}
                   {visualizations.map((visualization) => (
-                    <InlineVisualizationMount
+                    <AnchoredInlineMount
                       key={visualization.id}
                       messagesRef={messagesRef}
                       messageId={message.id}
                       messageContent={message.content}
-                      visualization={visualization}
-                      sendShortcut={sendShortcut}
-                      onGenerate={onGenerateVisualization}
-                      onFix={onFixVisualization}
-                      onCompile={onCompileVisualization}
-                      onStop={onStopVisualization}
-                      onDelete={onDeleteVisualization}
-                      readOnly={readOnly}
-                    />
+                      annotationId={visualization.id}
+                      blockIndex={visualization.anchor.blockIndex}
+                    >
+                      <VisualizationCard
+                        visualization={visualization}
+                        sendShortcut={sendShortcut}
+                        onGenerate={onGenerateVisualization}
+                        onFix={onFixVisualization}
+                        onCompile={onCompileVisualization}
+                        onStop={onStopVisualization}
+                        onDelete={onDeleteVisualization}
+                        readOnly={readOnly}
+                      />
+                    </AnchoredInlineMount>
+                  ))}
+                  {inlineElaborations.map((elaboration) => (
+                    <AnchoredInlineMount
+                      key={elaboration.id}
+                      messagesRef={messagesRef}
+                      messageId={message.id}
+                      messageContent={message.content}
+                      annotationId={elaboration.id}
+                      blockIndex={elaboration.anchor.blockIndex}
+                    >
+                      <InlineElaborationCard
+                        elaboration={elaboration}
+                        onGenerate={onGenerateInlineElaboration}
+                        onStop={onStopInlineElaboration}
+                        onDelete={onDeleteInlineElaboration}
+                        readOnly={readOnly}
+                      />
+                    </AnchoredInlineMount>
                   ))}
                   {message.pending && (
                     <div className="streaming-status" aria-label="Locus is responding">

@@ -4,6 +4,7 @@ import {
   BookOpen,
   BookOpenText,
   ChartNoAxesCombined,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
   CornerDownLeft,
@@ -107,6 +108,7 @@ import type {
   GenerationMetrics,
   HighlightAnchor,
   InlineDefinition,
+  InlineElaboration,
   InlineVisualization,
   Message,
   MessageRevisionGroup,
@@ -197,7 +199,7 @@ class GenerationStreamError extends Error {
 }
 
 interface PendingGeneration {
-  kind: "message" | "definition" | "visualization";
+  kind: "message" | "definition" | "visualization" | "inline-elaboration";
   chatId: string;
   nodeId: string;
   assistantId: string;
@@ -230,7 +232,7 @@ interface HostedWorkspaceSync {
   activeChatId?: string | null;
 }
 
-type SourceAnnotationKind = "branch" | "definition" | "visualization";
+type SourceAnnotationKind = "branch" | "definition" | "visualization" | "inline-elaboration";
 
 interface SourceAnnotationRef {
   key: string;
@@ -365,6 +367,16 @@ function pendingGenerations(workspace: WorkspaceState): PendingGeneration[] {
           requestId: visualization.requestId,
         });
       });
+      (node.inlineElaborations ?? []).forEach((elaboration) => {
+        if (!elaboration.pending || !elaboration.requestId) return;
+        pending.set(`inline-elaboration:${elaboration.id}`, {
+          kind: "inline-elaboration",
+          chatId: chat.id,
+          nodeId: node.id,
+          assistantId: elaboration.id,
+          requestId: elaboration.requestId,
+        });
+      });
     });
   });
   return [...pending.values()];
@@ -472,6 +484,15 @@ function sourceAnnotations(
       kind: "visualization",
       id: visualization.id,
       anchor: visualization.anchor,
+    });
+  });
+  (node.inlineElaborations ?? []).forEach((elaboration) => {
+    if (elaboration.anchor.sourceMessageId !== messageId) return;
+    refs.push({
+      key: `inline-elaboration:${elaboration.id}`,
+      kind: "inline-elaboration",
+      id: elaboration.id,
+      anchor: elaboration.anchor,
     });
   });
   return refs.map((ref, index) => ({ ...ref, markerId: `a${index}` }));
@@ -700,6 +721,7 @@ function SelectionToolbar({
   onDefine,
   onVisualize,
   onElaborate,
+  onElaborateInline,
   onQuote,
   onRewrite,
   onDismiss,
@@ -708,11 +730,13 @@ function SelectionToolbar({
   onDefine: () => void;
   onVisualize: () => void;
   onElaborate: () => void;
+  onElaborateInline: () => void;
   onQuote: () => void;
   onRewrite?: () => void;
   onDismiss: () => void;
 }) {
   const [rect, setRect] = useState(selection.rect);
+  const [elaborateMenuOpen, setElaborateMenuOpen] = useState(false);
 
   useEffect(() => setRect(selection.rect), [selection]);
 
@@ -789,9 +813,28 @@ function SelectionToolbar({
           <Pencil size={14} /> Rewrite
         </button>
       )}
-      <button type="button" onClick={onElaborate}>
-        <CornerUpRight size={14} /> Elaborate
-      </button>
+      <div className="selection-elaborate-split">
+        <button type="button" onClick={onElaborate}>
+          <CornerUpRight size={14} /> Elaborate
+        </button>
+        <button
+          type="button"
+          aria-label="Elaborate options"
+          aria-haspopup="menu"
+          aria-expanded={elaborateMenuOpen}
+          onClick={() => setElaborateMenuOpen((open) => !open)}
+        >
+          <ChevronDown size={12} />
+        </button>
+        {elaborateMenuOpen && (
+          <div className="selection-elaborate-menu" role="menu">
+            <button type="button" role="menuitem" onClick={onElaborateInline}>
+              <strong>Elaborate inline</strong>
+              <span>Short explanation below the selection</span>
+            </button>
+          </div>
+        )}
+      </div>
       <button className="selection-quote-button" type="button" onClick={onQuote}>
         <Quote size={14} /> Quote
       </button>
@@ -1881,6 +1924,35 @@ export default function App({
     });
   };
 
+  const updateInlineElaboration = (
+    chatId: string,
+    nodeId: string,
+    elaborationId: string,
+    update: (elaboration: InlineElaboration) => InlineElaboration,
+  ) => {
+    updateChat(chatId, (chat) => {
+      const node = chat.nodes[nodeId];
+      if (!node?.inlineElaborations?.some((item) => item.id === elaborationId)) {
+        return chat;
+      }
+      const updatedAt = timestamp();
+      return {
+        ...chat,
+        updatedAt,
+        nodes: {
+          ...chat.nodes,
+          [nodeId]: {
+            ...node,
+            updatedAt,
+            inlineElaborations: node.inlineElaborations.map((elaboration) =>
+              elaboration.id === elaborationId ? update(elaboration) : elaboration,
+            ),
+          },
+        },
+      };
+    });
+  };
+
   const discardAssistantDelta = (assistantId: string) => {
     assistantDeltaBuffers.current.delete(assistantId);
     if (
@@ -2258,6 +2330,206 @@ export default function App({
         ? null
         : current,
     );
+  };
+
+  const askInlineElaboration = async (
+    chat: ChatTree,
+    nodeId: string,
+    elaboration: InlineElaboration,
+  ) => {
+    if (!elaboration.requestId) return;
+    const node = chat.nodes[nodeId];
+    const sourceMessage = node
+      ? messagesForNode(node).find(
+          (message) => message.id === elaboration.anchor.sourceMessageId,
+        )
+      : null;
+    if (!node || !sourceMessage) {
+      updateInlineElaboration(chat.id, nodeId, elaboration.id, (current) => ({
+        ...current,
+        content: "The selected message is no longer available.",
+        pending: false,
+        error: true,
+        requestId: undefined,
+        updatedAt: timestamp(),
+      }));
+      return;
+    }
+
+    const controller = new AbortController();
+    responseControllers.current.set(elaboration.id, controller);
+    try {
+      const settings = workspaceRef.current.settings;
+      const result = await modelRequest(
+        elaboration.requestId,
+        {
+          provider: settings.provider,
+          model: settings.model,
+          reasoningEffort: settings.reasoningEffort,
+          maxOutputTokens: settings.maxOutputTokens,
+          customInstructions: settings.customInstructions,
+          context: [
+            {
+              title: node.title,
+              messages: [{ role: sourceMessage.role, content: sourceMessage.content }],
+            },
+          ],
+          message: `Elucidate only the selected passage inline. Keep the response short: at most three compact paragraph-level blocks total. A block may be a short paragraph, a concise worked example, or a necessary displayed equation. Return the explanation directly with no heading, preamble, summary, follow-up question, or offer to continue.${
+            elaboration.hint.trim()
+              ? `\n\nUse the following as private guidance for what to clarify. Do not quote it, mention it, or describe it as an instruction:\n<inline_elaboration_guidance>\n${elaboration.hint.trim()}\n</inline_elaboration_guidance>`
+              : ""
+          }`,
+          anchor: elaboration.anchor,
+        },
+        () => undefined,
+        () => undefined,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      const content = result.content.trim();
+      updateInlineElaboration(chat.id, nodeId, elaboration.id, (current) => ({
+        ...current,
+        content: content || "No inline elaboration was returned.",
+        pending: false,
+        error: result.stopped || !content,
+        requestId: undefined,
+        generation: result.generation,
+        updatedAt: timestamp(),
+      }));
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      updateInlineElaboration(chat.id, nodeId, elaboration.id, (current) => ({
+        ...current,
+        content: error instanceof Error ? error.message : "The inline elaboration failed.",
+        pending: false,
+        error: true,
+        requestId: undefined,
+        generation:
+          error instanceof GenerationStreamError ? error.generation : undefined,
+        updatedAt: timestamp(),
+      }));
+    } finally {
+      if (responseControllers.current.get(elaboration.id) === controller) {
+        responseControllers.current.delete(elaboration.id);
+      }
+    }
+  };
+
+  const generateInlineElaboration = (
+    chatId: string,
+    nodeId: string,
+    elaborationId: string,
+    hint: string,
+  ) => {
+    const chat = workspaceRef.current.chats.find((item) => item.id === chatId);
+    const node = chat?.nodes[nodeId];
+    const elaboration = node?.inlineElaborations?.find((item) => item.id === elaborationId);
+    if (!chat || !node || !elaboration || elaboration.pending) return;
+
+    const updatedAt = timestamp();
+    const pending: InlineElaboration = {
+      ...elaboration,
+      hint: hint.trim(),
+      content: "",
+      pending: true,
+      error: false,
+      requestId: newId(),
+      generation: undefined,
+      updatedAt,
+    };
+    const nextChat: ChatTree = {
+      ...chat,
+      updatedAt,
+      nodes: {
+        ...chat.nodes,
+        [nodeId]: {
+          ...node,
+          updatedAt,
+          sourceEditUndo:
+            node.sourceEditUndo?.sourceMessageId === elaboration.anchor.sourceMessageId
+              ? undefined
+              : node.sourceEditUndo,
+          inlineElaborations: (node.inlineElaborations ?? []).map((item) =>
+            item.id === elaborationId ? pending : item,
+          ),
+        },
+      },
+    };
+    setWorkspace((current) => ({
+      ...current,
+      chats: current.chats.map((item) => item.id === chatId ? nextChat : item),
+    }));
+    void askInlineElaboration(nextChat, nodeId, pending);
+  };
+
+  const stopInlineElaboration = async (
+    chatId: string,
+    nodeId: string,
+    elaborationId: string,
+  ) => {
+    const elaboration = workspaceRef.current.chats
+      .find((chat) => chat.id === chatId)
+      ?.nodes[nodeId]?.inlineElaborations?.find((item) => item.id === elaborationId);
+    if (!elaboration?.pending || !elaboration.requestId) return;
+    try {
+      const response = await fetch(
+        `/api/respond/${encodeURIComponent(elaboration.requestId)}/abort`,
+        { method: "POST" },
+      );
+      const result = (await response.json().catch(() => ({}))) as
+        | { stopped: boolean; generation: GenerationMetrics }
+        | ApiError;
+      if (!response.ok) {
+        throw new Error("error" in result && result.error ? result.error : "Could not stop the inline elaboration");
+      }
+      responseControllers.current.get(elaborationId)?.abort();
+      updateInlineElaboration(chatId, nodeId, elaborationId, (current) => ({
+        ...current,
+        content: "Inline elaboration stopped.",
+        pending: false,
+        error: true,
+        requestId: undefined,
+        generation: "generation" in result ? result.generation : undefined,
+        updatedAt: timestamp(),
+      }));
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Could not stop the inline elaboration");
+    }
+  };
+
+  const deleteInlineElaboration = (
+    chatId: string,
+    nodeId: string,
+    elaborationId: string,
+  ) => {
+    const chat = workspaceRef.current.chats.find((item) => item.id === chatId);
+    const node = chat?.nodes[nodeId];
+    const elaboration = node?.inlineElaborations?.find((item) => item.id === elaborationId);
+    if (!chat || !node || !elaboration || elaboration.pending) return;
+    if (!window.confirm("Delete this inline elaboration?")) return;
+    updateChat(chatId, (current) => {
+      const currentNode = current.nodes[nodeId];
+      if (!currentNode) return current;
+      const updatedAt = timestamp();
+      return {
+        ...current,
+        updatedAt,
+        nodes: {
+          ...current.nodes,
+          [nodeId]: {
+            ...currentNode,
+            updatedAt,
+            inlineElaborations: (currentNode.inlineElaborations ?? []).filter(
+              (item) => item.id !== elaborationId,
+            ),
+            sourceEditUndo:
+              currentNode.sourceEditUndo?.sourceMessageId === elaboration.anchor.sourceMessageId
+                ? undefined
+                : currentNode.sourceEditUndo,
+          },
+        },
+      };
+    });
   };
 
   const compileVisualization = async (
@@ -2779,6 +3051,56 @@ export default function App({
     }
   };
 
+  const resumeInlineElaboration = async (pending: PendingGeneration) => {
+    const controller = new AbortController();
+    responseControllers.current.set(pending.assistantId, controller);
+    try {
+      const result = await resumeModelRequest(
+        pending.requestId,
+        () => undefined,
+        () => undefined,
+        controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      const content = result.content.trim();
+      updateInlineElaboration(
+        pending.chatId,
+        pending.nodeId,
+        pending.assistantId,
+        (current) => ({
+          ...current,
+          content: content || "No inline elaboration was returned.",
+          pending: false,
+          error: result.stopped || !content,
+          requestId: undefined,
+          generation: result.generation,
+          updatedAt: timestamp(),
+        }),
+      );
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      updateInlineElaboration(
+        pending.chatId,
+        pending.nodeId,
+        pending.assistantId,
+        (current) => ({
+          ...current,
+          content: error instanceof Error ? error.message : "The inline elaboration failed.",
+          pending: false,
+          error: true,
+          requestId: undefined,
+          generation:
+            error instanceof GenerationStreamError ? error.generation : undefined,
+          updatedAt: timestamp(),
+        }),
+      );
+    } finally {
+      if (responseControllers.current.get(pending.assistantId) === controller) {
+        responseControllers.current.delete(pending.assistantId);
+      }
+    }
+  };
+
   const resumeVisualization = async (pending: PendingGeneration) => {
     const visualization = workspaceRef.current.chats
       .find((chat) => chat.id === pending.chatId)
@@ -2849,6 +3171,7 @@ export default function App({
     pendingGenerations(workspace).forEach((pending) => {
       if (!responseControllers.current.has(pending.assistantId)) {
         if (pending.kind === "definition") void resumeDefinition(pending);
+        else if (pending.kind === "inline-elaboration") void resumeInlineElaboration(pending);
         else if (pending.kind === "visualization") void resumeVisualization(pending);
         else void resumeGeneration(pending);
       }
@@ -3176,6 +3499,9 @@ export default function App({
       visualizations: prospective.annotations
         .filter((annotation) => annotation.kind === "visualization")
         .map((annotation) => ({ id: annotation.id, anchor: annotation.anchor })),
+      inlineElaborations: prospective.annotations
+        .filter((annotation) => annotation.kind === "inline-elaboration")
+        .map((annotation) => ({ id: annotation.id, anchor: annotation.anchor })),
       createdAt: timestamp(),
     };
     const updatedAt = timestamp();
@@ -3208,6 +3534,12 @@ export default function App({
           anchor:
             prospective.anchors.get(`visualization:${visualization.id}`) ?? visualization.anchor,
         })),
+        inlineElaborations: node.inlineElaborations?.map((elaboration) => ({
+          ...elaboration,
+          anchor:
+            prospective.anchors.get(`inline-elaboration:${elaboration.id}`) ??
+            elaboration.anchor,
+        })),
         sourceEditUndo: undo,
       };
       return { ...chat, nodes, updatedAt };
@@ -3226,6 +3558,9 @@ export default function App({
       const definitionAnchors = new Map(undo.definitions.map((item) => [item.id, item.anchor]));
       const visualizationAnchors = new Map(
         undo.visualizations.map((item) => [item.id, item.anchor]),
+      );
+      const inlineElaborationAnchors = new Map(
+        (undo.inlineElaborations ?? []).map((item) => [item.id, item.anchor]),
       );
       const nodes = Object.fromEntries(
         Object.entries(chat.nodes).map(([id, candidate]) => [
@@ -3250,6 +3585,11 @@ export default function App({
         visualizations: node.visualizations?.map((visualization) => ({
           ...visualization,
           anchor: visualizationAnchors.get(visualization.id) ?? visualization.anchor,
+        })),
+        inlineElaborations: node.inlineElaborations?.map((elaboration) => ({
+          ...elaboration,
+          anchor:
+            inlineElaborationAnchors.get(elaboration.id) ?? elaboration.anchor,
         })),
         sourceEditUndo: undefined,
       };
@@ -4144,6 +4484,65 @@ export default function App({
     }));
   };
 
+  const elaborateInlineSelection = () => {
+    if (!activeChat || !selection) return;
+    const node = activeChat.nodes[selection.sourceNodeId];
+    if (!node) return;
+    const matchesSelection = (elaboration: InlineElaboration) =>
+      elaboration.anchor.sourceMessageId === selection.sourceMessageId &&
+      elaboration.anchor.blockIndex === selection.blockIndex &&
+      elaboration.anchor.quote === selection.quote;
+    const existing = (node.inlineElaborations ?? []).find(matchesSelection);
+    window.getSelection()?.removeAllRanges();
+    setSelection(null);
+    if (existing) {
+      window.requestAnimationFrame(() => {
+        const target = document.querySelector<HTMLElement>(
+          `[data-inline-elaboration-id="${CSS.escape(existing.id)}"]`,
+        );
+        target?.dispatchEvent(new CustomEvent("locus:expand-inline-elaboration"));
+        target?.scrollIntoView({ behavior: "smooth", block: "center" });
+      });
+      return;
+    }
+
+    const createdAt = timestamp();
+    const elaboration: InlineElaboration = {
+      id: newId(),
+      anchor: anchorFromDraft(selection),
+      hint: "",
+      content: "",
+      createdAt,
+      updatedAt: createdAt,
+    };
+    setWorkspace((current) => ({
+      ...current,
+      chats: current.chats.map((chat) => {
+        if (chat.id !== activeChat.id) return chat;
+        const currentNode = chat.nodes[node.id] ?? node;
+        return {
+          ...chat,
+          updatedAt: createdAt,
+          nodes: {
+            ...chat.nodes,
+            [node.id]: {
+              ...currentNode,
+              updatedAt: createdAt,
+              sourceEditUndo:
+                currentNode.sourceEditUndo?.sourceMessageId === selection.sourceMessageId
+                  ? undefined
+                  : currentNode.sourceEditUndo,
+              inlineElaborations: [
+                ...(currentNode.inlineElaborations ?? []),
+                elaboration,
+              ],
+            },
+          },
+        };
+      }),
+    }));
+  };
+
   const defineSelection = () => {
     if (!activeChat || !selection) return;
     const node = activeChat.nodes[selection.sourceNodeId];
@@ -4818,6 +5217,20 @@ export default function App({
             onDeleteVisualization={(visualizationId) =>
               deleteVisualization(activeChat.id, leftPaneNode.id, visualizationId)
             }
+            onGenerateInlineElaboration={(elaborationId, hint) =>
+              generateInlineElaboration(
+                activeChat.id,
+                leftPaneNode.id,
+                elaborationId,
+                hint,
+              )
+            }
+            onStopInlineElaboration={(elaborationId) =>
+              void stopInlineElaboration(activeChat.id, leftPaneNode.id, elaborationId)
+            }
+            onDeleteInlineElaboration={(elaborationId) =>
+              deleteInlineElaboration(activeChat.id, leftPaneNode.id, elaborationId)
+            }
             onSend={(message) => sendToThread(leftPaneNode.id, message)}
             onStop={(assistantId) => stopResponse(leftPaneNode.id, assistantId)}
             onEditMessage={(revisionGroupId, content) =>
@@ -5097,6 +5510,20 @@ export default function App({
             }
             onDeleteVisualization={(visualizationId) =>
               deleteVisualization(activeChat.id, sideNode.id, visualizationId)
+            }
+            onGenerateInlineElaboration={(elaborationId, hint) =>
+              generateInlineElaboration(
+                activeChat.id,
+                sideNode.id,
+                elaborationId,
+                hint,
+              )
+            }
+            onStopInlineElaboration={(elaborationId) =>
+              void stopInlineElaboration(activeChat.id, sideNode.id, elaborationId)
+            }
+            onDeleteInlineElaboration={(elaborationId) =>
+              deleteInlineElaboration(activeChat.id, sideNode.id, elaborationId)
             }
             onSend={(message) => sendToThread(sideNode.id, message)}
             onStop={(assistantId) => stopResponse(sideNode.id, assistantId)}
@@ -5770,6 +6197,7 @@ export default function App({
           onDismiss={() => setSelection(null)}
           onDefine={defineSelection}
           onVisualize={visualizeSelection}
+          onElaborateInline={elaborateInlineSelection}
           onQuote={quoteSelectionInThread}
           onRewrite={
             selectionIsImportedSource

@@ -104,6 +104,7 @@ export interface SourceEditUndo {
   branches: SourceAnchorSnapshot[];
   definitions: SourceAnchorSnapshot[];
   visualizations: SourceAnchorSnapshot[];
+  inlineElaborations?: SourceAnchorSnapshot[];
   createdAt: string;
 }
 
@@ -156,6 +157,19 @@ export interface InlineVisualization {
   updatedAt: string;
 }
 
+export interface InlineElaboration {
+  id: string;
+  anchor: HighlightAnchor;
+  hint: string;
+  content: string;
+  createdAt: string;
+  updatedAt: string;
+  pending?: boolean;
+  error?: boolean;
+  requestId?: string;
+  generation?: GenerationMetrics;
+}
+
 export interface ThreadNode {
   id: string;
   parentId: string | null;
@@ -164,6 +178,7 @@ export interface ThreadNode {
   messages: Message[];
   definitions?: InlineDefinition[];
   visualizations?: InlineVisualization[];
+  inlineElaborations?: InlineElaboration[];
   messageRevisions?: Record<string, MessageRevisionGroup>;
   responseRevisions?: Record<string, ResponseRevisionGroup>;
   /** The latest reversible source edit. Cleared by the next source/annotation edit. */

@@ -2,6 +2,7 @@ import type {
   ChatCategory,
   ChatTree,
   InlineDefinition,
+  InlineElaboration,
   InlineVisualization,
   Message,
   WorkspaceState,
@@ -84,6 +85,21 @@ function isVisualization(value: unknown): value is InlineVisualization {
   );
 }
 
+function isInlineElaboration(value: unknown): value is InlineElaboration {
+  if (!isRecord(value) || !isRecord(value.anchor)) return false;
+  return (
+    typeof value.id === "string" &&
+    typeof value.hint === "string" &&
+    typeof value.content === "string" &&
+    typeof value.createdAt === "string" &&
+    typeof value.updatedAt === "string" &&
+    typeof value.anchor.sourceNodeId === "string" &&
+    typeof value.anchor.sourceMessageId === "string" &&
+    typeof value.anchor.quote === "string" &&
+    Number.isSafeInteger(value.anchor.blockIndex)
+  );
+}
+
 function isChat(value: unknown): value is ChatTree {
   if (
     !isRecord(value) ||
@@ -113,6 +129,9 @@ function isChat(value: unknown): value is ChatTree {
           (Array.isArray(node.definitions) && node.definitions.every(isDefinition))) &&
         (node.visualizations === undefined ||
           (Array.isArray(node.visualizations) && node.visualizations.every(isVisualization))) &&
+        (node.inlineElaborations === undefined ||
+          (Array.isArray(node.inlineElaborations) &&
+            node.inlineElaborations.every(isInlineElaboration))) &&
         typeof node.createdAt === "string" &&
         typeof node.updatedAt === "string",
     )
@@ -285,6 +304,18 @@ function importedVisualization(
   };
 }
 
+function importedInlineElaboration(elaboration: InlineElaboration): InlineElaboration {
+  if (!elaboration.pending) return { ...elaboration };
+  const { requestId: _requestId, ...rest } = elaboration;
+  return {
+    ...rest,
+    content: elaboration.content || "Inline elaboration stopped before the export completed.",
+    pending: false,
+    error: true,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
 export function cloneChatForImport(chat: ChatTree, id: string): ChatTree {
   const normalizedChat = normalizeChatRevisions(chat);
   return {
@@ -299,6 +330,7 @@ export function cloneChatForImport(chat: ChatTree, id: string): ChatTree {
           messages: node.messages.map(importedMessage),
           definitions: node.definitions?.map(importedDefinition),
           visualizations: node.visualizations?.map(importedVisualization),
+          inlineElaborations: node.inlineElaborations?.map(importedInlineElaboration),
           messageRevisions: node.messageRevisions
             ? Object.fromEntries(
                 Object.entries(node.messageRevisions).map(([groupId, group]) => [

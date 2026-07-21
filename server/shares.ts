@@ -3,6 +3,7 @@ import express from "express";
 import type {
   ChatTree,
   InlineDefinition,
+  InlineElaboration,
   InlineVisualization,
   Message,
   ThreadNode,
@@ -70,6 +71,20 @@ function completedVisualization(
   return rest;
 }
 
+function completedInlineElaboration(
+  elaboration: InlineElaboration,
+): InlineElaboration | null {
+  if (elaboration.pending || elaboration.error || !elaboration.content.trim()) return null;
+  const {
+    requestId: _requestId,
+    hint: _hint,
+    pending: _pending,
+    error: _error,
+    ...rest
+  } = elaboration;
+  return { ...rest, hint: "" };
+}
+
 /**
  * A share is a snapshot of the currently selected path through every message
  * revision group. Hidden revisions and unfinished model work are deliberately
@@ -87,6 +102,9 @@ export function createPublicSnapshot(chat: ChatTree): ChatTree {
       const visualizations = (node.visualizations ?? [])
         .map(completedVisualization)
         .filter((visualization): visualization is InlineVisualization => Boolean(visualization));
+      const inlineElaborations = (node.inlineElaborations ?? [])
+        .map(completedInlineElaboration)
+        .filter((elaboration): elaboration is InlineElaboration => Boolean(elaboration));
       return [
         node.id,
         {
@@ -94,6 +112,7 @@ export function createPublicSnapshot(chat: ChatTree): ChatTree {
           messages,
           definitions,
           visualizations,
+          inlineElaborations,
           messageRevisions: undefined,
           responseRevisions: undefined,
           sourceEditUndo: undefined,

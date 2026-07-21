@@ -10,6 +10,7 @@ import { anchorForSelection, containingMarkdownSection } from "../lib/sourceEdit
 import type {
   HighlightAnchor,
   InlineDefinition,
+  InlineElaboration,
   InlineVisualization,
   Message,
   SelectionDraft,
@@ -37,6 +38,7 @@ interface MarkdownMessageProps {
   linkedAnchors: LinkedAnchor[];
   definitions: InlineDefinition[];
   visualizations: InlineVisualization[];
+  inlineElaborations: InlineElaboration[];
   onSelect: (selection: SelectionDraft) => void;
   onOpenElaboration: (childId: string) => void;
   onOpenDefinition: (
@@ -45,6 +47,7 @@ interface MarkdownMessageProps {
     getAnchorRect?: () => SelectionDraft["rect"],
   ) => void;
   onOpenVisualization: (visualizationId: string) => void;
+  onOpenInlineElaboration: (elaborationId: string) => void;
 }
 
 interface Point {
@@ -82,6 +85,16 @@ interface VisualizationBlockTarget {
   visualizationId: string;
 }
 
+interface InlineElaborationRangeTarget {
+  range: Range;
+  elaborationId: string;
+}
+
+interface InlineElaborationBlockTarget {
+  element: Element;
+  elaborationId: string;
+}
+
 function textMap(container: HTMLElement): { text: string; points: Point[] } {
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
@@ -89,7 +102,7 @@ function textMap(container: HTMLElement): { text: string; points: Point[] } {
       if (
         !parent ||
         parent.closest(
-          ".katex-mathml, annotation, .elaboration-links, .inline-visualization-slot",
+          ".katex-mathml, annotation, .elaboration-links, .inline-annotation-slot",
         )
       ) {
         return NodeFilter.FILTER_REJECT;
@@ -132,7 +145,7 @@ function topLevelBlockIndex(container: HTMLElement, sourceNode: Node): number {
 
 function topLevelBlocks(container: HTMLElement): Element[] {
   return Array.from(container.children).filter(
-    (element) => !element.classList.contains("inline-visualization-slot"),
+    (element) => !element.classList.contains("inline-annotation-slot"),
   );
 }
 
@@ -203,10 +216,12 @@ function MarkdownMessageComponent({
   linkedAnchors,
   definitions,
   visualizations,
+  inlineElaborations,
   onSelect,
   onOpenElaboration,
   onOpenDefinition,
   onOpenVisualization,
+  onOpenInlineElaboration,
 }: MarkdownMessageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const targetsRef = useRef<RangeTarget[]>([]);
@@ -215,6 +230,8 @@ function MarkdownMessageComponent({
   const definitionBlockTargetsRef = useRef<DefinitionBlockTarget[]>([]);
   const visualizationTargetsRef = useRef<VisualizationRangeTarget[]>([]);
   const visualizationBlockTargetsRef = useRef<VisualizationBlockTarget[]>([]);
+  const inlineElaborationTargetsRef = useRef<InlineElaborationRangeTarget[]>([]);
+  const inlineElaborationBlockTargetsRef = useRef<InlineElaborationBlockTarget[]>([]);
   const highlightName = useMemo(
     () => `elaboration-${message.id.replace(/[^a-zA-Z0-9-]/g, "")}`,
     [message.id],
@@ -225,6 +242,10 @@ function MarkdownMessageComponent({
   );
   const visualizationHighlightName = useMemo(
     () => `visualization-${message.id.replace(/[^a-zA-Z0-9-]/g, "")}`,
+    [message.id],
+  );
+  const inlineElaborationHighlightName = useMemo(
+    () => `inline-elaboration-${message.id.replace(/[^a-zA-Z0-9-]/g, "")}`,
     [message.id],
   );
   const normalizedContent = useMemo(
@@ -412,6 +433,64 @@ function MarkdownMessageComponent({
     };
   }, [visualizationHighlightName, visualizations, message.content]);
 
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container || !inlineElaborations.length) return;
+
+    const ranges: Range[] = [];
+    const targets: InlineElaborationRangeTarget[] = [];
+    const styledBlocks: Element[] = [];
+    const blockTargets: InlineElaborationBlockTarget[] = [];
+    for (const elaboration of inlineElaborations) {
+      const block = topLevelBlock(container, elaboration.anchor.blockIndex);
+      const searchRoot = block instanceof HTMLElement ? block : container;
+      const { text, points } = textMap(searchRoot);
+      const quote = normalizedQuote(elaboration.anchor.quote);
+      const index = quote ? text.indexOf(quote) : -1;
+      if (index >= 0 && points[index] && points[index + quote.length - 1]) {
+        const start = points[index];
+        const end = points[index + quote.length - 1];
+        const range = document.createRange();
+        range.setStart(start.node, start.offset);
+        range.setEnd(end.node, end.offset + 1);
+        ranges.push(range);
+        targets.push({ range, elaborationId: elaboration.id });
+        continue;
+      }
+      const mathRange = rangeForMathSource(searchRoot, elaboration.anchor.quote);
+      if (mathRange) {
+        ranges.push(mathRange);
+        targets.push({ range: mathRange, elaborationId: elaboration.id });
+      } else if (block) {
+        block.classList.add("has-linked-inline-elaboration");
+        styledBlocks.push(block);
+        blockTargets.push({ element: block, elaborationId: elaboration.id });
+      }
+    }
+
+    inlineElaborationTargetsRef.current = targets;
+    inlineElaborationBlockTargetsRef.current = blockTargets;
+    const css = CSS as typeof CSS & {
+      highlights?: { set: (name: string, value: unknown) => void; delete: (name: string) => void };
+    };
+    const HighlightConstructor = (
+      window as typeof window & { Highlight?: new (...ranges: Range[]) => unknown }
+    ).Highlight;
+    const style = document.createElement("style");
+    if (css.highlights && HighlightConstructor && ranges.length) {
+      css.highlights.set(inlineElaborationHighlightName, new HighlightConstructor(...ranges));
+      style.textContent = `::highlight(${inlineElaborationHighlightName}) { background: rgba(72, 170, 145, .3); text-decoration: underline; text-decoration-color: rgba(35, 125, 103, .72); text-underline-offset: 3px; }`;
+      document.head.appendChild(style);
+    }
+    return () => {
+      css.highlights?.delete(inlineElaborationHighlightName);
+      style.remove();
+      styledBlocks.forEach((block) => block.classList.remove("has-linked-inline-elaboration"));
+      inlineElaborationTargetsRef.current = [];
+      inlineElaborationBlockTargetsRef.current = [];
+    };
+  }, [inlineElaborationHighlightName, inlineElaborations, message.content]);
+
   const captureSelection = () => {
     const container = containerRef.current;
     const selection = window.getSelection();
@@ -460,21 +539,21 @@ function MarkdownMessageComponent({
       onMouseUp={(event) => {
         if (
           event.target instanceof Element &&
-          event.target.closest(".inline-visualization-slot")
+          event.target.closest(".inline-annotation-slot")
         ) return;
         captureSelection();
       }}
       onKeyUp={(event) => {
         if (
           event.target instanceof Element &&
-          event.target.closest(".inline-visualization-slot")
+          event.target.closest(".inline-annotation-slot")
         ) return;
         captureSelection();
       }}
       onClickCapture={(event) => {
         if (
           event.target instanceof Element &&
-          event.target.closest(".inline-visualization-slot")
+          event.target.closest(".inline-annotation-slot")
         ) return;
         if (window.getSelection()?.toString()) return;
         const interactive =
@@ -513,6 +592,29 @@ function MarkdownMessageComponent({
           const bounds = getAnchorRect();
           event.preventDefault();
           onOpenDefinition(definitionMatch.definitionId, bounds, getAnchorRect);
+          return;
+        }
+
+        const inlineElaborationRangeMatch = inlineElaborationTargetsRef.current.find((target) =>
+          Array.from(target.range.getClientRects()).some(
+            (rect) =>
+              event.clientX >= rect.left &&
+              event.clientX <= rect.right &&
+              event.clientY >= rect.top &&
+              event.clientY <= rect.bottom,
+          ),
+        );
+        const inlineElaborationBlockMatch =
+          event.target instanceof Node
+            ? inlineElaborationBlockTargetsRef.current.find((target) =>
+                target.element.contains(event.target as Node),
+              )
+            : undefined;
+        const inlineElaborationMatch =
+          inlineElaborationRangeMatch ?? inlineElaborationBlockMatch;
+        if (inlineElaborationMatch) {
+          event.preventDefault();
+          onOpenInlineElaboration(inlineElaborationMatch.elaborationId);
           return;
         }
 
@@ -651,6 +753,26 @@ function sameVisualizations(left: InlineVisualization[], right: InlineVisualizat
   );
 }
 
+function sameInlineElaborations(
+  left: InlineElaboration[],
+  right: InlineElaboration[],
+): boolean {
+  return (
+    left === right ||
+    (left.length === right.length &&
+      left.every((elaboration, index) => {
+        const candidate = right[index];
+        return (
+          elaboration.id === candidate.id &&
+          elaboration.anchor.sourceNodeId === candidate.anchor.sourceNodeId &&
+          elaboration.anchor.sourceMessageId === candidate.anchor.sourceMessageId &&
+          elaboration.anchor.quote === candidate.anchor.quote &&
+          elaboration.anchor.blockIndex === candidate.anchor.blockIndex
+        );
+      }))
+  );
+}
+
 export const MarkdownMessage = memo(
   MarkdownMessageComponent,
   (left, right) =>
@@ -658,5 +780,6 @@ export const MarkdownMessage = memo(
     sameMessage(left.message, right.message) &&
     sameLinkedAnchors(left.linkedAnchors, right.linkedAnchors) &&
     sameDefinitions(left.definitions, right.definitions) &&
-    sameVisualizations(left.visualizations, right.visualizations),
+    sameVisualizations(left.visualizations, right.visualizations) &&
+    sameInlineElaborations(left.inlineElaborations, right.inlineElaborations),
 );
