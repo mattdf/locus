@@ -84,6 +84,13 @@ import {
   type SourceRange,
 } from "./lib/sourceEditing";
 import { generationDetails } from "./lib/generation";
+import {
+  annotationSnapshots,
+  applyAnnotationSnapshots,
+  materializeAnnotationSnapshots,
+  type AssistantAnnotationKind,
+  type AssistantAnnotationRef,
+} from "./lib/assistantEdits";
 import { applyMarkdownShortcut, isSendShortcut } from "./lib/textarea";
 import {
   visualizationEngine,
@@ -103,6 +110,7 @@ import {
   treeDepth,
 } from "./lib/tree";
 import type {
+  AssistantEditGroup,
   ChatCategory,
   ChatTree,
   GenerationMetrics,
@@ -233,9 +241,9 @@ interface HostedWorkspaceSync {
   activeChatId?: string | null;
 }
 
-type SourceAnnotationKind = "branch" | "definition" | "visualization" | "inline-elaboration";
+type SourceAnnotationKind = AssistantAnnotationKind;
 
-interface SourceAnnotationRef {
+interface SourceAnnotationRef extends AssistantAnnotationRef {
   key: string;
   markerId: string;
   kind: SourceAnnotationKind;
@@ -247,6 +255,7 @@ interface SourceRewriteState {
   chatId: string;
   nodeId: string;
   messageId: string;
+  targetRole: "source" | "assistant";
   start: number;
   end: number;
   documentContent: string;
@@ -1324,12 +1333,16 @@ export default function App({
           ? activeChat.nodes[sideNode.parentId] ?? rootNode
           : rootNode
       : null;
-  const selectionIsImportedSource = Boolean(
-    selection &&
-      activeChat?.nodes[selection.sourceNodeId]?.messages.some(
-        (message) =>
-          message.id === selection.sourceMessageId && message.role === "source",
-      ),
+  const selectedNode = selection && activeChat
+    ? activeChat.nodes[selection.sourceNodeId]
+    : null;
+  const selectedMessage = selectedNode
+    ? messagesForNode(selectedNode).find(
+        (message) => message.id === selection?.sourceMessageId,
+      )
+    : null;
+  const selectionIsRewritable = Boolean(
+    selectedMessage?.role === "source" || selectedMessage?.role === "assistant",
   );
 
   const closeElaborationDraft = () => {
@@ -3202,13 +3215,15 @@ export default function App({
     });
   }, [loaded, workspace.chats]);
 
-  const openSourceRewriteForSelection = (selected: SelectionDraft) => {
+  const openRewriteForSelection = (selected: SelectionDraft) => {
     const chat = workspaceRef.current.chats.find(
       (candidate) => candidate.id === workspaceRef.current.activeChatId,
     );
     const node = chat?.nodes[selected.sourceNodeId];
-    const message = node?.messages.find(
-      (candidate) => candidate.id === selected.sourceMessageId && candidate.role === "source",
+    const message = node && messagesForNode(node).find(
+      (candidate) =>
+        candidate.id === selected.sourceMessageId &&
+        (candidate.role === "source" || candidate.role === "assistant"),
     );
     if (!chat || !node || !message) return;
     const section =
@@ -3230,6 +3245,7 @@ export default function App({
       chatId: chat.id,
       nodeId: node.id,
       messageId: message.id,
+      targetRole: message.role === "assistant" ? "assistant" : "source",
       start: section.start,
       end: section.end,
       documentContent: message.content,
@@ -3259,6 +3275,36 @@ export default function App({
       chatId: chat.id,
       nodeId,
       messageId,
+      targetRole: "source",
+      start: 0,
+      end: message.content.length,
+      documentContent: message.content,
+      original: message.content,
+      initialMode: "manual",
+      wholeDocument: true,
+      proposed: null,
+      markerRanges: {},
+      generating: false,
+      reviewCount: 0,
+      error: "",
+    });
+  };
+
+  const openAssistantEditor = (nodeId: string, messageId: string) => {
+    const chat = workspaceRef.current.chats.find(
+      (candidate) => candidate.id === workspaceRef.current.activeChatId,
+    );
+    const node = chat?.nodes[nodeId];
+    const message = node && messagesForNode(node).find(
+      (candidate) =>
+        candidate.id === messageId && candidate.role === "assistant" && !candidate.pending,
+    );
+    if (!chat || !node || !message) return;
+    setSourceRewrite({
+      chatId: chat.id,
+      nodeId,
+      messageId,
+      targetRole: "assistant",
       start: 0,
       end: message.content.length,
       documentContent: message.content,
@@ -3371,7 +3417,7 @@ export default function App({
               title: node.title,
               messages: [
                 {
-                  role: "source",
+                  role: rewrite.targetRole,
                   content: `<context_before>\n${before}\n</context_before>\n\n<context_after>\n${after}\n</context_after>`,
                 },
               ],
@@ -3467,8 +3513,14 @@ export default function App({
       (candidate) => candidate.id === rewrite.chatId,
     );
     const currentNode = currentChat?.nodes[rewrite.nodeId];
-    const currentMessage = currentNode?.messages.find(
-      (message) => message.id === rewrite.messageId && message.role === "source",
+    const currentMessage = currentNode && (
+      rewrite.targetRole === "source"
+        ? currentNode.messages.find(
+            (message) => message.id === rewrite.messageId && message.role === "source",
+          )
+        : messagesForNode(currentNode).find(
+            (message) => message.id === rewrite.messageId && message.role === "assistant",
+          )
     );
     if (!currentChat || !currentNode || !currentMessage) return;
     if (currentMessage.content !== rewrite.documentContent) {
@@ -3488,6 +3540,67 @@ export default function App({
       rewrite.proposed,
       rewrite.markerRanges,
     );
+    if (rewrite.targetRole === "assistant") {
+      const originalGeneration = assistantMessageById(currentNode, rewrite.messageId);
+      if (!originalGeneration || originalGeneration.role !== "assistant") return;
+      const currentSnapshots = annotationSnapshots(prospective.annotations);
+      const nextSnapshots = annotationSnapshots(
+        prospective.annotations,
+        prospective.anchors,
+      );
+      const existingGroup = currentNode.assistantEdits?.[rewrite.messageId];
+      const originalVariantId = newId();
+      const existingVariants = existingGroup
+        ? existingGroup.variants.map((variant) =>
+            variant.id === existingGroup.activeVariantId
+              ? { ...variant, anchors: currentSnapshots }
+              : variant,
+          )
+        : [
+            {
+              id: originalVariantId,
+              content: originalGeneration.content,
+              anchors: currentSnapshots,
+              kind: "original" as const,
+              createdAt: originalGeneration.createdAt,
+            },
+          ];
+      const rewriteVariantId = newId();
+      const group: AssistantEditGroup = {
+        assistantMessageId: rewrite.messageId,
+        activeVariantId: rewriteVariantId,
+        variants: [
+          ...existingVariants,
+          {
+            id: rewriteVariantId,
+            content: nextContent,
+            anchors: nextSnapshots,
+            kind: "rewrite",
+            createdAt: timestamp(),
+          },
+        ],
+      };
+      const updatedAt = timestamp();
+      updateChat(rewrite.chatId, (chat) => {
+        const applied = applyAnnotationSnapshots(
+          chat,
+          rewrite.nodeId,
+          nextSnapshots,
+          updatedAt,
+        );
+        if (!applied) return chat;
+        applied.nodes[rewrite.nodeId] = {
+          ...applied.node,
+          assistantEdits: {
+            ...applied.node.assistantEdits,
+            [rewrite.messageId]: group,
+          },
+        };
+        return { ...chat, nodes: applied.nodes, updatedAt };
+      });
+      setSourceRewrite(null);
+      return;
+    }
     const undo: SourceEditUndo = {
       id: newId(),
       sourceMessageId: rewrite.messageId,
@@ -3818,6 +3931,66 @@ export default function App({
           },
         },
       };
+    });
+  };
+
+  const switchAssistantEdit = (
+    nodeId: string,
+    assistantMessageId: string,
+    variantId: string,
+  ) => {
+    if (!activeChat) return;
+    setSelection(null);
+    window.getSelection()?.removeAllRanges();
+    updateChat(activeChat.id, (chat) => {
+      const node = chat.nodes[nodeId];
+      const group = node?.assistantEdits?.[assistantMessageId];
+      const targetVariant = group?.variants.find((variant) => variant.id === variantId);
+      const currentMessage = node && messagesForNode(node).find(
+        (message) => message.id === assistantMessageId && message.role === "assistant",
+      );
+      if (
+        !node ||
+        !group ||
+        !targetVariant ||
+        !currentMessage ||
+        group.activeVariantId === variantId
+      ) {
+        return chat;
+      }
+
+      const annotations = sourceAnnotations(chat, nodeId, assistantMessageId);
+      const currentSnapshots = annotationSnapshots(annotations);
+      const targetSnapshots = materializeAnnotationSnapshots(
+        annotations,
+        currentMessage.content,
+        targetVariant.content,
+        targetVariant.anchors,
+      );
+      const variants = group.variants.map((variant) => {
+        if (variant.id === group.activeVariantId) {
+          return { ...variant, anchors: currentSnapshots };
+        }
+        if (variant.id === variantId) {
+          return { ...variant, anchors: targetSnapshots };
+        }
+        return variant;
+      });
+      const updatedAt = timestamp();
+      const applied = applyAnnotationSnapshots(chat, nodeId, targetSnapshots, updatedAt);
+      if (!applied) return chat;
+      applied.nodes[nodeId] = {
+        ...applied.node,
+        assistantEdits: {
+          ...applied.node.assistantEdits,
+          [assistantMessageId]: {
+            ...group,
+            activeVariantId: variantId,
+            variants,
+          },
+        },
+      };
+      return { ...chat, nodes: applied.nodes, updatedAt };
     });
   };
 
@@ -5239,6 +5412,9 @@ export default function App({
               editUserMessage(leftPaneNode.id, revisionGroupId, content)
             }
             onEditSource={(messageId) => openSourceEditor(leftPaneNode.id, messageId)}
+            onEditAssistant={(messageId) =>
+              openAssistantEditor(leftPaneNode.id, messageId)
+            }
             onRevertSourceEdit={(messageId) =>
               revertSourceEdit(leftPaneNode.id, messageId)
             }
@@ -5255,6 +5431,9 @@ export default function App({
             }
             onSwitchResponseRevision={(responseGroupId, responseId) =>
               switchResponseRevision(leftPaneNode.id, responseGroupId, responseId)
+            }
+            onSwitchAssistantEdit={(assistantMessageId, variantId) =>
+              switchAssistantEdit(leftPaneNode.id, assistantMessageId, variantId)
             }
             model={workspace.settings.model}
             onModelChange={selectModel}
@@ -5533,6 +5712,9 @@ export default function App({
               editUserMessage(sideNode.id, revisionGroupId, content)
             }
             onEditSource={(messageId) => openSourceEditor(sideNode.id, messageId)}
+            onEditAssistant={(messageId) =>
+              openAssistantEditor(sideNode.id, messageId)
+            }
             onRevertSourceEdit={(messageId) =>
               revertSourceEdit(sideNode.id, messageId)
             }
@@ -5549,6 +5731,9 @@ export default function App({
             }
             onSwitchResponseRevision={(responseGroupId, responseId) =>
               switchResponseRevision(sideNode.id, responseGroupId, responseId)
+            }
+            onSwitchAssistantEdit={(assistantMessageId, variantId) =>
+              switchAssistantEdit(sideNode.id, assistantMessageId, variantId)
             }
             model={workspace.settings.model}
             onModelChange={selectModel}
@@ -6202,8 +6387,8 @@ export default function App({
           onElaborateInline={elaborateInlineSelection}
           onQuote={quoteSelectionInThread}
           onRewrite={
-            selectionIsImportedSource
-              ? () => openSourceRewriteForSelection(selection)
+            selectionIsRewritable
+              ? () => openRewriteForSelection(selection)
               : undefined
           }
           onElaborate={() => {
@@ -6232,7 +6417,11 @@ export default function App({
           proposed={sourceRewrite.proposed}
           initialMode={sourceRewrite.initialMode}
           wholeDocument={sourceRewrite.wholeDocument}
-          model={workspace.settings.model}
+          targetRole={sourceRewrite.targetRole}
+          model={
+            workspace.settings.rewriteModels[workspace.settings.rewriteProvider] ||
+            DEFAULT_PROVIDER_MODELS[providerKind(workspace.settings.rewriteProvider)]
+          }
           generating={sourceRewrite.generating}
           error={sourceRewrite.error}
           reviewCount={sourceRewrite.reviewCount}

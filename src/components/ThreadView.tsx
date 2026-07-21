@@ -84,6 +84,7 @@ interface ThreadViewProps {
   onStop: (assistantId: string) => void;
   onEditMessage: (revisionGroupId: string, content: string) => void;
   onEditSource: (messageId: string) => void;
+  onEditAssistant: (messageId: string) => void;
   onRevertSourceEdit: (messageId: string) => void;
   onRegenerateResponse: (
     assistantId: string,
@@ -92,6 +93,7 @@ interface ThreadViewProps {
   ) => void;
   onSwitchMessageRevision: (revisionGroupId: string, variantId: string) => void;
   onSwitchResponseRevision: (responseGroupId: string, responseId: string) => void;
+  onSwitchAssistantEdit: (assistantMessageId: string, variantId: string) => void;
   provider: ProviderId;
   modelOptions?: ProviderModelOption[];
   model: string;
@@ -232,7 +234,7 @@ function RevisionSwitcher({
   disabled,
   onSwitch,
 }: {
-  label: "message" | "response";
+  label: "message" | "response" | "edit";
   activeIndex: number;
   variantIds: string[];
   disabled: boolean;
@@ -282,10 +284,12 @@ export function ThreadView({
   onStop,
   onEditMessage,
   onEditSource,
+  onEditAssistant,
   onRevertSourceEdit,
   onRegenerateResponse,
   onSwitchMessageRevision,
   onSwitchResponseRevision,
+  onSwitchAssistantEdit,
   provider,
   modelOptions,
   model,
@@ -655,6 +659,16 @@ export function ThreadView({
                 ),
               )
             : 0;
+          const assistantEditGroup =
+            message.role === "assistant" ? node.assistantEdits?.[message.id] : undefined;
+          const activeAssistantEditIndex = assistantEditGroup
+            ? Math.max(
+                0,
+                assistantEditGroup.variants.findIndex(
+                  (variant) => variant.id === assistantEditGroup.activeVariantId,
+                ),
+              )
+            : 0;
           const messageCopyStatus =
             copyState?.messageId === message.id ? copyState.status : null;
           const linkedAnchors =
@@ -742,6 +756,30 @@ export function ThreadView({
                           onSwitchResponseRevision(responseRevisionGroupId, responseId)
                         }
                       />
+                    )}
+                    {!readOnly && assistantEditGroup && (
+                      <RevisionSwitcher
+                        label="edit"
+                        activeIndex={activeAssistantEditIndex}
+                        variantIds={assistantEditGroup.variants.map((variant) => variant.id)}
+                        disabled={waiting}
+                        onSwitch={(variantId) =>
+                          onSwitchAssistantEdit(message.id, variantId)
+                        }
+                      />
+                    )}
+                    {!readOnly && message.content && (
+                      <button
+                        className="edit-message-button"
+                        type="button"
+                        aria-label="Edit response Markdown"
+                        title="Edit response Markdown"
+                        disabled={waiting}
+                        onClick={() => onEditAssistant(message.id)}
+                      >
+                        <Pencil size={11} />
+                        <span>Edit</span>
+                      </button>
                     )}
                     {!message.error && message.content && (
                       <button
@@ -1055,7 +1093,7 @@ export function ThreadView({
         />
         {!side && (
           <p className="selection-tip">
-            Select any passage or equation to define, visualize, quote, or elaborate on it. Imported sources can also be rewritten.
+            Select any passage or equation to define, visualize, quote, elaborate, or rewrite it.
           </p>
         )}
       </div>}

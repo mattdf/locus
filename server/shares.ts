@@ -115,6 +115,7 @@ export function createPublicSnapshot(chat: ChatTree): ChatTree {
           inlineElaborations,
           messageRevisions: undefined,
           responseRevisions: undefined,
+          assistantEdits: undefined,
           sourceEditUndo: undefined,
         },
       ];

@@ -97,6 +97,28 @@ export interface SourceAnchorSnapshot {
   anchor: HighlightAnchor;
 }
 
+export interface AnnotationAnchorSnapshotSet {
+  branches: SourceAnchorSnapshot[];
+  definitions: SourceAnchorSnapshot[];
+  visualizations: SourceAnchorSnapshot[];
+  inlineElaborations: SourceAnchorSnapshot[];
+}
+
+export interface AssistantEditVariant {
+  id: string;
+  content: string;
+  anchors: AnnotationAnchorSnapshotSet;
+  kind: "original" | "rewrite";
+  createdAt: string;
+}
+
+/** Content variants belonging to one immutable model-generation leaf. */
+export interface AssistantEditGroup {
+  assistantMessageId: string;
+  activeVariantId: string;
+  variants: AssistantEditVariant[];
+}
+
 export interface SourceEditUndo {
   id: string;
   sourceMessageId: string;
@@ -181,6 +203,8 @@ export interface ThreadNode {
   inlineElaborations?: InlineElaboration[];
   messageRevisions?: Record<string, MessageRevisionGroup>;
   responseRevisions?: Record<string, ResponseRevisionGroup>;
+  /** Rewrite variants keyed by the immutable assistant generation they edit. */
+  assistantEdits?: Record<string, AssistantEditGroup>;
   /** The latest reversible source edit. Cleared by the next source/annotation edit. */
   sourceEditUndo?: SourceEditUndo;
   createdAt: string;

@@ -43,6 +43,51 @@ function isMessage(value: unknown): value is Message {
   );
 }
 
+function isHighlightAnchor(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.sourceNodeId === "string" &&
+    typeof value.sourceMessageId === "string" &&
+    typeof value.quote === "string" &&
+    Number.isSafeInteger(value.blockIndex)
+  );
+}
+
+function isAnchorSnapshotSet(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return ["branches", "definitions", "visualizations", "inlineElaborations"].every(
+    (kind) =>
+      Array.isArray(value[kind]) &&
+      value[kind].every(
+        (snapshot) =>
+          isRecord(snapshot) &&
+          typeof snapshot.id === "string" &&
+          isHighlightAnchor(snapshot.anchor),
+      ),
+  );
+}
+
+function isAssistantEditGroups(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return Object.entries(value).every(
+    ([assistantId, group]) =>
+      isRecord(group) &&
+      group.assistantMessageId === assistantId &&
+      typeof group.activeVariantId === "string" &&
+      Array.isArray(group.variants) &&
+      group.variants.length > 0 &&
+      group.variants.every(
+        (variant) =>
+          isRecord(variant) &&
+          typeof variant.id === "string" &&
+          typeof variant.content === "string" &&
+          (variant.kind === "original" || variant.kind === "rewrite") &&
+          typeof variant.createdAt === "string" &&
+          isAnchorSnapshotSet(variant.anchors),
+      ),
+  );
+}
+
 function isDefinition(value: unknown): value is InlineDefinition {
   if (!isRecord(value) || !isRecord(value.anchor)) return false;
   return (
@@ -132,6 +177,7 @@ function isChat(value: unknown): value is ChatTree {
         (node.inlineElaborations === undefined ||
           (Array.isArray(node.inlineElaborations) &&
             node.inlineElaborations.every(isInlineElaboration))) &&
+        (node.assistantEdits === undefined || isAssistantEditGroups(node.assistantEdits)) &&
         typeof node.createdAt === "string" &&
         typeof node.updatedAt === "string",
     )
@@ -353,6 +399,25 @@ export function cloneChatForImport(chat: ChatTree, id: string): ChatTree {
                   {
                     ...group,
                     responses: group.responses.map(importedMessage),
+                  },
+                ]),
+              )
+            : undefined,
+          assistantEdits: node.assistantEdits
+            ? Object.fromEntries(
+                Object.entries(node.assistantEdits).map(([assistantId, group]) => [
+                  assistantId,
+                  {
+                    ...group,
+                    variants: group.variants.map((variant) => ({
+                      ...variant,
+                      anchors: {
+                        branches: variant.anchors.branches.map((item) => ({ ...item, anchor: { ...item.anchor } })),
+                        definitions: variant.anchors.definitions.map((item) => ({ ...item, anchor: { ...item.anchor } })),
+                        visualizations: variant.anchors.visualizations.map((item) => ({ ...item, anchor: { ...item.anchor } })),
+                        inlineElaborations: variant.anchors.inlineElaborations.map((item) => ({ ...item, anchor: { ...item.anchor } })),
+                      },
+                    })),
                   },
                 ]),
               )

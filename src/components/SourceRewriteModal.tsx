@@ -28,6 +28,7 @@ export function SourceRewriteModal({
   proposed,
   initialMode,
   wholeDocument,
+  targetRole,
   model,
   generating,
   error,
@@ -41,6 +42,7 @@ export function SourceRewriteModal({
   proposed: string | null;
   initialMode: SourceRewriteMode;
   wholeDocument: boolean;
+  targetRole: "source" | "assistant";
   model: string;
   generating: boolean;
   error: string;
@@ -67,8 +69,16 @@ export function SourceRewriteModal({
       <section className="source-rewrite-modal" role="dialog" aria-modal="true" aria-labelledby="source-rewrite-title">
         <header>
           <div>
-            <span>{wholeDocument ? "Imported source" : "Selected Markdown blocks"}</span>
-            <h2 id="source-rewrite-title">{wholeDocument ? "Edit source" : "Rewrite selection"}</h2>
+            <span>
+              {wholeDocument
+                ? targetRole === "source" ? "Imported source" : "Model response"
+                : targetRole === "source" ? "Selected source blocks" : "Selected response blocks"}
+            </span>
+            <h2 id="source-rewrite-title">
+              {wholeDocument
+                ? targetRole === "source" ? "Edit source" : "Edit response"
+                : "Rewrite selection"}
+            </h2>
           </div>
           <button type="button" aria-label="Close rewrite" disabled={generating} onClick={onDismiss}>
             <X size={16} />

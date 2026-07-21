@@ -16,14 +16,14 @@ function uniqueMessages(messages: Message[]): Message[] {
 }
 
 function normalizedNode(node: ThreadNode): ThreadNode {
-  if (!node.messageRevisions) return node;
+  if (!node.messageRevisions && !node.assistantEdits) return node;
 
   let changed = false;
   const responseRevisions: Record<string, ResponseRevisionGroup> = {
     ...node.responseRevisions,
   };
   const messageRevisions = Object.fromEntries(
-    Object.entries(node.messageRevisions).map(([groupId, group]) => {
+    Object.entries(node.messageRevisions ?? {}).map(([groupId, group]) => {
       const firstVariantByUserMessage = new Map<string, MessageRevisionGroup["variants"][number]>();
       const variants: MessageRevisionGroup["variants"] = [];
       let activeVariantId = group.activeVariantId;
@@ -81,12 +81,54 @@ function normalizedNode(node: ThreadNode): ThreadNode {
     }),
   );
 
+  const assistantEdits = node.assistantEdits
+    ? Object.fromEntries(
+        Object.entries(node.assistantEdits).flatMap(([assistantId, group]) => {
+          const variants = group.variants.filter(
+            (variant, index, all) =>
+              variant.content.trim() &&
+              all.findIndex((candidate) => candidate.id === variant.id) === index,
+          );
+          if (!variants.length) {
+            changed = true;
+            return [];
+          }
+          const activeVariantId = variants.some(
+            (variant) => variant.id === group.activeVariantId,
+          )
+            ? group.activeVariantId
+            : variants[0].id;
+          if (
+            variants.length !== group.variants.length ||
+            activeVariantId !== group.activeVariantId ||
+            group.assistantMessageId !== assistantId
+          ) {
+            changed = true;
+          }
+          return [[
+            assistantId,
+            {
+              ...group,
+              assistantMessageId: assistantId,
+              activeVariantId,
+              variants,
+            },
+          ]];
+        }),
+      )
+    : undefined;
+
   if (!changed) return node;
   return {
     ...node,
-    messageRevisions,
+    messageRevisions:
+      Object.keys(messageRevisions).length > 0 ? messageRevisions : undefined,
     responseRevisions:
       Object.keys(responseRevisions).length > 0 ? responseRevisions : undefined,
+    assistantEdits:
+      assistantEdits && Object.keys(assistantEdits).length > 0
+        ? assistantEdits
+        : undefined,
   };
 }
 

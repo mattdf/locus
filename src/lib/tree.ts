@@ -69,13 +69,21 @@ export function messagesForNode(node: ThreadNode): Message[] {
           (response) => response.id === responseGroup.activeResponseId,
         ) ?? responseGroup.responses[0]
       : undefined;
-    if (!responseGroup || !activeResponse) return resolved;
-    return {
-      ...activeResponse,
-      revisionGroupId: resolved.revisionGroupId,
-      revisionVariantId: resolved.revisionVariantId,
-      responseRevisionGroupId: responseGroup.assistantMessageId,
-    };
+    if (responseGroup && activeResponse) {
+      resolved = {
+        ...activeResponse,
+        revisionGroupId: resolved.revisionGroupId,
+        revisionVariantId: resolved.revisionVariantId,
+        responseRevisionGroupId: responseGroup.assistantMessageId,
+      };
+    }
+
+    const editGroup = node.assistantEdits?.[resolved.id];
+    const activeEdit = editGroup
+      ? editGroup.variants.find((variant) => variant.id === editGroup.activeVariantId) ??
+        editGroup.variants[0]
+      : undefined;
+    return activeEdit ? { ...resolved, content: activeEdit.content } : resolved;
   });
 }
 

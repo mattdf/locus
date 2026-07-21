@@ -250,10 +250,12 @@ export function SharedChatView({ token }: { token: string }) {
             onStop={NOOP}
             onEditMessage={NOOP}
             onEditSource={NOOP}
+            onEditAssistant={NOOP}
             onRevertSourceEdit={NOOP}
             onRegenerateResponse={NOOP}
             onSwitchMessageRevision={NOOP}
             onSwitchResponseRevision={NOOP}
+            onSwitchAssistantEdit={NOOP}
             provider="openai"
             model=""
             onModelChange={NOOP}
