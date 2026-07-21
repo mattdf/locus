@@ -66,7 +66,7 @@ export const auth = isHosted
         cookiePrefix: "locus",
         useSecureCookies: true,
         ipAddress: {
-          // Coolify's Traefik proxy overwrites this header; the app service has no published port.
+          // Only trust this after a private reverse proxy overwrites it from the connecting client.
           ipAddressHeaders: ["x-real-ip"],
         },
       },

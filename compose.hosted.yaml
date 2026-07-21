@@ -47,7 +47,7 @@ services:
     environment:
       NODE_ENV: production
       LOCUS_MODE: hosted
-      LOCUS_PUBLIC_ORIGIN: https://locuschat.io
+      LOCUS_PUBLIC_ORIGIN: ${LOCUS_PUBLIC_ORIGIN:?LOCUS_PUBLIC_ORIGIN is required}
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required}
       LOCUS_CREDENTIAL_KEYS: ${LOCUS_CREDENTIAL_KEYS:?LOCUS_CREDENTIAL_KEYS is required}
@@ -66,7 +66,7 @@ services:
     environment:
       NODE_ENV: production
       LOCUS_MODE: hosted
-      LOCUS_PUBLIC_ORIGIN: https://locuschat.io
+      LOCUS_PUBLIC_ORIGIN: ${LOCUS_PUBLIC_ORIGIN:?LOCUS_PUBLIC_ORIGIN is required}
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET is required}
       LOCUS_CREDENTIAL_KEYS: ${LOCUS_CREDENTIAL_KEYS:?LOCUS_CREDENTIAL_KEYS is required}
