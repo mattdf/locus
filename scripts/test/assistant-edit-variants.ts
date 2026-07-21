@@ -6,7 +6,7 @@ import {
   type AssistantAnnotationRef,
 } from "../../src/lib/assistantEdits.ts";
 import { makeChatExport, parseChatImport } from "../../src/lib/chatTransfer.ts";
-import { messagesForNode } from "../../src/lib/tree.ts";
+import { activeEditContent, messagesForNode } from "../../src/lib/tree.ts";
 import type { ChatTree, HighlightAnchor, ThreadNode, WorkspaceState } from "../../src/types.ts";
 
 const createdAt = "2026-07-21T00:00:00.000Z";
@@ -107,6 +107,29 @@ const chat: ChatTree = {
   nodes: {
     root: {
       ...baseNode,
+      assistantEdits: {
+        ...baseNode.assistantEdits,
+        "inline-1": {
+          assistantMessageId: "inline-1",
+          activeVariantId: "inline-rewrite",
+          variants: [
+            {
+              id: "inline-original",
+              content: "Inline",
+              anchors: annotationSnapshots([]),
+              kind: "original",
+              createdAt,
+            },
+            {
+              id: "inline-rewrite",
+              content: "Rewritten inline elaboration",
+              anchors: annotationSnapshots([]),
+              kind: "rewrite",
+              createdAt,
+            },
+          ],
+        },
+      },
       definitions: [
         { id: "def-1", anchor: annotations[1].anchor, content: "Definition", createdAt },
         {
@@ -148,6 +171,15 @@ const chat: ChatTree = {
   createdAt,
   updatedAt: createdAt,
 };
+assert.equal(
+  activeEditContent(
+    chat.nodes.root,
+    "inline-1",
+    chat.nodes.root.inlineElaborations![0].content,
+  ),
+  "Rewritten inline elaboration",
+  "Inline elaborations must resolve through their independent immutable edit group",
+);
 const applied = applyAnnotationSnapshots(chat, "root", targetSnapshots, createdAt);
 assert(applied);
 assert.equal(applied.nodes["branch-1"].anchor?.start, 13);

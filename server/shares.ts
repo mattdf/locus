@@ -8,7 +8,7 @@ import type {
   Message,
   ThreadNode,
 } from "../src/types.ts";
-import { messagesForNode } from "../src/lib/tree.ts";
+import { activeEditContent, messagesForNode } from "../src/lib/tree.ts";
 import { isHosted } from "./config.ts";
 import { query } from "./db.ts";
 
@@ -110,6 +110,10 @@ export function createPublicSnapshot(chat: ChatTree): ChatTree {
         .map(completedVisualization)
         .filter((visualization): visualization is InlineVisualization => Boolean(visualization));
       const inlineElaborations = (node.inlineElaborations ?? [])
+        .map((elaboration) => ({
+          ...elaboration,
+          content: activeEditContent(node, elaboration.id, elaboration.content),
+        }))
         .map(completedInlineElaboration)
         .filter((elaboration): elaboration is InlineElaboration => Boolean(elaboration));
       return [

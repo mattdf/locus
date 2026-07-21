@@ -98,6 +98,7 @@ import {
   visualizationSource,
 } from "./lib/visualization";
 import {
+  activeEditContent,
   childThreads,
   contextBeforeMessage,
   contextFor,
@@ -255,7 +256,7 @@ interface SourceRewriteState {
   chatId: string;
   nodeId: string;
   messageId: string;
-  targetRole: "source" | "assistant";
+  targetRole: "source" | "assistant" | "inline-elaboration";
   start: number;
   end: number;
   documentContent: string;
@@ -747,7 +748,7 @@ function SelectionToolbar({
 }) {
   const [rect, setRect] = useState(selection.rect);
   const [elaborateMenuOpen, setElaborateMenuOpen] = useState(false);
-  const definitionOnly = selection.surface === "inline-elaboration";
+  const inlineElaborationSelection = selection.surface === "inline-elaboration";
 
   useEffect(() => setRect(selection.rect), [selection]);
 
@@ -816,7 +817,12 @@ function SelectionToolbar({
       <button className="selection-define-button" type="button" onClick={onDefine}>
         <BookOpen size={14} /> Define
       </button>
-      {!definitionOnly && <>
+      {inlineElaborationSelection && onRewrite && (
+        <button className="selection-rewrite-button" type="button" onClick={onRewrite}>
+          <Pencil size={14} /> Rewrite
+        </button>
+      )}
+      {!inlineElaborationSelection && <>
         <button className="selection-visualize-button" type="button" onClick={onVisualize}>
           <ChartNoAxesCombined size={14} /> Visualize
         </button>
@@ -1344,8 +1350,13 @@ export default function App({
         (message) => message.id === selection?.sourceMessageId,
       )
     : null;
+  const selectedInlineElaboration = selectedNode?.inlineElaborations?.find(
+    (elaboration) => elaboration.id === selection?.sourceMessageId,
+  );
   const selectionIsRewritable = Boolean(
-    selectedMessage?.role === "source" || selectedMessage?.role === "assistant",
+    selectedMessage?.role === "source" ||
+    selectedMessage?.role === "assistant" ||
+    selectedInlineElaboration,
   );
 
   const closeElaborationDraft = () => {
@@ -2170,7 +2181,10 @@ export default function App({
     const source = sourceMessage
       ? { role: sourceMessage.role, content: sourceMessage.content }
       : sourceElaboration
-        ? { role: "assistant" as const, content: sourceElaboration.content }
+        ? {
+            role: "assistant" as const,
+            content: activeEditContent(node!, sourceElaboration.id, sourceElaboration.content),
+          }
         : null;
     if (!node || !source) {
       updateDefinition(chat.id, nodeId, definition.id, (current) => ({
@@ -2489,6 +2503,12 @@ export default function App({
         [nodeId]: {
           ...node,
           updatedAt,
+          assistantEdits: (() => {
+            if (!node.assistantEdits?.[elaborationId]) return node.assistantEdits;
+            const remaining = { ...node.assistantEdits };
+            delete remaining[elaborationId];
+            return Object.keys(remaining).length ? remaining : undefined;
+          })(),
           sourceEditUndo:
             node.sourceEditUndo?.sourceMessageId === elaboration.anchor.sourceMessageId
               ? undefined
@@ -2666,6 +2686,14 @@ export default function App({
           [nodeId]: {
             ...currentNode,
             updatedAt,
+            assistantEdits: (() => {
+              if (!currentNode.assistantEdits?.[elaborationId]) {
+                return currentNode.assistantEdits;
+              }
+              const remaining = { ...currentNode.assistantEdits };
+              delete remaining[elaborationId];
+              return Object.keys(remaining).length ? remaining : undefined;
+            })(),
             inlineElaborations: (currentNode.inlineElaborations ?? []).filter(
               (item) => item.id !== elaborationId,
             ),
@@ -3364,30 +3392,42 @@ export default function App({
         candidate.id === selected.sourceMessageId &&
         (candidate.role === "source" || candidate.role === "assistant"),
     );
-    if (!chat || !node || !message) return;
+    const inlineElaboration = node?.inlineElaborations?.find(
+      (candidate) => candidate.id === selected.sourceMessageId,
+    );
+    const content = message?.content ?? (
+      node && inlineElaboration
+        ? activeEditContent(node, inlineElaboration.id, inlineElaboration.content)
+        : null
+    );
+    if (!chat || !node || content === null || (!message && !inlineElaboration)) return;
     const section =
       Number.isSafeInteger(selected.sectionStart) &&
       Number.isSafeInteger(selected.sectionEnd) &&
       selected.sectionStart! >= 0 &&
-      selected.sectionEnd! <= message.content.length
+      selected.sectionEnd! <= content.length
         ? {
             start: selected.sectionStart!,
             end: selected.sectionEnd!,
-            content: message.content.slice(selected.sectionStart, selected.sectionEnd),
+            content: content.slice(selected.sectionStart, selected.sectionEnd),
           }
         : containingMarkdownSection(
-            message.content,
+            content,
             selected.blockIndex,
             selected.endBlockIndex ?? selected.blockIndex,
           );
     setSourceRewrite({
       chatId: chat.id,
       nodeId: node.id,
-      messageId: message.id,
-      targetRole: message.role === "assistant" ? "assistant" : "source",
+      messageId: message?.id ?? inlineElaboration!.id,
+      targetRole: inlineElaboration
+        ? "inline-elaboration"
+        : message!.role === "assistant"
+          ? "assistant"
+          : "source",
       start: section.start,
       end: section.end,
-      documentContent: message.content,
+      documentContent: content,
       original: section.content,
       initialMode: "model",
       wholeDocument: false,
@@ -3556,7 +3596,7 @@ export default function App({
               title: node.title,
               messages: [
                 {
-                  role: rewrite.targetRole,
+                  role: rewrite.targetRole === "source" ? "source" : "assistant",
                   content: `<context_before>\n${before}\n</context_before>\n\n<context_after>\n${after}\n</context_after>`,
                 },
               ],
@@ -3657,15 +3697,31 @@ export default function App({
         ? currentNode.messages.find(
             (message) => message.id === rewrite.messageId && message.role === "source",
           )
-        : messagesForNode(currentNode).find(
-            (message) => message.id === rewrite.messageId && message.role === "assistant",
-          )
+        : rewrite.targetRole === "assistant"
+          ? messagesForNode(currentNode).find(
+              (message) => message.id === rewrite.messageId && message.role === "assistant",
+            )
+          : undefined
     );
-    if (!currentChat || !currentNode || !currentMessage) return;
-    if (currentMessage.content !== rewrite.documentContent) {
+    const currentInlineElaboration = rewrite.targetRole === "inline-elaboration"
+      ? currentNode?.inlineElaborations?.find(
+          (elaboration) => elaboration.id === rewrite.messageId,
+        )
+      : undefined;
+    const currentContent = currentMessage?.content ?? (
+      currentNode && currentInlineElaboration
+        ? activeEditContent(
+            currentNode,
+            currentInlineElaboration.id,
+            currentInlineElaboration.content,
+          )
+        : null
+    );
+    if (!currentChat || !currentNode || currentContent === null) return;
+    if (currentContent !== rewrite.documentContent) {
       setSourceRewrite((current) =>
         current
-          ? { ...current, error: "The source changed while this preview was open. Close it and try again." }
+          ? { ...current, error: "The content changed while this preview was open. Close it and try again." }
           : current,
       );
       return;
@@ -3679,9 +3735,11 @@ export default function App({
       rewrite.proposed,
       rewrite.markerRanges,
     );
-    if (rewrite.targetRole === "assistant") {
-      const originalGeneration = assistantMessageById(currentNode, rewrite.messageId);
-      if (!originalGeneration || originalGeneration.role !== "assistant") return;
+    if (rewrite.targetRole !== "source") {
+      const originalGeneration = rewrite.targetRole === "assistant"
+        ? assistantMessageById(currentNode, rewrite.messageId)
+        : currentInlineElaboration;
+      if (!originalGeneration || !("content" in originalGeneration)) return;
       const currentSnapshots = annotationSnapshots(prospective.annotations);
       const nextSnapshots = annotationSnapshots(
         prospective.annotations,
@@ -4088,11 +4146,23 @@ export default function App({
       const currentMessage = node && messagesForNode(node).find(
         (message) => message.id === assistantMessageId && message.role === "assistant",
       );
+      const currentInlineElaboration = node?.inlineElaborations?.find(
+        (elaboration) => elaboration.id === assistantMessageId,
+      );
+      const currentContent = currentMessage?.content ?? (
+        node && currentInlineElaboration
+          ? activeEditContent(
+              node,
+              currentInlineElaboration.id,
+              currentInlineElaboration.content,
+            )
+          : null
+      );
       if (
         !node ||
         !group ||
         !targetVariant ||
-        !currentMessage ||
+        currentContent === null ||
         group.activeVariantId === variantId
       ) {
         return chat;
@@ -4102,7 +4172,7 @@ export default function App({
       const currentSnapshots = annotationSnapshots(annotations);
       const targetSnapshots = materializeAnnotationSnapshots(
         annotations,
-        currentMessage.content,
+        currentContent,
         targetVariant.content,
         targetVariant.anchors,
       );

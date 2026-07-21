@@ -42,7 +42,7 @@ export function SourceRewriteModal({
   proposed: string | null;
   initialMode: SourceRewriteMode;
   wholeDocument: boolean;
-  targetRole: "source" | "assistant";
+  targetRole: "source" | "assistant" | "inline-elaboration";
   model: string;
   generating: boolean;
   error: string;
@@ -71,12 +71,24 @@ export function SourceRewriteModal({
           <div>
             <span>
               {wholeDocument
-                ? targetRole === "source" ? "Imported source" : "Model response"
-                : targetRole === "source" ? "Selected source blocks" : "Selected response blocks"}
+                ? targetRole === "source"
+                  ? "Imported source"
+                  : targetRole === "inline-elaboration"
+                    ? "Inline elaboration"
+                    : "Model response"
+                : targetRole === "source"
+                  ? "Selected source blocks"
+                  : targetRole === "inline-elaboration"
+                    ? "Selected inline elaboration blocks"
+                    : "Selected response blocks"}
             </span>
             <h2 id="source-rewrite-title">
               {wholeDocument
-                ? targetRole === "source" ? "Edit source" : "Edit response"
+                ? targetRole === "source"
+                  ? "Edit source"
+                  : targetRole === "inline-elaboration"
+                    ? "Edit inline elaboration"
+                    : "Edit response"
                 : "Rewrite selection"}
             </h2>
           </div>

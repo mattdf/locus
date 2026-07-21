@@ -2081,6 +2081,20 @@ a:focus-visible {
   gap: 3px;
 }
 
+.inline-elaboration-card__edit-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: 3px;
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.inline-elaboration-card__edit-switcher > span {
+  min-width: 28px;
+  text-align: center;
+}
+
 .inline-elaboration-card button {
   display: inline-flex;
   min-height: 25px;

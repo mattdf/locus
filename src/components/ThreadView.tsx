@@ -40,7 +40,7 @@ import type {
   VisualizationContextScope,
   VisualizationEngine,
 } from "../types";
-import { childThreads, messagesForNode } from "../lib/tree";
+import { activeEditContent, childThreads, messagesForNode } from "../lib/tree";
 import { formatDuration, generationDetails } from "../lib/generation";
 import { applyMarkdownShortcut } from "../lib/textarea";
 import { compatibleReasoningEffort } from "../lib/providers";
@@ -1041,6 +1041,11 @@ export function ThreadView({
                     </AnchoredInlineMount>
                   ))}
                   {inlineElaborations.map((elaboration) => {
+                    const renderedElaboration = {
+                      ...elaboration,
+                      content: activeEditContent(node, elaboration.id, elaboration.content),
+                    };
+                    const inlineEditGroup = node.assistantEdits?.[elaboration.id];
                     const furtherNode = elaboration.furtherElaborationNodeId
                       ? chat.nodes[elaboration.furtherElaborationNodeId]
                       : undefined;
@@ -1061,7 +1066,7 @@ export function ThreadView({
                         blockIndex={elaboration.anchor.blockIndex}
                       >
                         <InlineElaborationCard
-                          elaboration={elaboration}
+                          elaboration={renderedElaboration}
                           nodeId={node.id}
                           definitions={
                             definitionsByMessage.get(elaboration.id) ?? EMPTY_DEFINITIONS
@@ -1072,6 +1077,8 @@ export function ThreadView({
                           onStop={onStopInlineElaboration}
                           onDelete={onDeleteInlineElaboration}
                           onElaborateFurther={onElaborateFurther}
+                          editGroup={inlineEditGroup}
+                          onSwitchEdit={onSwitchAssistantEdit}
                           onOpenFurtherElaboration={() => {
                             if (furtherNode) onOpenElaboration(furtherNode.id);
                           }}

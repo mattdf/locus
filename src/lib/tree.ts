@@ -78,13 +78,25 @@ export function messagesForNode(node: ThreadNode): Message[] {
       };
     }
 
-    const editGroup = node.assistantEdits?.[resolved.id];
-    const activeEdit = editGroup
-      ? editGroup.variants.find((variant) => variant.id === editGroup.activeVariantId) ??
-        editGroup.variants[0]
-      : undefined;
-    return activeEdit ? { ...resolved, content: activeEdit.content } : resolved;
+    return {
+      ...resolved,
+      content: activeEditContent(node, resolved.id, resolved.content),
+    };
   });
+}
+
+/** Resolves the selected immutable rewrite leaf for any generated content entity. */
+export function activeEditContent(
+  node: ThreadNode,
+  contentId: string,
+  originalContent: string,
+): string {
+  const editGroup = node.assistantEdits?.[contentId];
+  const activeEdit = editGroup
+    ? editGroup.variants.find((variant) => variant.id === editGroup.activeVariantId) ??
+      editGroup.variants[0]
+    : undefined;
+  return activeEdit?.content ?? originalContent;
 }
 
 export function contextBeforeMessage(

@@ -62,7 +62,33 @@ const chat: ChatTree = {
             { id: "assistant-rewrite", content: "Active rewritten answer", anchors: emptyAnchors(), kind: "rewrite", createdAt },
           ],
         },
+        "inline-share": {
+          assistantMessageId: "inline-share",
+          activeVariantId: "inline-rewrite",
+          variants: [
+            { id: "inline-original", content: "Original inline explanation", anchors: emptyAnchors(), kind: "original", createdAt },
+            { id: "inline-rewrite", content: "Active rewritten inline explanation", anchors: emptyAnchors(), kind: "rewrite", createdAt },
+          ],
+        },
       },
+      inlineElaborations: [
+        {
+          id: "inline-share",
+          anchor: {
+            sourceNodeId: "root",
+            sourceMessageId: "assistant-regenerated",
+            quote: "answer",
+            blockIndex: 0,
+            start: 21,
+            end: 27,
+            status: "resolved",
+          },
+          hint: "private hint",
+          content: "Original inline explanation",
+          createdAt,
+          updatedAt: createdAt,
+        },
+      ],
       sourceEditUndo: {
         id: "source-undo",
         sourceMessageId: "source-root",
@@ -92,6 +118,11 @@ assert.deepEqual(
   ],
   "A share must contain only the active user, generation, assistant-edit, and source-edit content",
 );
+assert.equal(
+  node.inlineElaborations?.[0].content,
+  "Active rewritten inline explanation",
+  "A share must flatten the active inline-elaboration rewrite",
+);
 
 for (const privateField of [
   "messageRevisions",
@@ -118,6 +149,8 @@ for (const hiddenContent of [
   "First edited answer",
   "Regenerated answer",
   "Original imported Markdown",
+  "Original inline explanation",
+  "private hint",
 ]) {
   assert.equal(
     serialized.includes(hiddenContent),

@@ -1,5 +1,6 @@
 import {
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   CornerUpRight,
   LoaderCircle,
@@ -12,6 +13,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatDuration, generationDetails } from "../lib/generation";
 import type {
+  AssistantEditGroup,
   InlineDefinition,
   InlineElaboration,
   Message,
@@ -36,6 +38,8 @@ interface InlineElaborationCardProps {
   onStop: (elaborationId: string) => void;
   onDelete: (elaborationId: string) => void;
   onElaborateFurther: (elaborationId: string) => void;
+  editGroup?: AssistantEditGroup;
+  onSwitchEdit: (elaborationId: string, variantId: string) => void;
   onOpenFurtherElaboration: () => void;
   furtherElaborationState?: "pending" | "ready";
   readOnly?: boolean;
@@ -64,6 +68,8 @@ export function InlineElaborationCard({
   onStop,
   onDelete,
   onElaborateFurther,
+  editGroup,
+  onSwitchEdit,
   onOpenFurtherElaboration,
   furtherElaborationState,
   readOnly = false,
@@ -73,6 +79,14 @@ export function InlineElaborationCard({
   const cardRef = useRef<HTMLElement>(null);
   const hintRef = useRef<HTMLInputElement>(null);
   const draft = !elaboration.pending && !elaboration.content && !elaboration.error;
+  const activeEditIndex = editGroup
+    ? Math.max(
+        0,
+        editGroup.variants.findIndex(
+          (variant) => variant.id === editGroup.activeVariantId,
+        ),
+      )
+    : 0;
   const contentMessage = useMemo<Message>(() => ({
     id: elaboration.id,
     role: "assistant",
@@ -108,6 +122,38 @@ export function InlineElaborationCard({
       <header>
         <span><MessageSquareMore size={14} /> Inline elaboration</span>
         <div>
+          {!readOnly && editGroup && editGroup.variants.length > 1 && (
+            <span
+              className="inline-elaboration-card__edit-switcher"
+              aria-label="Inline elaboration edit versions"
+            >
+              <button
+                type="button"
+                aria-label="Previous inline elaboration edit"
+                disabled={elaboration.pending || activeEditIndex === 0}
+                onClick={() => onSwitchEdit(
+                  elaboration.id,
+                  editGroup.variants[activeEditIndex - 1].id,
+                )}
+              >
+                <ChevronLeft size={12} />
+              </button>
+              <span>{activeEditIndex + 1} / {editGroup.variants.length}</span>
+              <button
+                type="button"
+                aria-label="Next inline elaboration edit"
+                disabled={
+                  elaboration.pending || activeEditIndex === editGroup.variants.length - 1
+                }
+                onClick={() => onSwitchEdit(
+                  elaboration.id,
+                  editGroup.variants[activeEditIndex + 1].id,
+                )}
+              >
+                <ChevronRight size={12} />
+              </button>
+            </span>
+          )}
           {!readOnly && !elaboration.pending && !draft && (
             <button
               type="button"
