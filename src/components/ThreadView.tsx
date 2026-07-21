@@ -319,6 +319,14 @@ export function ThreadView({
 }: ThreadViewProps) {
   const messagesRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  // MarkdownMessage deliberately ignores callback identity while memoizing expensive
+  // rendered math. Keep its handler stable while forwarding to the latest app state.
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const dispatchSelection = useCallback(
+    (selection: SelectionDraft) => onSelectRef.current(selection),
+    [],
+  );
   const copyResetTimer = useRef<number | null>(null);
   const scrollFrame = useRef<number | null>(null);
   const visualizationScrollFrame = useRef<number | null>(null);
@@ -748,18 +756,58 @@ export function ThreadView({
                     </button>
                   </span>
                 )}
-                {!readOnly && message.role === "source" && (
+                {message.role === "source" && (
                   <span className="message__controls">
-                    <button
-                      className="edit-message-button"
-                      type="button"
-                      aria-label="Edit imported Markdown source"
-                      disabled={waiting}
-                      onClick={() => onEditSource(message.id)}
-                    >
-                      <Pencil size={11} />
-                      <span>Edit source</span>
-                    </button>
+                    {!readOnly && (
+                      <button
+                        className="edit-message-button"
+                        type="button"
+                        aria-label="Edit imported Markdown source"
+                        disabled={waiting}
+                        onClick={() => onEditSource(message.id)}
+                      >
+                        <Pencil size={11} />
+                        <span>Edit source</span>
+                      </button>
+                    )}
+                    {message.content && (
+                      <button
+                        className={`copy-response-button ${messageCopyStatus ? `copy-response-button--${messageCopyStatus}` : ""}`}
+                        type="button"
+                        aria-label={
+                          messageCopyStatus
+                            ? messageCopyStatus === "copied"
+                              ? "Imported Markdown copied"
+                              : "Copy failed"
+                            : "Copy imported Markdown"
+                        }
+                        onClick={() => void copyResponse(message.id, message.content)}
+                      >
+                        {messageCopyStatus === "copied" ? (
+                          <Check size={11} />
+                        ) : (
+                          <Copy size={11} />
+                        )}
+                        <span>
+                          {messageCopyStatus
+                            ? messageCopyStatus === "copied"
+                              ? "Copied"
+                              : "Failed"
+                            : "Copy"}
+                        </span>
+                      </button>
+                    )}
+                    {message.content && (
+                      <button
+                        className="print-response-button"
+                        type="button"
+                        aria-label="Print imported source"
+                        onClick={() => printResponse(message.id)}
+                      >
+                        <Printer size={11} />
+                        <span>Print</span>
+                      </button>
+                    )}
                   </span>
                 )}
                 {message.role === "assistant" && !message.pending && (
@@ -1011,7 +1059,7 @@ export function ThreadView({
                   definitions={definitions}
                   visualizations={visualizations}
                   inlineElaborations={inlineElaborations}
-                  onSelect={onSelect}
+                  onSelect={dispatchSelection}
                   onOpenElaboration={onOpenElaboration}
                   onOpenDefinition={onOpenDefinition}
                   onOpenVisualization={focusVisualization}
@@ -1083,7 +1131,7 @@ export function ThreadView({
                           definitions={
                             definitionsByMessage.get(elaboration.id) ?? EMPTY_DEFINITIONS
                           }
-                          onSelect={onSelect}
+                          onSelect={dispatchSelection}
                           onOpenDefinition={onOpenDefinition}
                           onGenerate={onGenerateInlineElaboration}
                           onStop={onStopInlineElaboration}
