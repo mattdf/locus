@@ -25,8 +25,8 @@ exact ancestor path supplied to the model while keeping individual updates inexp
 - `server/access.ts` owns signup policy, waitlist, hashed single-use invites, and managed-credential
   assignment. `server/access-routes.ts` and `server/admin-access-routes.ts` expose the public and
   administrator portions of that policy.
-- `server/metapost.ts` and `server/tikz.ts` validate engine-specific figure bodies and dispatch
-  them to an isolated compiler.
+- `server/metapost.ts` and `server/tikz.ts` bound request and artifact sizes and dispatch figure
+  bodies to an isolated compiler.
 
 `LOCUS_MODE=local` and `LOCUS_MODE=hosted` are explicit modes. Hosted mode does not fall back to
 the local workspace or project key files. The broader multi-user design is recorded in
@@ -34,11 +34,12 @@ the local workspace or project key files. The broader multi-user design is recor
 
 ## Visualization sandbox
 
-MetaPost and TikZ jobs run as a non-root user with no network, no Linux capabilities, a read-only
-root filesystem, bounded CPU, memory, process and output limits, and only a disposable job
-directory mounted writable. TeX file access is paranoid and shell escape is disabled.
+MetaPost and TikZ jobs run as a non-root user with no external network access, no Linux
+capabilities, a read-only root filesystem, bounded CPU, memory, process and output limits, and
+only a disposable job directory mounted writable. TeX file access is paranoid and shell escape
+is disabled.
 
-MetaPost `btex ... etex` labels pass through a bounded LaTeX command allowlist. TikZ bodies reject
-file and process access, preambles, macro obfuscation, and unsafe environments before a compiler
-container starts. Local compilation uses a fresh Docker container; hosted compilation uses the
-network-internal service defined by `compose.hosted.yaml`.
+There is deliberately no MetaPost, TeX-command, or TikZ-environment allowlist. The actual compiler
+decides whether source is valid. Local compilation uses a fresh Docker container; hosted
+compilation uses the network-internal service defined by `compose.hosted.yaml`. Both impose hard
+in-container and caller-side wall-clock deadlines in addition to the resource limits above.

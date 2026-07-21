@@ -269,7 +269,7 @@ canvasWidth := 220; canvasHeight := 120;
 p0 := (30,40); p1 := (190,90);
 fill unitsquare xscaled canvasWidth yscaled canvasHeight withcolor locusBg;
 drawarrow p0--p1 withpen pencircle scaled locusStrong withcolor locusTeal;
-label(btex input \\(x^2\\) etex, (110,70)) withcolor locusInk;
+label(btex $\\begin{array}{c|c}x&x^2\\\\\\hline 1&1\\end{array}$ etex, (110,70)) withcolor locusInk;
 setbounds currentpicture to unitsquare xscaled canvasWidth yscaled canvasHeight;`,
   }),
 });
@@ -280,23 +280,17 @@ assert(
   `MetaPost numeric-suffix declarations were not normalized: ${JSON.stringify(metapostBody)}`,
 );
 
-const invalidMetaPostDelimiter = await request("/api/metapost/compile", {
+const tikz = await request("/api/tikz/compile", {
   method: "POST",
   cookie: aliceCookie,
   body: JSON.stringify({
-    source: `numeric canvasWidth, canvasHeight;
-canvasWidth := 220; canvasHeight := 120;
-fill unitsquare xscaled canvasWidth yscaled canvasHeight withcolor locusBg;
-label(btex \\(x^2 etex, (110,70)) withcolor locusInk;
-setbounds currentpicture to unitsquare xscaled canvasWidth yscaled canvasHeight;`,
+    source: String.raw`\path[use as bounding box] (0,0) rectangle (5,3);
+\fill[locusBg] (0,0) rectangle (5,3);
+\node[locus label] at (2.5,1.5) {$\begin{aligned} f(x)&=x^2 \\ f'(x)&=2x \end{aligned}$};`,
   }),
 });
-const invalidMetaPostDelimiterBody = await json(invalidMetaPostDelimiter);
-assert(
-  invalidMetaPostDelimiter.status === 400 &&
-    String(invalidMetaPostDelimiterBody.error ?? "").includes("unclosed \\("),
-  `Unbalanced MetaPost inline math was not rejected: ${JSON.stringify(invalidMetaPostDelimiterBody)}`,
-);
+const tikzBody = await json(tikz);
+assert(tikz.ok && tikzBody.svg?.includes("<svg"), `TikZ compilation failed: ${JSON.stringify(tikzBody)}`);
 
 const bobUser = adminUsers.users.find((user) => user.email === bob.email);
 assert(bobUser?.id, "Bob was missing from account management");

@@ -18,14 +18,6 @@ const MAX_CONCURRENT_COMPILATIONS = Math.min(
 );
 let activeCompilations = 0;
 
-// User code is still executed only in the isolated compiler container. This
-// validation is an additional boundary that rejects TeX primitives capable of
-// file access, shell/process access, macro obfuscation, or document mutation.
-const FORBIDDEN_COMMAND = /\\(?:documentclass|usepackage|RequirePackage|input|include|includeonly|includegraphics|openin|openout|read|write|closein|closeout|immediate|special|catcode|csname|endcsname|expandafter|noexpand|afterassignment|aftergroup|newcommand|renewcommand|providecommand|DeclareRobustCommand|def|edef|gdef|xdef|let|futurelet|newread|newwrite|everyjob|everyeof|everypar|everymath|everydisplay|shipout|output|font|fontdimen|pdfobj|pdfxform|pdfliteral|pdfcatalog|pdfinfo|pdfmapfile|directlua|luaexec|write18|ShellEscape|tikzexternalize|tikzexternalenable|pgfimage|href|url|file|jobname|typeout|message|errmessage|show|meaning|makeatletter|makeatother)\b/i;
-const ALLOWED_ENVIRONMENTS = new Set(["scope", "array"]);
-const MAX_ENVIRONMENTS = 64;
-const MAX_ARRAY_COLUMNS = 12;
-
 export interface TikzCompileResult {
   svg: string;
   log: string;
@@ -53,83 +45,8 @@ function validateBody(source: unknown): string {
       413,
     );
   }
-  if (/[^\u0009\u000a\u000d\u0020-\u007e]/u.test(body)) {
-    throw new TikzCompileError(
-      "TikZ source must use ASCII text and LaTeX commands for symbols.",
-      400,
-    );
-  }
-  if (body.includes("^^") || body.includes("%")) {
-    throw new TikzCompileError(
-      "TeX character rewriting and comments are disabled by the visualization sandbox.",
-      400,
-    );
-  }
-  const forbiddenCommand = body.match(FORBIDDEN_COMMAND)?.[0];
-  if (forbiddenCommand) {
-    throw new TikzCompileError(
-      `The TeX command “${forbiddenCommand}” is disabled by the visualization sandbox.`,
-      400,
-    );
-  }
-  if (/\/(?:\.code|\.style|\.append style|utils\/exec)\b/i.test(body)) {
-    throw new TikzCompileError(
-      "Executable PGF key handlers are disabled by the visualization sandbox.",
-      400,
-    );
-  }
-  const environmentStack: string[] = [];
-  let environmentCount = 0;
-  for (const match of body.matchAll(/\\(begin|end)\s*\{([^}]+)\}/g)) {
-    const action = match[1];
-    const environment = match[2].trim();
-    if (!ALLOWED_ENVIRONMENTS.has(environment)) {
-      throw new TikzCompileError(
-        `The TeX environment “${environment}” is disabled in TikZ figure bodies.`,
-        400,
-      );
-    }
-    if (action === "begin") {
-      environmentCount += 1;
-      if (environmentCount > MAX_ENVIRONMENTS) {
-        throw new TikzCompileError("TikZ source contains too many nested environments.", 400);
-      }
-      if (environment === "array") {
-        const remainder = body.slice((match.index ?? 0) + match[0].length);
-        const columnSpec = remainder.match(/^\s*\{([lcr|\s]+)\}/)?.[1] ?? "";
-        const columns = columnSpec.match(/[lcr]/g)?.length ?? 0;
-        if (!columnSpec || columns < 1 || columns > MAX_ARRAY_COLUMNS) {
-          throw new TikzCompileError(
-            `TikZ array column specifications may contain only l, c, r, separators, and at most ${MAX_ARRAY_COLUMNS} columns.`,
-            400,
-          );
-        }
-      }
-      environmentStack.push(environment);
-      continue;
-    }
-    if (environmentStack.pop() !== environment) {
-      throw new TikzCompileError("TikZ source has mismatched TeX environments.", 400);
-    }
-  }
-  if (environmentStack.length) {
-    throw new TikzCompileError("TikZ source has unclosed TeX environments.", 400);
-  }
-
-  let braceDepth = 0;
-  for (let index = 0; index < body.length; index += 1) {
-    if (body[index] === "\\") {
-      index += 1;
-      continue;
-    }
-    if (body[index] === "{") braceDepth += 1;
-    if (body[index] === "}") braceDepth -= 1;
-    if (braceDepth < 0 || braceDepth > 64) {
-      throw new TikzCompileError("TikZ source has invalid or excessively nested braces.", 400);
-    }
-  }
-  if (braceDepth !== 0) {
-    throw new TikzCompileError("TikZ source has unbalanced braces.", 400);
+  if (/[^\u0009\u000a\u000d\u0020-\uffff]/u.test(body)) {
+    throw new TikzCompileError("TikZ source contains unsupported control characters.", 400);
   }
   return body;
 }

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-# LaTeX is invoked only by MetaPost for server-validated labels. Paranoid
+# LaTeX is invoked only by MetaPost for labels inside the disposable job. Paranoid
 # Kpathsea settings allow the job directory and the installed TeX package tree,
 # while blocking arbitrary absolute/parent-path reads and non-job writes.
 export openin_any=p

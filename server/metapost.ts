@@ -10,9 +10,6 @@ const SERVICE_URL = process.env.METAPOST_SERVICE_URL?.trim().replace(/\/$/, "") 
 const MAX_SOURCE_BYTES = 100_000;
 const MAX_SVG_BYTES = 2_000_000;
 const MAX_LOG_BYTES = 24_000;
-const MAX_TEX_LABELS = 128;
-const MAX_TEX_LABEL_BYTES = 4_096;
-const MAX_TOTAL_TEX_BYTES = 32_000;
 const HOST_TIMEOUT_MS = 10_000;
 const MAX_CONCURRENT_COMPILATIONS = Math.min(
   16,
@@ -20,69 +17,12 @@ const MAX_CONCURRENT_COMPILATIONS = Math.min(
 );
 let activeCompilations = 0;
 
-const FORBIDDEN_SOURCE =
-  /\b(?:beginfig|endfig|end|input|btex|etex|verbatimtex|write|readfrom|closefrom|scantokens|runscript|special|externalfigure|fontmapfile|fontmapline)\b/i;
-
-const SAFE_TEX_COMMANDS = new Set([
-  "alpha", "beta", "gamma", "delta", "epsilon", "varepsilon", "zeta", "eta",
-  "theta", "vartheta", "iota", "kappa", "lambda", "mu", "nu", "xi", "pi",
-  "varpi", "rho", "varrho", "sigma", "varsigma", "tau", "upsilon", "phi",
-  "varphi", "chi", "psi", "omega", "Gamma", "Delta", "Theta", "Lambda", "Xi",
-  "Pi", "Sigma", "Upsilon", "Phi", "Psi", "Omega",
-  "sin", "cos", "tan", "cot", "sec", "csc", "log", "ln", "exp", "det", "dim",
-  "ker", "max", "min", "sup", "inf", "lim", "gcd", "arg", "deg", "hom", "Pr",
-  "operatorname",
-  "sum", "prod", "coprod", "int", "iint", "iiint", "oint", "bigcup", "bigcap",
-  "bigvee", "bigwedge", "le", "leq", "ge", "geq", "ne", "neq", "approx",
-  "leqslant", "geqslant", "lesssim", "gtrsim", "lessapprox", "gtrapprox", "ll", "gg",
-  "sim", "simeq", "equiv", "cong", "asymp", "doteq", "propto", "prec", "succ",
-  "preceq", "succeq", "in", "notin", "ni", "subset", "subseteq", "supset", "supseteq",
-  "parallel", "perp", "mid", "models", "bowtie", "smile", "frown", "colon", "not",
-  "iff", "implies", "impliedby", "therefore", "because", "pm", "mp", "times",
-  "div", "cdot", "ast", "star", "circ", "bullet", "cap", "cup", "setminus",
-  "smallsetminus", "complement", "wedge", "vee", "oplus", "ominus", "otimes", "odot",
-  "circledast", "leftarrow", "rightarrow", "leftrightarrow", "Leftarrow", "Rightarrow",
-  "Leftrightarrow", "longleftarrow", "longrightarrow", "longleftrightarrow", "Longleftarrow",
-  "Longrightarrow", "Longleftrightarrow", "mapsto", "longmapsto", "hookleftarrow",
-  "hookrightarrow", "leftharpoonup", "leftharpoondown", "rightharpoonup", "rightharpoondown",
-  "rightleftharpoons", "rightsquigarrow", "leadsto", "multimap", "to", "gets", "uparrow",
-  "downarrow", "infty", "partial", "nabla", "ell", "hbar",
-  "imath", "jmath", "Re", "Im", "wp", "emptyset", "varnothing", "forall", "exists",
-  "neg", "top", "bot", "angle", "triangle", "triangleleft", "triangleright", "aleph",
-  "beth", "prime", "dagger", "ddagger", "dots", "ldots", "cdots", "vdots", "ddots",
-  "langle", "rangle", "lvert", "rvert", "vert", "Vert", "lfloor", "rfloor", "lceil",
-  "rceil", "backslash", "frac", "dfrac", "tfrac", "binom", "dbinom", "tbinom",
-  "sqrt", "overline", "underline", "overbrace", "underbrace", "vec", "overrightarrow",
-  "overleftarrow", "hat", "widehat", "bar", "dot", "ddot", "tilde", "widetilde",
-  "mathrm", "mathbf", "boldsymbol", "mathit", "mathsf", "mathtt", "mathcal", "mathbb",
-  "mathfrak", "text",
-  "textnormal", "textbf", "textit", "textrm", "textsf", "texttt", "left", "right",
-  // Harmless legacy TeX font declarations still occur frequently in generated
-  // mathematical labels. They affect typography only and do not expand the
-  // sandbox's file, process, macro, or document-mutation capabilities.
-  "rm", "bf", "it", "sl", "sf", "tt", "sc", "cal", "mit", "oldstyle",
-  "big", "Big", "bigg", "Bigg", "displaystyle", "textstyle", "scriptstyle",
-  "scriptscriptstyle", "phantom", "vphantom", "hphantom", "smash", "limits",
-  "nolimits", "overset", "underset", "stackrel", "boxed", "pmod", "mod", "bmod",
-  "mathop", "mathrel", "mathbin", "mathord",
-  "quad", "qquad",
-]);
-
-const SAFE_TEX_SYMBOL_COMMANDS = new Set([
-  ",", ";", ":", "!", "{", "}", "|", "_", " ",
-  // Standard LaTeX inline-math delimiters. validateTexLabel separately
-  // requires them to be balanced and forbids mixing them with $...$.
-  "(", ")",
-]);
-
 interface InspectedSource {
   executable: string;
-  texLabels: string[];
 }
 
 function inspectSource(source: string): InspectedSource {
   let code = "";
-  const texLabels: string[] = [];
   let inString = false;
   let inComment = false;
   let index = 0;
@@ -121,11 +61,11 @@ function inspectSource(source: string): InspectedSource {
       const labelStart = index + 4;
       const terminator = /\betex\b/i.exec(source.slice(labelStart));
       if (!terminator || terminator.index == null) {
-        throw new MetaPostCompileError("A TeX label is missing its closing etex marker.", 400);
+        code += " ".repeat(source.length - index);
+        break;
       }
       const labelEnd = labelStart + terminator.index;
       const blockEnd = labelEnd + terminator[0].length;
-      texLabels.push(source.slice(labelStart, labelEnd));
       code += " ".repeat(blockEnd - index);
       index = blockEnd;
       continue;
@@ -135,104 +75,7 @@ function inspectSource(source: string): InspectedSource {
     index += 1;
   }
 
-  return { executable: code, texLabels };
-}
-
-function validateTexLabel(label: string, labelIndex: number): void {
-  const displayIndex = labelIndex + 1;
-  if (Buffer.byteLength(label, "utf8") > MAX_TEX_LABEL_BYTES) {
-    throw new MetaPostCompileError(
-      `TeX label ${displayIndex} exceeds the ${MAX_TEX_LABEL_BYTES.toLocaleString()} byte limit.`,
-      413,
-    );
-  }
-  if (/[^\u0009\u000a\u000d\u0020-\u007e]/u.test(label)) {
-    throw new MetaPostCompileError(
-      `TeX label ${displayIndex} must use ASCII text and LaTeX commands for symbols.`,
-      400,
-    );
-  }
-  if (label.includes("%") || label.includes("^^") || /[&#~]/.test(label)) {
-    throw new MetaPostCompileError(
-      `TeX label ${displayIndex} contains syntax that is disabled by the visualization sandbox.`,
-      400,
-    );
-  }
-
-  for (const match of label.matchAll(/\\([A-Za-z]+|.)/g)) {
-    const command = match[1];
-    const safe = /^[A-Za-z]+$/.test(command)
-      ? SAFE_TEX_COMMANDS.has(command)
-      : SAFE_TEX_SYMBOL_COMMANDS.has(command);
-    if (!safe) {
-      throw new MetaPostCompileError(
-        `The TeX command “\\${command}” in label ${displayIndex} is not allowed by the visualization sandbox.`,
-        400,
-      );
-    }
-  }
-
-  let braceDepth = 0;
-  let mathDelimiters = 0;
-  let parenthesizedMathOpen = false;
-  for (let index = 0; index < label.length; index += 1) {
-    const character = label[index];
-    if (character === "\\") {
-      const next = label[index + 1] ?? "";
-      if (next === "(") {
-        if (parenthesizedMathOpen || mathDelimiters % 2 !== 0) {
-          throw new MetaPostCompileError(
-            `TeX label ${displayIndex} has nested or mixed inline-math delimiters.`,
-            400,
-          );
-        }
-        parenthesizedMathOpen = true;
-        index += 1;
-      } else if (next === ")") {
-        if (!parenthesizedMathOpen) {
-          throw new MetaPostCompileError(
-            `TeX label ${displayIndex} has an unmatched \\) math delimiter.`,
-            400,
-          );
-        }
-        parenthesizedMathOpen = false;
-        index += 1;
-      } else if (/[A-Za-z]/.test(next)) {
-        while (/[A-Za-z]/.test(label[index + 1] ?? "")) index += 1;
-      } else {
-        index += 1;
-      }
-      continue;
-    }
-    if (character === "{") {
-      braceDepth += 1;
-      if (braceDepth > 32) {
-        throw new MetaPostCompileError(`TeX label ${displayIndex} is nested too deeply.`, 400);
-      }
-    } else if (character === "}") {
-      braceDepth -= 1;
-      if (braceDepth < 0) {
-        throw new MetaPostCompileError(`TeX label ${displayIndex} has unbalanced braces.`, 400);
-      }
-    } else if (character === "$") {
-      if (parenthesizedMathOpen) {
-        throw new MetaPostCompileError(
-          `TeX label ${displayIndex} has nested or mixed inline-math delimiters.`,
-          400,
-        );
-      }
-      mathDelimiters += 1;
-    }
-  }
-  if (braceDepth !== 0) {
-    throw new MetaPostCompileError(`TeX label ${displayIndex} has unbalanced braces.`, 400);
-  }
-  if (mathDelimiters % 2 !== 0) {
-    throw new MetaPostCompileError(`TeX label ${displayIndex} has an unclosed math delimiter.`, 400);
-  }
-  if (parenthesizedMathOpen) {
-    throw new MetaPostCompileError(`TeX label ${displayIndex} has an unclosed \\( math delimiter.`, 400);
-  }
+  return { executable: code };
 }
 
 export interface MetaPostCompileResult {
@@ -318,32 +161,6 @@ function validateBody(source: unknown): string {
     throw new MetaPostCompileError("MetaPost source contains unsupported control characters.", 400);
   }
   const normalizedBody = normalizeNumericSuffixDeclarations(body);
-  const inspected = inspectSource(normalizedBody);
-  if (inspected.texLabels.length > MAX_TEX_LABELS) {
-    throw new MetaPostCompileError(
-      `A visualization may contain at most ${MAX_TEX_LABELS} TeX labels.`,
-      413,
-    );
-  }
-  const totalTexBytes = inspected.texLabels.reduce(
-    (total, label) => total + Buffer.byteLength(label, "utf8"),
-    0,
-  );
-  if (totalTexBytes > MAX_TOTAL_TEX_BYTES) {
-    throw new MetaPostCompileError(
-      `TeX labels exceed the ${MAX_TOTAL_TEX_BYTES.toLocaleString()} byte total limit.`,
-      413,
-    );
-  }
-  inspected.texLabels.forEach(validateTexLabel);
-
-  const forbidden = inspected.executable.match(FORBIDDEN_SOURCE)?.[0];
-  if (forbidden) {
-    throw new MetaPostCompileError(
-      `The MetaPost primitive “${forbidden}” is disabled by the visualization sandbox.`,
-      400,
-    );
-  }
   return normalizedBody;
 }
 

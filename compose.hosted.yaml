@@ -34,6 +34,8 @@ services:
     pids_limit: 96
     mem_limit: 512m
     cpus: 1.0
+    networks:
+      - visualization
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 10s
@@ -92,6 +94,9 @@ services:
     cpus: 2.0
     expose:
       - "8787"
+    networks:
+      - default
+      - visualization
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
@@ -101,3 +106,7 @@ services:
 
 volumes:
   locus_postgres_data:
+
+networks:
+  visualization:
+    internal: true

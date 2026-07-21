@@ -5,8 +5,9 @@ umask 022
 cd "${LOCUS_WORKDIR:-/work}"
 test -f figure.tex
 
-# TeX runs without shell escape, network access, or a writable filesystem beyond
-# this throwaway job directory. The host also enforces a separate deadline.
+# TeX runs without shell escape or a writable filesystem beyond this throwaway
+# job directory. The container has no external network access, and the caller
+# also enforces a separate deadline.
 export HOME=/tmp
 export openin_any=p
 export openout_any=p

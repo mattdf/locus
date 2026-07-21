@@ -64,14 +64,15 @@ node build/server/admin.mjs create-user --email you@example.com --name 'Your Nam
   can create at most one account.
 - Suspension deletes every session, stops in-flight model generations, and is checked again on
   every protected request.
-- The MetaPost service accepts only the server-validated wrapped source over the private Compose
+- The MetaPost service accepts bounded, server-wrapped source over an internal-only Compose
   network and executes compilation without a shell.
 
-MetaPost and TikZ jobs run as a non-root user with no network, no Linux capabilities, a read-only
-root filesystem, bounded CPU, memory, process and output limits, and only a disposable job
-directory mounted writable. TeX file access is paranoid and shell escape is disabled. MetaPost
-labels pass through a bounded LaTeX command allowlist; TikZ bodies reject file and process access,
-preambles, macro obfuscation, and unsafe environments before compilation. Set
+MetaPost and TikZ jobs run as a non-root user with no external network access, no Linux
+capabilities, a read-only root filesystem, bounded CPU, memory, process and output limits, and
+only a disposable job directory mounted writable. TeX file access is paranoid and shell escape
+is disabled. Figure
+source is handed to the real compiler without a command or environment allowlist; failed or
+pathological jobs are bounded by hard wall-clock deadlines. Set
 `METAPOST_MAX_CONCURRENCY` from 1 through 16 to match the host's capacity; the default is 2.
 
 Run one `app` replica for now. Streaming jobs are reconnectable across browser refreshes but live

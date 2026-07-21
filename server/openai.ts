@@ -35,22 +35,22 @@ async function readPromptFile(file: string, displayName: string): Promise<string
 function visualizationContract(engine: "metapost" | "tikz"): string {
   if (engine === "tikz") {
     return String.raw`<engine_contract engine="tikz">
-Return only the contents of one tikzpicture. Do not include Markdown, prose, a preamble, begin/end tikzpicture, package loading, macro or style definitions, comments, file or process access, shell execution, or external images.
+Return only the contents of one tikzpicture. Do not include Markdown, prose, a document preamble, or begin/end tikzpicture.
 
 The compiler preloads TikZ with arrows.meta, positioning, calc, fit, matrix, intersections, decorations.pathreplacing, backgrounds, and patterns. It provides colors locusBg, locusPanel, locusInk, locusMuted, locusGuide, locusBlue, locusTeal, locusPurple, and locusOrange, plus styles "locus guide", "locus line", "locus strong", "locus arrow", "locus panel", "locus label", and "locus muted". Use these directly. Use the palette semantically; do not force every color into the figure.
 
-Use ordinary LaTeX math in nodes. Only scope environments and simple math array environments are permitted; array column specifications may contain l, c, r, and | with at most 12 columns. No other TeX environments are allowed.
+Use ordinary LaTeX math in nodes. Standard LaTeX constructs provided by the preloaded packages may be used when they materially improve the figure.
 
 Choose bounds and aspect ratio for the concept. Begin with an explicit \path[use as bounding box] (...) rectangle (...); and fill that rectangle with locusBg. Use named coordinates, anchors, relative positioning, and explicit spacing. Keep every node, label, path, arrowhead, and brace inside the bounds with generous margins.
 </engine_contract>`;
   }
 
   return String.raw`<engine_contract engine="metapost">
-Return only the body of one MetaPost figure, to be inserted inside beginfig(1) ... endfig. Do not include Markdown, prose, beginfig, endfig, end, input, verbatimtex, macro definitions, comments, file or process access, externalfigure, special, or shell execution. Define every variable except the palette and line weights listed below.
+Return only the body of one MetaPost figure, to be inserted inside beginfig(1) ... endfig. Do not include Markdown or explanatory prose outside the figure. Define every variable except the palette and line weights listed below.
 
 The compiler provides colors locusBg, locusPanel, locusInk, locusMuted, locusGuide, locusBlue, locusTeal, locusPurple, and locusOrange, plus numeric weights locusThin, locusMedium, and locusStrong. Use the palette semantically; do not force every color into the figure. Give every visible label an explicit withcolor.
 
-Put all visible text in btex ... etex and use ordinary LaTeX math there; never use quoted MetaPost strings for visible text. Labels may use common LaTeX math and text commands, including harmless legacy font declarations such as \rm, but not preambles, environments, comments, macro definitions, raw %, #, or &, file or shell access, or TeX metaprogramming. Prefer \mathrm{...}, \mathbf{...}, and other modern scoped forms when practical, and prefer simpler equivalent notation over exotic commands.
+Put all visible text in btex ... etex and use ordinary LaTeX math there; never use quoted MetaPost strings for visible text. Standard LaTeX constructs provided by the preloaded packages may be used. Prefer \mathrm{...}, \mathbf{...}, and other modern scoped forms when practical, and prefer simpler equivalent notation over exotic commands.
 
 MetaPost treats trailing digits as suffixes. Never declare names such as p0, q1, or x2 individually. Either use descriptive word names such as pZero, or declare each suffix family once (for example, pair p[];) before using p0, p1, and so on.
 
