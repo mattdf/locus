@@ -48,6 +48,7 @@ interface MarkdownMessageProps {
   ) => void;
   onOpenVisualization: (visualizationId: string) => void;
   onOpenInlineElaboration: (elaborationId: string) => void;
+  selectionSurface?: SelectionDraft["surface"];
 }
 
 interface Point {
@@ -222,6 +223,7 @@ function MarkdownMessageComponent({
   onOpenDefinition,
   onOpenVisualization,
   onOpenInlineElaboration,
+  selectionSurface = "message",
 }: MarkdownMessageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const targetsRef = useRef<RangeTarget[]>([]);
@@ -519,6 +521,7 @@ function MarkdownMessageComponent({
     );
     onSelect({
       ...anchor,
+      surface: selectionSurface,
       endBlockIndex,
       sectionStart: section.start,
       sectionEnd: section.end,
@@ -538,20 +541,25 @@ function MarkdownMessageComponent({
       ref={containerRef}
       onMouseUp={(event) => {
         if (
+          selectionSurface !== "inline-elaboration" &&
           event.target instanceof Element &&
           event.target.closest(".inline-annotation-slot")
         ) return;
         captureSelection();
+        if (selectionSurface === "inline-elaboration") event.stopPropagation();
       }}
       onKeyUp={(event) => {
         if (
+          selectionSurface !== "inline-elaboration" &&
           event.target instanceof Element &&
           event.target.closest(".inline-annotation-slot")
         ) return;
         captureSelection();
+        if (selectionSurface === "inline-elaboration") event.stopPropagation();
       }}
       onClickCapture={(event) => {
         if (
+          selectionSurface !== "inline-elaboration" &&
           event.target instanceof Element &&
           event.target.closest(".inline-annotation-slot")
         ) return;
@@ -781,5 +789,6 @@ export const MarkdownMessage = memo(
     sameLinkedAnchors(left.linkedAnchors, right.linkedAnchors) &&
     sameDefinitions(left.definitions, right.definitions) &&
     sameVisualizations(left.visualizations, right.visualizations) &&
-    sameInlineElaborations(left.inlineElaborations, right.inlineElaborations),
+    sameInlineElaborations(left.inlineElaborations, right.inlineElaborations) &&
+    left.selectionSurface === right.selectionSurface,
 );

@@ -55,6 +55,12 @@ const EMPTY_DEFINITIONS: InlineDefinition[] = [];
 const EMPTY_VISUALIZATIONS: InlineVisualization[] = [];
 const EMPTY_INLINE_ELABORATIONS: InlineElaboration[] = [];
 
+function renderedMessageArticles(container: HTMLElement): HTMLElement[] {
+  return Array.from(
+    container.querySelectorAll<HTMLElement>(":scope > article[data-message-id]"),
+  );
+}
+
 interface ThreadViewProps {
   chat: ChatTree;
   node: ThreadNode;
@@ -80,6 +86,7 @@ interface ThreadViewProps {
   onGenerateInlineElaboration: (elaborationId: string, hint: string) => void;
   onStopInlineElaboration: (elaborationId: string) => void;
   onDeleteInlineElaboration: (elaborationId: string) => void;
+  onElaborateFurther: (elaborationId: string) => void;
   onSend: (message: string) => void;
   onStop: (assistantId: string) => void;
   onEditMessage: (revisionGroupId: string, content: string) => void;
@@ -280,6 +287,7 @@ export function ThreadView({
   onGenerateInlineElaboration,
   onStopInlineElaboration,
   onDeleteInlineElaboration,
+  onElaborateFurther,
   onSend,
   onStop,
   onEditMessage,
@@ -421,15 +429,18 @@ export function ThreadView({
 
   useEffect(() => {
     const container = messagesRef.current;
-    if (!container || messages.length < 2) return;
+    if (!container) return;
+    if (messages.length < 2) {
+      setCurrentMessageIndex(0);
+      setMessageNavigationVisible(false);
+      return;
+    }
     let frame: number | null = null;
     const syncCurrentMessage = () => {
       if (frame !== null) return;
       frame = window.requestAnimationFrame(() => {
         frame = null;
-        const articles = Array.from(
-          container.querySelectorAll<HTMLElement>("[data-message-id]"),
-        );
+        const articles = renderedMessageArticles(container);
         const marker = container.getBoundingClientRect().top + 24;
         let index = 0;
         articles.forEach((article, candidate) => {
@@ -444,14 +455,14 @@ export function ThreadView({
         setMessageNavigationVisible(
           container.scrollHeight - container.clientHeight > 120,
         );
-        setCurrentMessageIndex(Math.max(0, index));
+        setCurrentMessageIndex(
+          Math.min(messages.length - 1, Math.max(0, index)),
+        );
       });
     };
     const resizeObserver = new ResizeObserver(syncCurrentMessage);
     resizeObserver.observe(container);
-    container
-      .querySelectorAll<HTMLElement>("[data-message-id]")
-      .forEach((article) => resizeObserver.observe(article));
+    renderedMessageArticles(container).forEach((article) => resizeObserver.observe(article));
     syncCurrentMessage();
     container.addEventListener("scroll", syncCurrentMessage, { passive: true });
     window.addEventListener("resize", syncCurrentMessage);
@@ -469,9 +480,9 @@ export function ThreadView({
     const scrollToAnchor = () => {
       const container = messagesRef.current;
       if (!container) return;
-      const article = Array.from(
-        container.querySelectorAll<HTMLElement>("[data-message-id]"),
-      ).find((candidate) => candidate.dataset.messageId === scrollRequest.anchor.sourceMessageId);
+      const article = renderedMessageArticles(container).find(
+        (candidate) => candidate.dataset.messageId === scrollRequest.anchor.sourceMessageId,
+      );
       const markdown = article?.querySelector<HTMLElement>(".markdown-message");
       const block = Array.from(markdown?.children ?? []).filter(
         (element) => !element.classList.contains("inline-annotation-slot"),
@@ -570,7 +581,7 @@ export function ThreadView({
 
   const printResponse = (messageId: string) => {
     const article = Array.from(
-      messagesRef.current?.querySelectorAll<HTMLElement>("[data-message-id]") ?? [],
+      messagesRef.current ? renderedMessageArticles(messagesRef.current) : [],
     ).find((candidate) => candidate.dataset.messageId === messageId);
     if (!article) return;
 
@@ -603,7 +614,9 @@ export function ThreadView({
 
   const jumpToMessage = (index: number) => {
     const container = messagesRef.current;
-    const article = container?.querySelectorAll<HTMLElement>("[data-message-id]").item(index);
+    if (!container) return;
+    const targetIndex = Math.min(messages.length - 1, Math.max(0, index));
+    const article = renderedMessageArticles(container)[targetIndex];
     article?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
@@ -1027,24 +1040,47 @@ export function ThreadView({
                       />
                     </AnchoredInlineMount>
                   ))}
-                  {inlineElaborations.map((elaboration) => (
-                    <AnchoredInlineMount
-                      key={elaboration.id}
-                      messagesRef={messagesRef}
-                      messageId={message.id}
-                      messageContent={message.content}
-                      annotationId={elaboration.id}
-                      blockIndex={elaboration.anchor.blockIndex}
-                    >
-                      <InlineElaborationCard
-                        elaboration={elaboration}
-                        onGenerate={onGenerateInlineElaboration}
-                        onStop={onStopInlineElaboration}
-                        onDelete={onDeleteInlineElaboration}
-                        readOnly={readOnly}
-                      />
-                    </AnchoredInlineMount>
-                  ))}
+                  {inlineElaborations.map((elaboration) => {
+                    const furtherNode = elaboration.furtherElaborationNodeId
+                      ? chat.nodes[elaboration.furtherElaborationNodeId]
+                      : undefined;
+                    const furtherElaborationState = furtherNode
+                      ? messagesForNode(furtherNode).some(
+                          (candidate) => candidate.role === "assistant" && candidate.pending,
+                        )
+                        ? "pending" as const
+                        : "ready" as const
+                      : undefined;
+                    return (
+                      <AnchoredInlineMount
+                        key={elaboration.id}
+                        messagesRef={messagesRef}
+                        messageId={message.id}
+                        messageContent={message.content}
+                        annotationId={elaboration.id}
+                        blockIndex={elaboration.anchor.blockIndex}
+                      >
+                        <InlineElaborationCard
+                          elaboration={elaboration}
+                          nodeId={node.id}
+                          definitions={
+                            definitionsByMessage.get(elaboration.id) ?? EMPTY_DEFINITIONS
+                          }
+                          onSelect={onSelect}
+                          onOpenDefinition={onOpenDefinition}
+                          onGenerate={onGenerateInlineElaboration}
+                          onStop={onStopInlineElaboration}
+                          onDelete={onDeleteInlineElaboration}
+                          onElaborateFurther={onElaborateFurther}
+                          onOpenFurtherElaboration={() => {
+                            if (furtherNode) onOpenElaboration(furtherNode.id);
+                          }}
+                          furtherElaborationState={furtherElaborationState}
+                          readOnly={readOnly}
+                        />
+                      </AnchoredInlineMount>
+                    );
+                  })}
                   {message.pending && (
                     <div className="streaming-status" aria-label="Locus is responding">
                       <span /> Streaming

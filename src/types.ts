@@ -184,6 +184,8 @@ export interface InlineElaboration {
   anchor: HighlightAnchor;
   hint: string;
   content: string;
+  /** Optional full branch created from this elaboration's original guidance. */
+  furtherElaborationNodeId?: string;
   createdAt: string;
   updatedAt: string;
   pending?: boolean;
@@ -262,6 +264,8 @@ export interface WorkspaceState {
 }
 
 export interface SelectionDraft extends HighlightAnchor {
+  /** The rendered surface where the selection originated. */
+  surface?: "message" | "inline-elaboration";
   rect: { left: number; top: number; width: number; height: number };
   endBlockIndex?: number;
   sectionStart?: number;

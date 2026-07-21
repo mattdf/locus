@@ -1,6 +1,7 @@
 import {
   ChevronDown,
   ChevronRight,
+  CornerUpRight,
   LoaderCircle,
   MessageSquareMore,
   Play,
@@ -8,16 +9,35 @@ import {
   Square,
   Trash2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatDuration, generationDetails } from "../lib/generation";
-import type { InlineElaboration } from "../types";
-import { MathBlock } from "./MathText";
+import type {
+  InlineDefinition,
+  InlineElaboration,
+  Message,
+  SelectionDraft,
+} from "../types";
+import { MarkdownMessage } from "./MarkdownMessage";
+
+const NOOP = () => undefined;
+const EMPTY_ITEMS: never[] = [];
 
 interface InlineElaborationCardProps {
   elaboration: InlineElaboration;
+  nodeId: string;
+  definitions: InlineDefinition[];
+  onSelect: (selection: SelectionDraft) => void;
+  onOpenDefinition: (
+    definitionId: string,
+    rect: SelectionDraft["rect"],
+    getAnchorRect?: () => SelectionDraft["rect"],
+  ) => void;
   onGenerate: (elaborationId: string, hint: string) => void;
   onStop: (elaborationId: string) => void;
   onDelete: (elaborationId: string) => void;
+  onElaborateFurther: (elaborationId: string) => void;
+  onOpenFurtherElaboration: () => void;
+  furtherElaborationState?: "pending" | "ready";
   readOnly?: boolean;
 }
 
@@ -36,9 +56,16 @@ function WorkingStatus({ startedAt }: { startedAt: string }) {
 
 export function InlineElaborationCard({
   elaboration,
+  nodeId,
+  definitions,
+  onSelect,
+  onOpenDefinition,
   onGenerate,
   onStop,
   onDelete,
+  onElaborateFurther,
+  onOpenFurtherElaboration,
+  furtherElaborationState,
   readOnly = false,
 }: InlineElaborationCardProps) {
   const [hint, setHint] = useState(elaboration.hint);
@@ -46,6 +73,13 @@ export function InlineElaborationCard({
   const cardRef = useRef<HTMLElement>(null);
   const hintRef = useRef<HTMLInputElement>(null);
   const draft = !elaboration.pending && !elaboration.content && !elaboration.error;
+  const contentMessage = useMemo<Message>(() => ({
+    id: elaboration.id,
+    role: "assistant",
+    content: elaboration.content,
+    createdAt: elaboration.createdAt,
+    error: elaboration.error,
+  }), [elaboration.content, elaboration.createdAt, elaboration.error, elaboration.id]);
 
   useEffect(() => setHint(elaboration.hint), [elaboration.id, elaboration.hint]);
   useEffect(() => {
@@ -148,7 +182,38 @@ export function InlineElaborationCard({
 
         {!elaboration.pending && elaboration.content && (
           <div className={elaboration.error ? "inline-elaboration-card__error" : "inline-elaboration-card__content"}>
-            <MathBlock source={elaboration.content} />
+            <MarkdownMessage
+              message={contentMessage}
+              nodeId={nodeId}
+              linkedAnchors={EMPTY_ITEMS}
+              definitions={definitions}
+              visualizations={EMPTY_ITEMS}
+              inlineElaborations={EMPTY_ITEMS}
+              onSelect={onSelect}
+              onOpenElaboration={NOOP}
+              onOpenDefinition={onOpenDefinition}
+              onOpenVisualization={NOOP}
+              onOpenInlineElaboration={NOOP}
+              selectionSurface="inline-elaboration"
+            />
+          </div>
+        )}
+
+        {!elaboration.pending && !elaboration.error && elaboration.content && (
+          <div className="inline-elaboration-card__further">
+            {furtherElaborationState === "ready" ? (
+              <button type="button" onClick={onOpenFurtherElaboration}>
+                <CornerUpRight size={12} /> Further elaboration
+              </button>
+            ) : furtherElaborationState === "pending" ? (
+              <button type="button" disabled>
+                <LoaderCircle size={12} /> Elaborating further…
+              </button>
+            ) : !readOnly ? (
+              <button type="button" onClick={() => onElaborateFurther(elaboration.id)}>
+                <CornerUpRight size={12} /> Elaborate further
+              </button>
+            ) : null}
           </div>
         )}
 

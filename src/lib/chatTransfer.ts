@@ -136,6 +136,8 @@ function isInlineElaboration(value: unknown): value is InlineElaboration {
     typeof value.id === "string" &&
     typeof value.hint === "string" &&
     typeof value.content === "string" &&
+    (value.furtherElaborationNodeId === undefined ||
+      typeof value.furtherElaborationNodeId === "string") &&
     typeof value.createdAt === "string" &&
     typeof value.updatedAt === "string" &&
     typeof value.anchor.sourceNodeId === "string" &&

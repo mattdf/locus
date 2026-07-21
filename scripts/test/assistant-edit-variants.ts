@@ -107,7 +107,15 @@ const chat: ChatTree = {
   nodes: {
     root: {
       ...baseNode,
-      definitions: [{ id: "def-1", anchor: annotations[1].anchor, content: "Definition", createdAt }],
+      definitions: [
+        { id: "def-1", anchor: annotations[1].anchor, content: "Definition", createdAt },
+        {
+          id: "inline-def-1",
+          anchor: anchor("inline-1", "Inline", 0),
+          content: "Nested definition",
+          createdAt,
+        },
+      ],
       visualizations: [{
         id: "viz-1",
         anchor: annotations[2].anchor,
@@ -122,6 +130,7 @@ const chat: ChatTree = {
         anchor: annotations[3].anchor,
         hint: "",
         content: "Inline",
+        furtherElaborationNodeId: "branch-1",
         createdAt,
         updatedAt: createdAt,
       }],
@@ -159,6 +168,16 @@ assert.equal(
   imported.chats[0].nodes.root.assistantEdits?.["generation-b"].variants.length,
   2,
   "Assistant edit variants must survive JSON export and import validation",
+);
+assert.equal(
+  imported.chats[0].nodes.root.inlineElaborations?.[0].furtherElaborationNodeId,
+  "branch-1",
+  "Further-elaboration links must survive JSON export and import validation",
+);
+assert.equal(
+  imported.chats[0].nodes.root.definitions?.[1].anchor.sourceMessageId,
+  "inline-1",
+  "Definitions anchored inside inline elaborations must survive transfer",
 );
 
 console.log("Assistant edit variant invariants passed");

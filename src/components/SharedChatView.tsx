@@ -246,6 +246,7 @@ export function SharedChatView({ token }: { token: string }) {
             onGenerateInlineElaboration={NOOP}
             onStopInlineElaboration={NOOP}
             onDeleteInlineElaboration={NOOP}
+            onElaborateFurther={NOOP}
             onSend={NOOP}
             onStop={NOOP}
             onEditMessage={NOOP}

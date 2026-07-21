@@ -747,6 +747,7 @@ function SelectionToolbar({
 }) {
   const [rect, setRect] = useState(selection.rect);
   const [elaborateMenuOpen, setElaborateMenuOpen] = useState(false);
+  const definitionOnly = selection.surface === "inline-elaboration";
 
   useEffect(() => setRect(selection.rect), [selection]);
 
@@ -815,39 +816,41 @@ function SelectionToolbar({
       <button className="selection-define-button" type="button" onClick={onDefine}>
         <BookOpen size={14} /> Define
       </button>
-      <button className="selection-visualize-button" type="button" onClick={onVisualize}>
-        <ChartNoAxesCombined size={14} /> Visualize
-      </button>
-      {onRewrite && (
-        <button className="selection-rewrite-button" type="button" onClick={onRewrite}>
-          <Pencil size={14} /> Rewrite
+      {!definitionOnly && <>
+        <button className="selection-visualize-button" type="button" onClick={onVisualize}>
+          <ChartNoAxesCombined size={14} /> Visualize
         </button>
-      )}
-      <div className="selection-elaborate-split">
-        <button type="button" onClick={onElaborate}>
-          <CornerUpRight size={14} /> Elaborate
-        </button>
-        <button
-          type="button"
-          aria-label="Elaborate options"
-          aria-haspopup="menu"
-          aria-expanded={elaborateMenuOpen}
-          onClick={() => setElaborateMenuOpen((open) => !open)}
-        >
-          <ChevronDown size={12} />
-        </button>
-        {elaborateMenuOpen && (
-          <div className="selection-elaborate-menu" role="menu">
-            <button type="button" role="menuitem" onClick={onElaborateInline}>
-              <strong>Elaborate inline</strong>
-              <span>Short explanation below the selection</span>
-            </button>
-          </div>
+        {onRewrite && (
+          <button className="selection-rewrite-button" type="button" onClick={onRewrite}>
+            <Pencil size={14} /> Rewrite
+          </button>
         )}
-      </div>
-      <button className="selection-quote-button" type="button" onClick={onQuote}>
-        <Quote size={14} /> Quote
-      </button>
+        <div className="selection-elaborate-split">
+          <button type="button" onClick={onElaborate}>
+            <CornerUpRight size={14} /> Elaborate
+          </button>
+          <button
+            type="button"
+            aria-label="Elaborate options"
+            aria-haspopup="menu"
+            aria-expanded={elaborateMenuOpen}
+            onClick={() => setElaborateMenuOpen((open) => !open)}
+          >
+            <ChevronDown size={12} />
+          </button>
+          {elaborateMenuOpen && (
+            <div className="selection-elaborate-menu" role="menu">
+              <button type="button" role="menuitem" onClick={onElaborateInline}>
+                <strong>Elaborate inline</strong>
+                <span>Short explanation below the selection</span>
+              </button>
+            </div>
+          )}
+        </div>
+        <button className="selection-quote-button" type="button" onClick={onQuote}>
+          <Quote size={14} /> Quote
+        </button>
+      </>}
       <button
         type="button"
         className="toolbar-close"
@@ -1437,6 +1440,25 @@ export default function App({
         const nodes = Object.fromEntries(
           Object.entries(chat.nodes).filter(([id]) => !removedIds.has(id)),
         );
+        Object.values(nodes).forEach((remainingNode) => {
+          const inlineElaborations = remainingNode.inlineElaborations?.map((elaboration) =>
+            elaboration.furtherElaborationNodeId &&
+            removedIds.has(elaboration.furtherElaborationNodeId)
+              ? { ...elaboration, furtherElaborationNodeId: undefined, updatedAt }
+              : elaboration,
+          );
+          if (
+            inlineElaborations?.some(
+              (elaboration, index) => elaboration !== remainingNode.inlineElaborations?.[index],
+            )
+          ) {
+            nodes[remainingNode.id] = {
+              ...remainingNode,
+              inlineElaborations,
+              updatedAt,
+            };
+          }
+        });
         const currentParent = nodes[parent.id];
         if (
           currentParent?.sourceEditUndo &&
@@ -2142,10 +2164,18 @@ export default function App({
           (message) => message.id === definition.anchor.sourceMessageId,
         )
       : null;
-    if (!node || !sourceMessage) {
+    const sourceElaboration = node?.inlineElaborations?.find(
+      (elaboration) => elaboration.id === definition.anchor.sourceMessageId,
+    );
+    const source = sourceMessage
+      ? { role: sourceMessage.role, content: sourceMessage.content }
+      : sourceElaboration
+        ? { role: "assistant" as const, content: sourceElaboration.content }
+        : null;
+    if (!node || !source) {
       updateDefinition(chat.id, nodeId, definition.id, (current) => ({
         ...current,
-        content: "The selected message is no longer available.",
+        content: "The selected content is no longer available.",
         pending: false,
         error: true,
       }));
@@ -2176,8 +2206,8 @@ export default function App({
               title: node.title,
               messages: [
                 {
-                  role: sourceMessage.role,
-                  content: sourceMessage.content,
+                  role: source.role,
+                  content: source.content,
                 },
               ],
             },
@@ -2476,6 +2506,84 @@ export default function App({
     void askInlineElaboration(nextChat, nodeId, pending);
   };
 
+  const elaborateFurtherFromInline = (
+    chatId: string,
+    nodeId: string,
+    elaborationId: string,
+  ) => {
+    const chat = workspaceRef.current.chats.find((item) => item.id === chatId);
+    const parent = chat?.nodes[nodeId];
+    const elaboration = parent?.inlineElaborations?.find(
+      (item) => item.id === elaborationId,
+    );
+    if (!chat || !parent || !elaboration || elaboration.pending || elaboration.error) return;
+
+    const existingNode = elaboration.furtherElaborationNodeId
+      ? chat.nodes[elaboration.furtherElaborationNodeId]
+      : undefined;
+    if (existingNode) {
+      historyAction.current = "push";
+      setActiveNodeId(existingNode.id);
+      setFocusMaximized(false);
+      setSelection(null);
+      return;
+    }
+
+    const createdAt = timestamp();
+    const childId = newId();
+    const request = elaboration.hint.trim() || "Elaborate further on this passage.";
+    const userMessage = makeMessage("user", request);
+    const assistantMessage = makePendingAssistant();
+    const child: ThreadNode = {
+      id: childId,
+      parentId: parent.id,
+      title: titleFrom(elaboration.anchor.quote, "Further elaboration"),
+      anchor: { ...elaboration.anchor },
+      messages: [userMessage, assistantMessage],
+      createdAt,
+      updatedAt: createdAt,
+    };
+    const nextParent: ThreadNode = {
+      ...parent,
+      updatedAt: createdAt,
+      sourceEditUndo:
+        parent.sourceEditUndo?.sourceMessageId === elaboration.anchor.sourceMessageId
+          ? undefined
+          : parent.sourceEditUndo,
+      inlineElaborations: (parent.inlineElaborations ?? []).map((item) =>
+        item.id === elaboration.id
+          ? { ...item, furtherElaborationNodeId: childId, updatedAt: createdAt }
+          : item,
+      ),
+    };
+    const nextChat: ChatTree = {
+      ...chat,
+      updatedAt: createdAt,
+      nodes: {
+        ...chat.nodes,
+        [parent.id]: nextParent,
+        [child.id]: child,
+      },
+    };
+    setWorkspace((current) => ({
+      ...current,
+      chats: current.chats.map((item) => item.id === chat.id ? nextChat : item),
+    }));
+    historyAction.current = "push";
+    setActiveNodeId(child.id);
+    setFocusMaximized(false);
+    setSelection(null);
+    window.getSelection()?.removeAllRanges();
+    void askModel(
+      nextChat,
+      child.id,
+      userMessage,
+      assistantMessage.id,
+      assistantMessage.requestId,
+      child.anchor,
+    );
+  };
+
   const stopInlineElaboration = async (
     chatId: string,
     nodeId: string,
@@ -2521,6 +2629,31 @@ export default function App({
     const elaboration = node?.inlineElaborations?.find((item) => item.id === elaborationId);
     if (!chat || !node || !elaboration || elaboration.pending) return;
     if (!window.confirm("Delete this inline elaboration?")) return;
+    const nestedDefinitionIds = new Set(
+      (node.definitions ?? [])
+        .filter((definition) => definition.anchor.sourceMessageId === elaboration.id)
+        .map((definition) => definition.id),
+    );
+    (node.definitions ?? [])
+      .filter(
+        (definition) =>
+          nestedDefinitionIds.has(definition.id) &&
+          definition.pending &&
+          definition.requestId,
+      )
+      .forEach((definition) => {
+        const controller = responseControllers.current.get(definition.id);
+        void fetch(`/api/respond/${encodeURIComponent(definition.requestId!)}/abort`, {
+          method: "POST",
+        })
+          .catch(() => undefined)
+          .finally(() => {
+            controller?.abort();
+            if (responseControllers.current.get(definition.id) === controller) {
+              responseControllers.current.delete(definition.id);
+            }
+          });
+      });
     updateChat(chatId, (current) => {
       const currentNode = current.nodes[nodeId];
       if (!currentNode) return current;
@@ -2536,6 +2669,9 @@ export default function App({
             inlineElaborations: (currentNode.inlineElaborations ?? []).filter(
               (item) => item.id !== elaborationId,
             ),
+            definitions: (currentNode.definitions ?? []).filter(
+              (definition) => !nestedDefinitionIds.has(definition.id),
+            ),
             sourceEditUndo:
               currentNode.sourceEditUndo?.sourceMessageId === elaboration.anchor.sourceMessageId
                 ? undefined
@@ -2544,6 +2680,9 @@ export default function App({
         },
       };
     });
+    setDefinitionPopover((current) =>
+      current && nestedDefinitionIds.has(current.definitionId) ? null : current,
+    );
   };
 
   const compileVisualization = async (
@@ -5406,6 +5545,9 @@ export default function App({
             onDeleteInlineElaboration={(elaborationId) =>
               deleteInlineElaboration(activeChat.id, leftPaneNode.id, elaborationId)
             }
+            onElaborateFurther={(elaborationId) =>
+              elaborateFurtherFromInline(activeChat.id, leftPaneNode.id, elaborationId)
+            }
             onSend={(message) => sendToThread(leftPaneNode.id, message)}
             onStop={(assistantId) => stopResponse(leftPaneNode.id, assistantId)}
             onEditMessage={(revisionGroupId, content) =>
@@ -5705,6 +5847,9 @@ export default function App({
             }
             onDeleteInlineElaboration={(elaborationId) =>
               deleteInlineElaboration(activeChat.id, sideNode.id, elaborationId)
+            }
+            onElaborateFurther={(elaborationId) =>
+              elaborateFurtherFromInline(activeChat.id, sideNode.id, elaborationId)
             }
             onSend={(message) => sendToThread(sideNode.id, message)}
             onStop={(assistantId) => stopResponse(sideNode.id, assistantId)}

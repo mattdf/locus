@@ -2115,6 +2115,13 @@ a:focus-visible {
   padding: 11px 13px;
 }
 
+.inline-elaboration-card__content > .markdown-message,
+.inline-elaboration-card__error > .markdown-message {
+  color: inherit;
+  font-size: calc(13px * var(--text-scale, 1));
+  line-height: 1.58;
+}
+
 .inline-elaboration-card__draft label {
   display: block;
   margin-bottom: 5px;
@@ -2198,6 +2205,23 @@ a:focus-visible {
 .inline-elaboration-card__error {
   color: var(--danger);
   background: #fff5f2;
+}
+
+.inline-elaboration-card__further {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 13px 11px;
+}
+
+.inline-elaboration-card__further button {
+  min-height: 28px;
+  padding: 0 9px;
+  color: #2e715f;
+  background: rgba(255, 255, 255, 0.66);
+}
+
+.inline-elaboration-card__further button svg.lucide-loader-circle {
+  animation: definition-spin 700ms linear infinite;
 }
 
 .inline-elaboration-card > footer {
