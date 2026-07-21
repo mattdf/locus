@@ -16,6 +16,8 @@ COPY --from=build /app/build ./build
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/migrations ./migrations
 COPY --from=build /app/SYSTEM_PROMPT.md ./SYSTEM_PROMPT.md
+COPY --from=build /app/VISUALIZATION_PROMPT.md ./VISUALIZATION_PROMPT.md
+COPY --from=build /app/SOURCE_REWRITE_PROMPT.md ./SOURCE_REWRITE_PROMPT.md
 USER node
 EXPOSE 8787
 CMD ["node", "build/server/index.mjs"]

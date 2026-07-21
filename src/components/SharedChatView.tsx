@@ -246,6 +246,8 @@ export function SharedChatView({ token }: { token: string }) {
             onSend={NOOP}
             onStop={NOOP}
             onEditMessage={NOOP}
+            onEditSource={NOOP}
+            onRevertSourceEdit={NOOP}
             onRegenerateResponse={NOOP}
             onSwitchMessageRevision={NOOP}
             onSwitchResponseRevision={NOOP}
@@ -268,4 +270,3 @@ export function SharedChatView({ token }: { token: string }) {
     </div>
   );
 }
-

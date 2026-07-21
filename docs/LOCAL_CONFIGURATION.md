@@ -15,8 +15,12 @@ can be changed in Settings, and a key is optional.
 ## Data and prompts
 
 - `data/chats.json` stores the complete local workspace as a readable, versioned JSON document.
-- `SYSTEM_PROMPT.md` contains the base instructions and is loaded for every model request.
-- Custom instructions are stored with the workspace and appended to the base system prompt.
+- `SYSTEM_PROMPT.md` contains the base tutoring instructions for chats and definitions.
+- `VISUALIZATION_PROMPT.md` contains the dedicated semantic-design instructions for MetaPost and
+  TikZ generation; the server appends the matching compiler contract at request time.
+- `SOURCE_REWRITE_PROMPT.md` contains the bounded Markdown-rewrite and annotation-marker contract.
+- Custom instructions are stored with the workspace and appended to the tutoring prompt. They are
+  intentionally excluded from visualization generation.
 - The default model is `gpt-5.6-sol` with `max` reasoning effort; model and effort can be changed
   from a chat composer.
 
@@ -32,4 +36,3 @@ Set these environment variables before starting the server when the defaults are
 - `METAPOST_MAX_CONCURRENCY`: concurrent visualization jobs, from 1 through 16; defaults to 2
 
 The MetaPost and TikZ pipelines require the compiler image built by `npm run metapost:build`.
-

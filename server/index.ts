@@ -476,7 +476,7 @@ app.post("/api/respond", async (request, response, next) => {
       context?: ContextNode[];
       message?: string;
       anchor?: HighlightAnchor;
-      purpose?: "chat" | "definition" | "visualization";
+      purpose?: "chat" | "definition" | "visualization" | "rewrite";
       visualizationEngine?: "metapost" | "tikz";
     };
     const provider = body.provider ?? "openai";
@@ -536,7 +536,14 @@ app.post("/api/respond", async (request, response, next) => {
       maxOutputTokens,
       customInstructions: body.customInstructions ?? "",
       anchor: body.anchor,
-      purpose: body.purpose === "visualization" ? "visualization" : body.purpose === "definition" ? "definition" : "chat",
+      purpose:
+        body.purpose === "visualization"
+          ? "visualization"
+          : body.purpose === "definition"
+            ? "definition"
+            : body.purpose === "rewrite"
+              ? "rewrite"
+              : "chat",
       visualizationEngine:
         body.purpose === "visualization" && body.visualizationEngine === "tikz"
           ? "tikz"

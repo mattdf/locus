@@ -57,6 +57,10 @@ const SAFE_TEX_COMMANDS = new Set([
   "mathrm", "mathbf", "boldsymbol", "mathit", "mathsf", "mathtt", "mathcal", "mathbb",
   "mathfrak", "text",
   "textnormal", "textbf", "textit", "textrm", "textsf", "texttt", "left", "right",
+  // Harmless legacy TeX font declarations still occur frequently in generated
+  // mathematical labels. They affect typography only and do not expand the
+  // sandbox's file, process, macro, or document-mutation capabilities.
+  "rm", "bf", "it", "sl", "sf", "tt", "sc", "cal", "mit", "oldstyle",
   "big", "Big", "bigg", "Bigg", "displaystyle", "textstyle", "scriptstyle",
   "scriptscriptstyle", "phantom", "vphantom", "hphantom", "smash", "limits",
   "nolimits", "overset", "underset", "stackrel", "boxed", "pmod", "mod", "bmod",

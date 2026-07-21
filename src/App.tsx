@@ -59,6 +59,10 @@ import { InlineMath, MathBlock } from "./components/MathText";
 import { MODEL_OPTIONS, ModelPicker, REASONING_OPTIONS } from "./components/ModelPicker";
 import { ThreadView } from "./components/ThreadView";
 import {
+  SourceRewriteModal,
+  type SourceRewriteMode,
+} from "./components/SourceRewriteModal";
+import {
   cloneChatForImport,
   downloadChatExport,
   makeChatExport,
@@ -66,6 +70,16 @@ import {
   type ParsedChatImport,
 } from "./lib/chatTransfer";
 import { markdownBlockquote } from "./lib/markdown";
+import {
+  anchorForSelection,
+  anchorFromReplacementRange,
+  containingMarkdownSection,
+  createPositionMapper,
+  parseMarkedRewrite,
+  remapAnchor,
+  resolveAnchorRange,
+  type SourceRange,
+} from "./lib/sourceEditing";
 import { generationDetails } from "./lib/generation";
 import { applyMarkdownShortcut, isSendShortcut } from "./lib/textarea";
 import {
@@ -99,6 +113,7 @@ import type {
   ProviderModelOption,
   ReasoningEffort,
   SelectionDraft,
+  SourceEditUndo,
   ThreadNode,
   VisualizationEngine,
   WorkspaceState,
@@ -213,6 +228,34 @@ interface HostedWorkspaceSync {
   upsertChats?: ChatTree[];
   deleteChatIds?: string[];
   activeChatId?: string | null;
+}
+
+type SourceAnnotationKind = "branch" | "definition" | "visualization";
+
+interface SourceAnnotationRef {
+  key: string;
+  markerId: string;
+  kind: SourceAnnotationKind;
+  id: string;
+  anchor: HighlightAnchor;
+}
+
+interface SourceRewriteState {
+  chatId: string;
+  nodeId: string;
+  messageId: string;
+  start: number;
+  end: number;
+  documentContent: string;
+  original: string;
+  initialMode: SourceRewriteMode;
+  wholeDocument: boolean;
+  proposed: string | null;
+  markerRanges: Record<string, SourceRange>;
+  generating: boolean;
+  reviewCount: number;
+  requestId?: string;
+  error: string;
 }
 
 function workspaceSyncChanges(
@@ -355,6 +398,62 @@ function branchSubtreeIds(chat: ChatTree, nodeId: string): string[] {
     pending.push(...(childrenByParent.get(currentId) ?? []));
   }
   return subtree;
+}
+
+function anchorFromDraft(selection: SelectionDraft): HighlightAnchor {
+  return {
+    sourceNodeId: selection.sourceNodeId,
+    sourceMessageId: selection.sourceMessageId,
+    quote: selection.quote,
+    blockIndex: selection.blockIndex,
+    start: selection.start,
+    end: selection.end,
+    prefix: selection.prefix,
+    suffix: selection.suffix,
+    status: selection.status,
+  };
+}
+
+function sourceAnnotations(
+  chat: ChatTree,
+  nodeId: string,
+  messageId: string,
+): SourceAnnotationRef[] {
+  const node = chat.nodes[nodeId];
+  if (!node) return [];
+  const refs: Omit<SourceAnnotationRef, "markerId">[] = [];
+  Object.values(chat.nodes).forEach((candidate) => {
+    if (
+      candidate.parentId === nodeId &&
+      candidate.anchor?.sourceMessageId === messageId
+    ) {
+      refs.push({
+        key: `branch:${candidate.id}`,
+        kind: "branch",
+        id: candidate.id,
+        anchor: candidate.anchor,
+      });
+    }
+  });
+  (node.definitions ?? []).forEach((definition) => {
+    if (definition.anchor.sourceMessageId !== messageId) return;
+    refs.push({
+      key: `definition:${definition.id}`,
+      kind: "definition",
+      id: definition.id,
+      anchor: definition.anchor,
+    });
+  });
+  (node.visualizations ?? []).forEach((visualization) => {
+    if (visualization.anchor.sourceMessageId !== messageId) return;
+    refs.push({
+      key: `visualization:${visualization.id}`,
+      kind: "visualization",
+      id: visualization.id,
+      anchor: visualization.anchor,
+    });
+  });
+  return refs.map((ref, index) => ({ ...ref, markerId: `a${index}` }));
 }
 
 function oneParagraph(content: string): string {
@@ -581,6 +680,7 @@ function SelectionToolbar({
   onVisualize,
   onElaborate,
   onQuote,
+  onRewrite,
   onDismiss,
 }: {
   selection: SelectionDraft;
@@ -588,6 +688,7 @@ function SelectionToolbar({
   onVisualize: () => void;
   onElaborate: () => void;
   onQuote: () => void;
+  onRewrite?: () => void;
   onDismiss: () => void;
 }) {
   const [rect, setRect] = useState(selection.rect);
@@ -662,6 +763,11 @@ function SelectionToolbar({
       <button className="selection-visualize-button" type="button" onClick={onVisualize}>
         <ChartNoAxesCombined size={14} /> Visualize
       </button>
+      {onRewrite && (
+        <button className="selection-rewrite-button" type="button" onClick={onRewrite}>
+          <Pencil size={14} /> Rewrite
+        </button>
+      )}
       <button type="button" onClick={onElaborate}>
         <CornerUpRight size={14} /> Elaborate
       </button>
@@ -1011,6 +1117,7 @@ export default function App({
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [selection, setSelection] = useState<SelectionDraft | null>(null);
   const [draft, setDraft] = useState<SelectionDraft | null>(null);
+  const [sourceRewrite, setSourceRewrite] = useState<SourceRewriteState | null>(null);
   const [definitionPopover, setDefinitionPopover] = useState<{
     chatId: string;
     nodeId: string;
@@ -1070,6 +1177,7 @@ export default function App({
     useState<ThreadScrollRequest | null>(null);
   const [focusMaximized, setFocusMaximized] = useState(false);
   const responseControllers = useRef(new Map<string, AbortController>());
+  const sourceRewriteController = useRef<AbortController | null>(null);
   const visualizationCompiles = useRef(new Set<string>());
   const assistantDeltaBuffers = useRef(
     new Map<string, { chatId: string; nodeId: string; delta: string }>(),
@@ -1090,6 +1198,7 @@ export default function App({
         window.cancelAnimationFrame(assistantDeltaFrame.current);
       }
       assistantDeltaBuffers.current.clear();
+      sourceRewriteController.current?.abort();
     },
     [],
   );
@@ -1112,6 +1221,13 @@ export default function App({
           ? activeChat.nodes[sideNode.parentId] ?? rootNode
           : rootNode
       : null;
+  const selectionIsImportedSource = Boolean(
+    selection &&
+      activeChat?.nodes[selection.sourceNodeId]?.messages.some(
+        (message) =>
+          message.id === selection.sourceMessageId && message.role === "source",
+      ),
+  );
 
   const closeElaborationDraft = () => {
     if (!draftRef.current) {
@@ -1201,12 +1317,25 @@ export default function App({
       ...current,
       chats: current.chats.map((chat) => {
         if (chat.id !== activeChat.id) return chat;
+        const updatedAt = timestamp();
+        const nodes = Object.fromEntries(
+          Object.entries(chat.nodes).filter(([id]) => !removedIds.has(id)),
+        );
+        const currentParent = nodes[parent.id];
+        if (
+          currentParent?.sourceEditUndo &&
+          node.anchor?.sourceMessageId === currentParent.sourceEditUndo.sourceMessageId
+        ) {
+          nodes[parent.id] = {
+            ...currentParent,
+            sourceEditUndo: undefined,
+            updatedAt,
+          };
+        }
         return {
           ...chat,
-          updatedAt: timestamp(),
-          nodes: Object.fromEntries(
-            Object.entries(chat.nodes).filter(([id]) => !removedIds.has(id)),
-          ),
+          updatedAt,
+          nodes,
         };
       }),
     }));
@@ -1484,6 +1613,7 @@ export default function App({
         setSharedChatsOpen(false);
         setShareResult(null);
         setShareError("");
+        if (!sourceRewriteController.current) setSourceRewrite(null);
       }
     };
     window.addEventListener("keydown", close);
@@ -2006,6 +2136,10 @@ export default function App({
           [nodeId]: {
             ...node,
             updatedAt,
+            sourceEditUndo:
+              node.sourceEditUndo?.sourceMessageId === definition.anchor.sourceMessageId
+                ? undefined
+                : node.sourceEditUndo,
             definitions: (node.definitions ?? []).filter(
               (item) => item.id !== definitionId,
             ),
@@ -2161,10 +2295,10 @@ export default function App({
         ? `Repair the following ${engineLabel} figure body so it compiles under the required restricted output contract. Preserve its intended content and return only the corrected body.\n\n<failed_source>\n${followup.source}\n</failed_source>\n\n<compiler_log>\n${followup.diagnostic.slice(-12_000)}\n</compiler_log>`
         : followup?.kind === "revision"
           ? `Revise the following existing ${engineLabel} figure body according to the one-time instruction. Return the complete replacement figure body, preserve everything that already works, and make only the changes needed to satisfy the instruction. Do not describe the changes.\n\n<existing_source>\n${followup.source}\n</existing_source>\n\n<revision_request>\n${followup.instruction}\n</revision_request>`
-          : `Create a clear, static mathematical diagram of the highlighted passage. Use the containing message to resolve symbols. ${
+          : `Visualize the highlighted passage according to the semantic-design criteria. Use the containing message only to resolve symbols and assumptions. ${
               hint
-                ? `Follow this visualization hint:\n<visualization_hint>\n${hint}\n</visualization_hint>`
-                : "Choose the most useful geometric or graphical interpretation yourself."
+                ? `Treat this hint as an additional requirement, not as a substitute for a meaningful visual claim:\n<visualization_hint>\n${hint}\n</visualization_hint>`
+                : "Choose the diagram form that best exposes the passage's most important relationship."
             }`;
       const result = await modelRequest(
         requestId,
@@ -2320,6 +2454,11 @@ export default function App({
           [nodeId]: {
             ...currentNode,
             updatedAt,
+            sourceEditUndo:
+              currentNode.sourceEditUndo?.sourceMessageId ===
+              visualization.anchor.sourceMessageId
+                ? undefined
+                : currentNode.sourceEditUndo,
             visualizations: (currentNode.visualizations ?? []).filter(
               (item) => item.id !== visualizationId,
             ),
@@ -2618,6 +2757,386 @@ export default function App({
       });
     });
   }, [loaded, workspace.chats]);
+
+  const openSourceRewriteForSelection = (selected: SelectionDraft) => {
+    const chat = workspaceRef.current.chats.find(
+      (candidate) => candidate.id === workspaceRef.current.activeChatId,
+    );
+    const node = chat?.nodes[selected.sourceNodeId];
+    const message = node?.messages.find(
+      (candidate) => candidate.id === selected.sourceMessageId && candidate.role === "source",
+    );
+    if (!chat || !node || !message) return;
+    const section =
+      Number.isSafeInteger(selected.sectionStart) &&
+      Number.isSafeInteger(selected.sectionEnd) &&
+      selected.sectionStart! >= 0 &&
+      selected.sectionEnd! <= message.content.length
+        ? {
+            start: selected.sectionStart!,
+            end: selected.sectionEnd!,
+            content: message.content.slice(selected.sectionStart, selected.sectionEnd),
+          }
+        : containingMarkdownSection(
+            message.content,
+            selected.blockIndex,
+            selected.endBlockIndex ?? selected.blockIndex,
+          );
+    setSourceRewrite({
+      chatId: chat.id,
+      nodeId: node.id,
+      messageId: message.id,
+      start: section.start,
+      end: section.end,
+      documentContent: message.content,
+      original: section.content,
+      initialMode: "model",
+      wholeDocument: false,
+      proposed: null,
+      markerRanges: {},
+      generating: false,
+      reviewCount: 0,
+      error: "",
+    });
+    setSelection(null);
+    window.getSelection()?.removeAllRanges();
+  };
+
+  const openSourceEditor = (nodeId: string, messageId: string) => {
+    const chat = workspaceRef.current.chats.find(
+      (candidate) => candidate.id === workspaceRef.current.activeChatId,
+    );
+    const node = chat?.nodes[nodeId];
+    const message = node?.messages.find(
+      (candidate) => candidate.id === messageId && candidate.role === "source",
+    );
+    if (!chat || !node || !message) return;
+    setSourceRewrite({
+      chatId: chat.id,
+      nodeId,
+      messageId,
+      start: 0,
+      end: message.content.length,
+      documentContent: message.content,
+      original: message.content,
+      initialMode: "manual",
+      wholeDocument: true,
+      proposed: null,
+      markerRanges: {},
+      generating: false,
+      reviewCount: 0,
+      error: "",
+    });
+  };
+
+  const prospectiveSourceAnchors = (
+    rewrite: SourceRewriteState,
+    replacement: string,
+    markerRanges: Record<string, SourceRange>,
+  ) => {
+    const chat = workspaceRef.current.chats.find((candidate) => candidate.id === rewrite.chatId);
+    if (!chat) return { annotations: [] as SourceAnnotationRef[], anchors: new Map<string, HighlightAnchor>(), reviewCount: 0 };
+    const newContent =
+      rewrite.documentContent.slice(0, rewrite.start) +
+      replacement +
+      rewrite.documentContent.slice(rewrite.end);
+    const annotations = sourceAnnotations(chat, rewrite.nodeId, rewrite.messageId);
+    const mapper = createPositionMapper(rewrite.documentContent, newContent);
+    const anchors = new Map<string, HighlightAnchor>();
+    annotations.forEach((annotation) => {
+      const markerRange = markerRanges[annotation.key];
+      const anchor = markerRange
+        ? anchorFromReplacementRange(newContent, annotation.anchor, {
+            start: rewrite.start + markerRange.start,
+            end: rewrite.start + markerRange.end,
+          })
+        : remapAnchor(
+            rewrite.documentContent,
+            newContent,
+            annotation.anchor,
+            mapper,
+          );
+      anchors.set(annotation.key, anchor);
+    });
+    return {
+      annotations,
+      anchors,
+      reviewCount: [...anchors.values()].filter((anchor) => anchor.status === "needs-review").length,
+    };
+  };
+
+  const prepareSourceRewritePreview = async (mode: SourceRewriteMode, value: string) => {
+    const rewrite = sourceRewrite;
+    if (!rewrite || rewrite.generating) return;
+    if (mode === "manual") {
+      const prospective = prospectiveSourceAnchors(rewrite, value, {});
+      setSourceRewrite((current) =>
+        current
+          ? {
+              ...current,
+              proposed: value,
+              markerRanges: {},
+              reviewCount: prospective.reviewCount,
+              error: "",
+            }
+          : current,
+      );
+      return;
+    }
+
+    const chat = workspaceRef.current.chats.find((candidate) => candidate.id === rewrite.chatId);
+    const node = chat?.nodes[rewrite.nodeId];
+    if (!chat || !node) return;
+    const annotations = sourceAnnotations(chat, rewrite.nodeId, rewrite.messageId).filter(
+      (annotation) => {
+        const range = resolveAnchorRange(rewrite.documentContent, annotation.anchor);
+        return range.start < rewrite.end && range.end > rewrite.start;
+      },
+    );
+    const markerInstructions = annotations.length
+      ? `\n\nThe following existing annotations must be re-anchored in the replacement. Include each token exactly once around the rewritten text that expresses the same idea:\n${annotations
+          .map(
+            (annotation) =>
+              `- ${annotation.markerId}: <<<LOCUS_START_${annotation.markerId}>>> ... <<<LOCUS_END_${annotation.markerId}>>> currently annotates ${JSON.stringify(annotation.anchor.quote)}`,
+          )
+          .join("\n")}`
+      : "";
+    const before = rewrite.documentContent.slice(Math.max(0, rewrite.start - 1_500), rewrite.start);
+    const after = rewrite.documentContent.slice(rewrite.end, Math.min(rewrite.documentContent.length, rewrite.end + 1_500));
+    const requestId = newId();
+    const controller = new AbortController();
+    sourceRewriteController.current = controller;
+    setSourceRewrite((current) =>
+      current
+        ? { ...current, generating: true, requestId, proposed: null, error: "" }
+        : current,
+    );
+    try {
+      const settings = workspaceRef.current.settings;
+      const result = await modelRequest(
+        requestId,
+        {
+          provider: settings.provider,
+          localBaseUrl: settings.localBaseUrl,
+          model: settings.model,
+          reasoningEffort: settings.reasoningEffort,
+          maxOutputTokens: settings.maxOutputTokens,
+          customInstructions: "",
+          context: [
+            {
+              title: node.title,
+              messages: [
+                {
+                  role: "source",
+                  content: `<context_before>\n${before}\n</context_before>\n\n<context_after>\n${after}\n</context_after>`,
+                },
+              ],
+            },
+          ],
+          message: `<rewrite_instruction>\n${value}\n</rewrite_instruction>\n\n<section_to_replace>\n${rewrite.original}\n</section_to_replace>${markerInstructions}`,
+          purpose: "rewrite",
+        },
+        () => undefined,
+        () => undefined,
+        controller.signal,
+      );
+      if (result.stopped) throw new Error("Rewrite generation stopped.");
+      const parsed = parseMarkedRewrite(
+        result.content,
+        annotations.map((annotation) => ({
+          key: annotation.key,
+          markerId: annotation.markerId,
+          quote: annotation.anchor.quote,
+        })),
+      );
+      const prospective = prospectiveSourceAnchors(rewrite, parsed.content, parsed.ranges);
+      setSourceRewrite((current) =>
+        current?.requestId === requestId
+          ? {
+              ...current,
+              proposed: parsed.content,
+              markerRanges: parsed.ranges,
+              generating: false,
+              requestId: undefined,
+              reviewCount: prospective.reviewCount,
+              error: "",
+            }
+          : current,
+      );
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setSourceRewrite((current) =>
+        current?.requestId === requestId
+          ? {
+              ...current,
+              generating: false,
+              requestId: undefined,
+              error: error instanceof Error ? error.message : "The rewrite failed.",
+            }
+          : current,
+      );
+    } finally {
+      if (sourceRewriteController.current === controller) {
+        sourceRewriteController.current = null;
+      }
+    }
+  };
+
+  const stopSourceRewrite = async () => {
+    const rewrite = sourceRewrite;
+    if (!rewrite?.requestId) return;
+    try {
+      const response = await fetch(
+        `/api/respond/${encodeURIComponent(rewrite.requestId)}/abort`,
+        { method: "POST" },
+      );
+      const result = (await response.json().catch(() => ({}))) as ApiError;
+      if (!response.ok) throw new Error(result.error ?? "Could not stop the rewrite");
+      sourceRewriteController.current?.abort();
+      sourceRewriteController.current = null;
+      setSourceRewrite((current) =>
+        current && current.requestId === rewrite.requestId
+          ? {
+              ...current,
+              generating: false,
+              requestId: undefined,
+              error: "Rewrite generation stopped.",
+            }
+          : current,
+      );
+    } catch (error) {
+      setSourceRewrite((current) =>
+        current
+          ? {
+              ...current,
+              error: error instanceof Error ? error.message : "Could not stop the rewrite",
+            }
+          : current,
+      );
+    }
+  };
+
+  const applySourceRewrite = () => {
+    const rewrite = sourceRewrite;
+    if (!rewrite || rewrite.proposed === null || rewrite.generating) return;
+    const currentChat = workspaceRef.current.chats.find(
+      (candidate) => candidate.id === rewrite.chatId,
+    );
+    const currentNode = currentChat?.nodes[rewrite.nodeId];
+    const currentMessage = currentNode?.messages.find(
+      (message) => message.id === rewrite.messageId && message.role === "source",
+    );
+    if (!currentChat || !currentNode || !currentMessage) return;
+    if (currentMessage.content !== rewrite.documentContent) {
+      setSourceRewrite((current) =>
+        current
+          ? { ...current, error: "The source changed while this preview was open. Close it and try again." }
+          : current,
+      );
+      return;
+    }
+    const nextContent =
+      rewrite.documentContent.slice(0, rewrite.start) +
+      rewrite.proposed +
+      rewrite.documentContent.slice(rewrite.end);
+    const prospective = prospectiveSourceAnchors(
+      rewrite,
+      rewrite.proposed,
+      rewrite.markerRanges,
+    );
+    const undo: SourceEditUndo = {
+      id: newId(),
+      sourceMessageId: rewrite.messageId,
+      previousContent: rewrite.documentContent,
+      branches: prospective.annotations
+        .filter((annotation) => annotation.kind === "branch")
+        .map((annotation) => ({ id: annotation.id, anchor: annotation.anchor })),
+      definitions: prospective.annotations
+        .filter((annotation) => annotation.kind === "definition")
+        .map((annotation) => ({ id: annotation.id, anchor: annotation.anchor })),
+      visualizations: prospective.annotations
+        .filter((annotation) => annotation.kind === "visualization")
+        .map((annotation) => ({ id: annotation.id, anchor: annotation.anchor })),
+      createdAt: timestamp(),
+    };
+    const updatedAt = timestamp();
+    updateChat(rewrite.chatId, (chat) => {
+      const node = chat.nodes[rewrite.nodeId];
+      if (!node) return chat;
+      const nodes = { ...chat.nodes };
+      prospective.annotations
+        .filter((annotation) => annotation.kind === "branch")
+        .forEach((annotation) => {
+          const branch = nodes[annotation.id];
+          const anchor = prospective.anchors.get(annotation.key);
+          if (branch && anchor) nodes[annotation.id] = { ...branch, anchor, updatedAt };
+        });
+      nodes[rewrite.nodeId] = {
+        ...node,
+        updatedAt,
+        messages: node.messages.map((message) =>
+          message.id === rewrite.messageId
+            ? { ...message, content: nextContent }
+            : message,
+        ),
+        definitions: node.definitions?.map((definition) => ({
+          ...definition,
+          anchor:
+            prospective.anchors.get(`definition:${definition.id}`) ?? definition.anchor,
+        })),
+        visualizations: node.visualizations?.map((visualization) => ({
+          ...visualization,
+          anchor:
+            prospective.anchors.get(`visualization:${visualization.id}`) ?? visualization.anchor,
+        })),
+        sourceEditUndo: undo,
+      };
+      return { ...chat, nodes, updatedAt };
+    });
+    setSourceRewrite(null);
+  };
+
+  const revertSourceEdit = (nodeId: string, messageId: string) => {
+    if (!activeChat) return;
+    updateChat(activeChat.id, (chat) => {
+      const node = chat.nodes[nodeId];
+      const undo = node?.sourceEditUndo;
+      if (!node || !undo || undo.sourceMessageId !== messageId) return chat;
+      const updatedAt = timestamp();
+      const branchAnchors = new Map(undo.branches.map((item) => [item.id, item.anchor]));
+      const definitionAnchors = new Map(undo.definitions.map((item) => [item.id, item.anchor]));
+      const visualizationAnchors = new Map(
+        undo.visualizations.map((item) => [item.id, item.anchor]),
+      );
+      const nodes = Object.fromEntries(
+        Object.entries(chat.nodes).map(([id, candidate]) => [
+          id,
+          branchAnchors.has(id)
+            ? { ...candidate, anchor: branchAnchors.get(id), updatedAt }
+            : candidate,
+        ]),
+      );
+      nodes[nodeId] = {
+        ...node,
+        updatedAt,
+        messages: node.messages.map((message) =>
+          message.id === messageId
+            ? { ...message, content: undo.previousContent }
+            : message,
+        ),
+        definitions: node.definitions?.map((definition) => ({
+          ...definition,
+          anchor: definitionAnchors.get(definition.id) ?? definition.anchor,
+        })),
+        visualizations: node.visualizations?.map((visualization) => ({
+          ...visualization,
+          anchor: visualizationAnchors.get(visualization.id) ?? visualization.anchor,
+        })),
+        sourceEditUndo: undefined,
+      };
+      return { ...chat, nodes, updatedAt };
+    });
+  };
 
   const editUserMessage = (nodeId: string, revisionGroupId: string, content: string) => {
     if (!activeChat) return;
@@ -2932,12 +3451,7 @@ export default function App({
     if (!parent) return;
     const createdAt = timestamp();
     const childId = newId();
-    const anchor: HighlightAnchor = {
-      sourceNodeId: draft.sourceNodeId,
-      sourceMessageId: draft.sourceMessageId,
-      quote: draft.quote,
-      blockIndex: draft.blockIndex,
-    };
+    const anchor = anchorFromDraft(draft);
     const userMessage = makeMessage("user", request);
     const assistantMessage = makePendingAssistant();
     const child: ThreadNode = {
@@ -2949,10 +3463,14 @@ export default function App({
       createdAt,
       updatedAt: createdAt,
     };
+    const nextParent =
+      parent.sourceEditUndo?.sourceMessageId === anchor.sourceMessageId
+        ? { ...parent, sourceEditUndo: undefined, updatedAt: createdAt }
+        : parent;
     const nextChat: ChatTree = {
       ...activeChat,
       updatedAt: createdAt,
-      nodes: { ...activeChat.nodes, [childId]: child },
+      nodes: { ...activeChat.nodes, [parent.id]: nextParent, [childId]: child },
     };
     setWorkspace((current) => ({
       ...current,
@@ -3595,12 +4113,7 @@ export default function App({
     const createdAt = timestamp();
     const visualization: InlineVisualization = {
       id: newId(),
-      anchor: {
-        sourceNodeId: selection.sourceNodeId,
-        sourceMessageId: selection.sourceMessageId,
-        quote: selection.quote,
-        blockIndex: selection.blockIndex,
-      },
+      anchor: anchorFromDraft(selection),
       hint: "",
       status: "draft",
       engine: "metapost",
@@ -3622,6 +4135,10 @@ export default function App({
                 [node.id]: {
                   ...currentNode,
                   updatedAt: createdAt,
+                  sourceEditUndo:
+                    currentNode.sourceEditUndo?.sourceMessageId === selection.sourceMessageId
+                      ? undefined
+                      : currentNode.sourceEditUndo,
                   visualizations: [...(currentNode.visualizations ?? []), visualization],
                 },
               },
@@ -3682,12 +4199,7 @@ export default function App({
     const createdAt = timestamp();
     const definition: InlineDefinition = {
       id: newId(),
-      anchor: {
-        sourceNodeId: selection.sourceNodeId,
-        sourceMessageId: selection.sourceMessageId,
-        quote: selection.quote,
-        blockIndex: selection.blockIndex,
-      },
+      anchor: anchorFromDraft(selection),
       content: "",
       createdAt,
       pending: true,
@@ -3701,6 +4213,10 @@ export default function App({
         [node.id]: {
           ...node,
           updatedAt: createdAt,
+          sourceEditUndo:
+            node.sourceEditUndo?.sourceMessageId === selection.sourceMessageId
+              ? undefined
+              : node.sourceEditUndo,
           definitions: [
             ...(node.definitions ?? []).filter(
               (current) => !current.error || !matchesSelection(current),
@@ -4307,6 +4823,10 @@ export default function App({
             onEditMessage={(revisionGroupId, content) =>
               editUserMessage(leftPaneNode.id, revisionGroupId, content)
             }
+            onEditSource={(messageId) => openSourceEditor(leftPaneNode.id, messageId)}
+            onRevertSourceEdit={(messageId) =>
+              revertSourceEdit(leftPaneNode.id, messageId)
+            }
             onRegenerateResponse={(assistantId, modelOverride, reasoningOverride) =>
               regenerateAssistantMessage(
                 leftPaneNode.id,
@@ -4576,6 +5096,10 @@ export default function App({
             onStop={(assistantId) => stopResponse(sideNode.id, assistantId)}
             onEditMessage={(revisionGroupId, content) =>
               editUserMessage(sideNode.id, revisionGroupId, content)
+            }
+            onEditSource={(messageId) => openSourceEditor(sideNode.id, messageId)}
+            onRevertSourceEdit={(messageId) =>
+              revertSourceEdit(sideNode.id, messageId)
             }
             onRegenerateResponse={(assistantId, modelOverride, reasoningOverride) =>
               regenerateAssistantMessage(
@@ -5518,6 +6042,11 @@ export default function App({
           onDefine={defineSelection}
           onVisualize={visualizeSelection}
           onQuote={quoteSelectionInThread}
+          onRewrite={
+            selectionIsImportedSource
+              ? () => openSourceRewriteForSelection(selection)
+              : undefined
+          }
           onElaborate={() => {
             if (activeChat && activeNode) {
               draftReturnView.current = {
@@ -5529,16 +6058,30 @@ export default function App({
             setThreadScrollRequest({
               id: newId(),
               nodeId: selection.sourceNodeId,
-              anchor: {
-                sourceNodeId: selection.sourceNodeId,
-                sourceMessageId: selection.sourceMessageId,
-                quote: selection.quote,
-                blockIndex: selection.blockIndex,
-              },
+              anchor: anchorFromDraft(selection),
             });
             setDraft(selection);
             setSelection(null);
             setFocusMaximized(false);
+          }}
+        />
+      )}
+
+      {sourceRewrite && (
+        <SourceRewriteModal
+          original={sourceRewrite.original}
+          proposed={sourceRewrite.proposed}
+          initialMode={sourceRewrite.initialMode}
+          wholeDocument={sourceRewrite.wholeDocument}
+          model={workspace.settings.model}
+          generating={sourceRewrite.generating}
+          error={sourceRewrite.error}
+          reviewCount={sourceRewrite.reviewCount}
+          onGenerate={(mode, value) => void prepareSourceRewritePreview(mode, value)}
+          onStop={() => void stopSourceRewrite()}
+          onApprove={applySourceRewrite}
+          onDismiss={() => {
+            if (!sourceRewrite.generating) setSourceRewrite(null);
           }}
         />
       )}

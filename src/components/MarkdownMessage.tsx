@@ -6,6 +6,7 @@ import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { normalizeMathDelimiters } from "../lib/markdown";
+import { anchorForSelection, containingMarkdownSection } from "../lib/sourceEditing";
 import type {
   HighlightAnchor,
   InlineDefinition,
@@ -420,11 +421,29 @@ function MarkdownMessageComponent({
     const quote = sourceQuoteFromRange(range, container);
     if (!quote.trim() || quote.length > 12_000) return;
     const bounds = range.getBoundingClientRect();
+    const startBlockIndex = topLevelBlockIndex(container, range.startContainer);
+    const endBlockIndex = topLevelBlockIndex(container, range.endContainer);
+    const section = containingMarkdownSection(
+      message.content,
+      startBlockIndex,
+      endBlockIndex,
+    );
+    const anchor = anchorForSelection(
+      message.content,
+      {
+        sourceNodeId: nodeId,
+        sourceMessageId: message.id,
+        quote,
+        blockIndex: startBlockIndex,
+      },
+      endBlockIndex,
+    );
     onSelect({
-      sourceNodeId: nodeId,
-      sourceMessageId: message.id,
-      quote,
-      blockIndex: topLevelBlockIndex(container, range.startContainer),
+      ...anchor,
+      endBlockIndex,
+      sectionStart: section.start,
+      sectionEnd: section.end,
+      sectionContent: section.content,
       rect: {
         left: bounds.left,
         top: bounds.top,

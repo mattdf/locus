@@ -61,6 +61,27 @@ export interface HighlightAnchor {
   sourceMessageId: string;
   quote: string;
   blockIndex: number;
+  /** Raw Markdown offsets. Older anchors are resolved from quote/blockIndex on demand. */
+  start?: number;
+  end?: number;
+  prefix?: string;
+  suffix?: string;
+  status?: "resolved" | "needs-review";
+}
+
+export interface SourceAnchorSnapshot {
+  id: string;
+  anchor: HighlightAnchor;
+}
+
+export interface SourceEditUndo {
+  id: string;
+  sourceMessageId: string;
+  previousContent: string;
+  branches: SourceAnchorSnapshot[];
+  definitions: SourceAnchorSnapshot[];
+  visualizations: SourceAnchorSnapshot[];
+  createdAt: string;
 }
 
 export interface InlineDefinition {
@@ -115,6 +136,8 @@ export interface ThreadNode {
   visualizations?: InlineVisualization[];
   messageRevisions?: Record<string, MessageRevisionGroup>;
   responseRevisions?: Record<string, ResponseRevisionGroup>;
+  /** The latest reversible source edit. Cleared by the next source/annotation edit. */
+  sourceEditUndo?: SourceEditUndo;
   createdAt: string;
   updatedAt: string;
 }
@@ -164,6 +187,10 @@ export interface WorkspaceState {
 
 export interface SelectionDraft extends HighlightAnchor {
   rect: { left: number; top: number; width: number; height: number };
+  endBlockIndex?: number;
+  sectionStart?: number;
+  sectionEnd?: number;
+  sectionContent?: string;
 }
 
 export interface ContextNode {

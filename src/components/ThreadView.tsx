@@ -66,6 +66,8 @@ interface ThreadViewProps {
   onSend: (message: string) => void;
   onStop: (assistantId: string) => void;
   onEditMessage: (revisionGroupId: string, content: string) => void;
+  onEditSource: (messageId: string) => void;
+  onRevertSourceEdit: (messageId: string) => void;
   onRegenerateResponse: (
     assistantId: string,
     modelOverride?: string,
@@ -287,6 +289,8 @@ export function ThreadView({
   onSend,
   onStop,
   onEditMessage,
+  onEditSource,
+  onRevertSourceEdit,
   onRegenerateResponse,
   onSwitchMessageRevision,
   onSwitchResponseRevision,
@@ -684,6 +688,20 @@ export function ThreadView({
                     </button>
                   </span>
                 )}
+                {!readOnly && message.role === "source" && (
+                  <span className="message__controls">
+                    <button
+                      className="edit-message-button"
+                      type="button"
+                      aria-label="Edit imported Markdown source"
+                      disabled={waiting}
+                      onClick={() => onEditSource(message.id)}
+                    >
+                      <Pencil size={11} />
+                      <span>Edit source</span>
+                    </button>
+                  </span>
+                )}
                 {message.role === "assistant" && !message.pending && (
                   <span className="message__controls">
                     {!readOnly && responseRevisionGroup && responseRevisionGroupId && (
@@ -913,6 +931,15 @@ export function ThreadView({
                   onOpenDefinition={onOpenDefinition}
                   onOpenVisualization={focusVisualization}
                 />
+                  {message.role === "source" &&
+                    node.sourceEditUndo?.sourceMessageId === message.id && (
+                      <div className="source-edit-undo" role="status">
+                        <span>Source rewrite applied</span>
+                        <button type="button" onClick={() => onRevertSourceEdit(message.id)}>
+                          <RotateCcw size={12} /> Revert
+                        </button>
+                      </div>
+                    )}
                   {visualizations.map((visualization) => (
                     <InlineVisualizationMount
                       key={visualization.id}
@@ -977,7 +1004,7 @@ export function ThreadView({
         />
         {!side && (
           <p className="selection-tip">
-            Select any passage or equation to define, visualize, quote, or elaborate on it.
+            Select any passage or equation to define, visualize, quote, or elaborate on it. Imported sources can also be rewritten.
           </p>
         )}
       </div>}

@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "better-auth": "^1.6.23",
+    "diff-match-patch": "^1.0.5",
     "express": "^5.1.0",
     "express-rate-limit": "^8.6.0",
     "helmet": "^8.3.0",
@@ -39,9 +40,12 @@
     "rehype-highlight": "^7.0.2",
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
-    "remark-math": "^6.0.0"
+    "remark-math": "^6.0.0",
+    "remark-parse": "^11.0.0",
+    "unified": "^11.0.5"
   },
   "devDependencies": {
+    "@types/diff-match-patch": "^1.0.36",
     "@types/express": "^5.0.3",
     "@types/node": "^22.15.30",
     "@types/pg": "^8.20.0",

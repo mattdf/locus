@@ -89,6 +89,7 @@ export function createPublicSnapshot(chat: ChatTree): ChatTree {
           visualizations,
           messageRevisions: undefined,
           responseRevisions: undefined,
+          sourceEditUndo: undefined,
         },
       ];
     }),
@@ -222,4 +223,3 @@ sharesRouter.delete("/:id", async (request, response, next) => {
     next(error);
   }
 });
-

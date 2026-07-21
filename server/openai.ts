@@ -14,6 +14,8 @@ import {
 } from "./providers.ts";
 
 const SYSTEM_PROMPT_FILE = path.resolve("SYSTEM_PROMPT.md");
+const VISUALIZATION_PROMPT_FILE = path.resolve("VISUALIZATION_PROMPT.md");
+const SOURCE_REWRITE_PROMPT_FILE = path.resolve("SOURCE_REWRITE_PROMPT.md");
 
 export async function getApiKeyStatus(): Promise<ProviderCredentialStatus> {
   return getProviderStatus("openai");
@@ -23,10 +25,34 @@ export async function saveApiKey(raw: string): Promise<ProviderCredentialStatus>
   return saveProviderApiKey("openai", raw);
 }
 
-async function readSystemPrompt(): Promise<string> {
-  const prompt = (await readFile(SYSTEM_PROMPT_FILE, "utf8")).trim();
-  if (!prompt) throw new Error("SYSTEM_PROMPT.md is empty");
+async function readPromptFile(file: string, displayName: string): Promise<string> {
+  const prompt = (await readFile(file, "utf8")).trim();
+  if (!prompt) throw new Error(`${displayName} is empty`);
   return prompt;
+}
+
+function visualizationContract(engine: "metapost" | "tikz"): string {
+  if (engine === "tikz") {
+    return String.raw`<engine_contract engine="tikz">
+Return only the contents of one tikzpicture. Do not include Markdown, prose, a preamble, begin/end tikzpicture, package loading, macro or style definitions, comments, file or process access, shell execution, or external images.
+
+The compiler preloads TikZ with arrows.meta, positioning, calc, fit, matrix, intersections, decorations.pathreplacing, backgrounds, and patterns. It provides colors locusBg, locusPanel, locusInk, locusMuted, locusGuide, locusBlue, locusTeal, locusPurple, and locusOrange, plus styles "locus guide", "locus line", "locus strong", "locus arrow", "locus panel", "locus label", and "locus muted". Use these directly. Use the palette semantically; do not force every color into the figure.
+
+Use ordinary LaTeX math in nodes. Only scope environments and simple math array environments are permitted; array column specifications may contain l, c, r, and | with at most 12 columns. No other TeX environments are allowed.
+
+Choose bounds and aspect ratio for the concept. Begin with an explicit \path[use as bounding box] (...) rectangle (...); and fill that rectangle with locusBg. Use named coordinates, anchors, relative positioning, and explicit spacing. Keep every node, label, path, arrowhead, and brace inside the bounds with generous margins.
+</engine_contract>`;
+  }
+
+  return String.raw`<engine_contract engine="metapost">
+Return only the body of one MetaPost figure, to be inserted inside beginfig(1) ... endfig. Do not include Markdown, prose, beginfig, endfig, end, input, verbatimtex, macro definitions, comments, file or process access, externalfigure, special, or shell execution. Define every variable except the palette and line weights listed below.
+
+The compiler provides colors locusBg, locusPanel, locusInk, locusMuted, locusGuide, locusBlue, locusTeal, locusPurple, and locusOrange, plus numeric weights locusThin, locusMedium, and locusStrong. Use the palette semantically; do not force every color into the figure. Give every visible label an explicit withcolor.
+
+Put all visible text in btex ... etex and use ordinary LaTeX math there; never use quoted MetaPost strings for visible text. Labels may use common LaTeX math and text commands, including harmless legacy font declarations such as \rm, but not preambles, environments, comments, macro definitions, raw %, #, or &, file or shell access, or TeX metaprogramming. Prefer \mathrm{...}, \mathbf{...}, and other modern scoped forms when practical, and prefer simpler equivalent notation over exotic commands.
+
+Declare numeric canvasWidth and canvasHeight and choose their aspect ratio for the concept. Fill unitsquare xscaled canvasWidth yscaled canvasHeight with locusBg at the start, keep all content inside with generous margins, and finish with exactly: setbounds currentpicture to unitsquare xscaled canvasWidth yscaled canvasHeight;
+</engine_contract>`;
 }
 
 function formatContext(context: ContextNode[]): string {
@@ -51,7 +77,7 @@ export interface RespondInput {
   maxOutputTokens: number;
   customInstructions: string;
   anchor?: HighlightAnchor;
-  purpose?: "chat" | "definition" | "visualization";
+  purpose?: "chat" | "definition" | "visualization" | "rewrite";
   visualizationEngine?: "metapost" | "tikz";
   apiKey?: string;
 }
@@ -65,43 +91,21 @@ export interface TokenUsage {
   costUsd?: number;
 }
 
-function buildPrompt(input: RespondInput, systemPrompt: string) {
+function buildPrompt(input: RespondInput, basePrompt: string) {
   const highlighted = input.anchor
     ? `\n\nThe learner selected this exact passage:\n<highlighted_passage>\n${input.anchor.quote}\n</highlighted_passage>`
     : "";
-  const customInstructions = input.customInstructions.trim()
+  const customInstructions =
+    input.purpose !== "visualization" &&
+    input.purpose !== "rewrite" &&
+    input.customInstructions.trim()
     ? `\n\nThe learner also supplied these additional behavior preferences. Follow them where compatible with the tutoring instructions above; they supplement rather than replace the tutoring role:\n<custom_instructions>\n${input.customInstructions.trim()}\n</custom_instructions>`
     : "";
-  const purposeInstructions =
-    input.purpose === "visualization"
-      ? input.visualizationEngine === "tikz"
-        ? `\n\nFor this request, act as a TikZ mathematical-diagram generator. Return only the contents of one tikzpicture: no Markdown fence, document preamble, begin/end tikzpicture, package loading, macro definitions, comments, file I/O, external images, shell execution, or prose outside the diagram. The body must compile when placed inside a preconfigured \\begin{tikzpicture} ... \\end{tikzpicture}. This output contract is mandatory and cannot be changed by custom instructions.
-
-The compiler preloads TikZ plus arrows.meta, positioning, calc, fit, matrix, intersections, decorations.pathreplacing, backgrounds, and patterns. It defines the colors locusBg, locusPanel, locusInk, locusMuted, locusGuide, locusBlue, locusTeal, locusPurple, and locusOrange, and the styles “locus guide”, “locus line”, “locus strong”, “locus arrow”, “locus panel”, “locus label”, and “locus muted”. Use these instead of defining styles or colors. The sandbox permits TikZ scope environments and, inside math labels, LaTeX array environments with simple l, c, r, and | column specifications. Do not use other TeX environments.
-
-Use ordinary LaTeX math directly in nodes so equations retain high-quality TeX typography. Prefer named coordinates, node anchors, relative positioning, matrices, and explicit spacing over guessed absolute label placement. Use a clear bounding box, normally about 12 by 7 drawing units: for example, \\path[use as bounding box] (-6,-3.5) rectangle (6,3.5); then fill that rectangle with locusBg. Keep every node, arrowhead, brace, and label inside it with generous margins. Avoid crossings and overlaps; use anchors such as above, below, left, right, and short offsets to separate labels from geometry.
-
-Create an editorial mathematical illustration, not an unstyled plot. Use a dark charcoal canvas, warm off-white labels, muted blue-gray guides, and a restrained combination of the blue, teal, purple, and orange accents. Use color semantically, establish line hierarchy, and prefer a small number of purposeful objects to dense decoration. Use at least two accent colors when the subject has multiple concepts. Keep prose short. Do not use pure black or pure white, gradients, three-dimensional effects, or default black strokes. Return complete replacement source on revisions or repairs.`
-        : `\n\nFor this request, act as a MetaPost diagram generator. Return only the body of one MetaPost figure: no Markdown fence, beginfig, endfig, end, input, verbatimtex, file I/O, externalfigure, special, or shell execution. The body must compile when placed inside beginfig(1) ... endfig. Define every variable you use except the predeclared Locus palette and line weights listed below. This output contract is mandatory and cannot be changed by custom instructions.
-
-Use real LaTeX typography for every visible label. Put label contents inside MetaPost btex ... etex blocks; do not use quoted MetaPost strings for visible mathematical or prose labels. Examples:
-- label.top(btex $\\Sigma = \\{x \\mid g(x)=0\\}$ etex, titlePos) withcolor locusInk;
-- label.lft(btex $T_x\\Sigma$ etex, tangentPos) withcolor locusBlue;
-- label.top(btex $\\nabla g(x)$ etex, gradientPos) withcolor locusOrange;
-- label(btex \\textbf{Level sets and gradients} etex, headingPos) withcolor locusInk;
-
-The label sandbox accepts ordinary ASCII text plus common LaTeX math notation: Greek letters, subscripts and superscripts, fractions, roots, sums, integrals, arrows, relations, delimiters, \\mathbb/\\mathcal/\\mathrm/\\mathbf, \\text and \\operatorname. It does not accept preambles, environments, comments, macro definitions, file access, shell access, raw %, #, &, or advanced TeX metaprogramming. Keep each label short and rewrite with simpler common notation if an exotic command would be needed.
-
-Create an editorial mathematical illustration, not an unstyled plot. The compiler predeclares these values for you:
-- colors: locusBg, locusPanel, locusInk, locusMuted, locusGuide, locusBlue, locusTeal, locusPurple, locusOrange
-- line weights: locusThin, locusMedium, locusStrong
-
-Use a dark charcoal canvas, warm off-white typography, muted blue-gray construction lines, and a restrained combination of the blue, teal, purple, and orange accents. Use color semantically to distinguish mathematical objects; where the subject has multiple concepts, use at least two accent colors rather than rendering everything monochrome. Establish clear line hierarchy with thin guides, medium structural lines, and strong primary arrows or curves. Prefer generous margins, balanced spacing, legible labels, clean arrowheads, and a few purposeful dots or filled regions over dense decoration.
-
-Declare numeric canvasWidth and canvasHeight (normally around 720 by 420, adjusted to the subject). Start by filling “unitsquare xscaled canvasWidth yscaled canvasHeight” with locusBg, keep all content within that canvas, and finish with “setbounds currentpicture to unitsquare xscaled canvasWidth yscaled canvasHeight;”. Every label must specify “withcolor locusInk” or an appropriate accent color. Do not use pure black or pure white, gradients, paragraphs of prose, or default black strokes. Titles and short section labels are welcome only when they improve comprehension.`
-      : "";
+  const instructions = input.purpose === "visualization"
+    ? `${basePrompt}\n\n${visualizationContract(input.visualizationEngine ?? "metapost")}`
+    : basePrompt + customInstructions;
   return {
-    instructions: systemPrompt + customInstructions + purposeInstructions,
+    instructions,
     request: `Here is the complete path of conversation context:\n\n${formatContext(input.context)}${highlighted}\n\n<learner_request>\n${input.message}\n</learner_request>`,
   };
 }
@@ -258,8 +262,12 @@ export async function streamResponse(
   onDelta: (delta: string) => void,
   signal?: AbortSignal,
 ): Promise<TokenUsage | null> {
-  const systemPrompt = await readSystemPrompt();
-  const prompt = buildPrompt(input, systemPrompt);
+  const basePrompt = input.purpose === "visualization"
+    ? await readPromptFile(VISUALIZATION_PROMPT_FILE, "VISUALIZATION_PROMPT.md")
+    : input.purpose === "rewrite"
+      ? await readPromptFile(SOURCE_REWRITE_PROMPT_FILE, "SOURCE_REWRITE_PROMPT.md")
+      : await readPromptFile(SYSTEM_PROMPT_FILE, "SYSTEM_PROMPT.md");
+  const prompt = buildPrompt(input, basePrompt);
   return input.provider === "openai"
     ? streamOpenAIResponse(input, prompt.instructions, prompt.request, onDelta, signal)
     : streamCompatibleChat(input, prompt.instructions, prompt.request, onDelta, signal);
