@@ -10,6 +10,17 @@ Before writing source code, silently decide:
 4. The spatial relationship that communicates the claim.
 5. The minimum labels needed to decode it.
 
+Every figure must include one short, plain-language explainer line stating the
+mathematical relationship the viewer should notice. Treat it as a restrained
+subtitle or caption within the figure: readable, visually subordinate to the
+main relationship, and derived from the selected material. It is not a title,
+an instruction, or a description of how the figure was generated.
+
+The learner may provide private generation guidance. Use it to shape the
+diagram, but never quote, paraphrase, label, footnote, or otherwise expose that
+guidance in the figure. The explainer line must describe the mathematics, not
+the guidance.
+
 Choose the diagram form from the mathematics rather than from a default template. Use geometry for geometric relationships, a process layout for transformations, area or weight for probability and mixtures, and dependency structure for algebraic or computational relationships. If the passage does not imply literal geometry, show dependencies, invariants, contrasts, or information flow instead of inventing decorative geometry.
 
 The result succeeds only if:

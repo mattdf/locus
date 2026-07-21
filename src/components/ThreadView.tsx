@@ -27,6 +27,7 @@ import type {
   SendShortcut,
   ProviderId,
   ProviderModelOption,
+  VisualizationContextScope,
   VisualizationEngine,
 } from "../types";
 import { childThreads, messagesForNode } from "../lib/tree";
@@ -58,6 +59,7 @@ interface ThreadViewProps {
     visualizationId: string,
     hint: string,
     engine: VisualizationEngine,
+    contextScope: VisualizationContextScope,
   ) => void;
   onFixVisualization: (visualizationId: string, instruction: string) => void;
   onCompileVisualization: (visualizationId: string, source: string) => void;
@@ -150,6 +152,7 @@ function InlineVisualizationMount({
     visualizationId: string,
     hint: string,
     engine: VisualizationEngine,
+    contextScope: VisualizationContextScope,
   ) => void;
   onFix: (visualizationId: string, instruction: string) => void;
   onCompile: (visualizationId: string, source: string) => void;

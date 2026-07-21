@@ -2134,6 +2134,13 @@ a:focus-visible {
   font-weight: 600;
 }
 
+.visualization-card__hint-note {
+  margin: 6px 0 0;
+  color: #8b8094;
+  font-size: 9px;
+  line-height: 1.4;
+}
+
 .visualization-card textarea {
   display: block;
   width: 100%;
@@ -2221,14 +2228,6 @@ a:focus-visible {
   max-width: 100%;
   max-height: 560px;
   margin: 0 auto;
-}
-
-.visualization-card__figure figcaption {
-  margin-top: 10px;
-  color: #a8b1bf;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: calc(11px * var(--text-scale, 1));
-  font-style: italic;
 }
 
 .visualization-lightbox {
@@ -6147,8 +6146,8 @@ body.resizing-drawer {
     #0e1116;
 }
 
-.app-shell[data-theme="dark"] .visualization-card__figure figcaption {
-  color: #a8b1bf;
+.app-shell[data-theme="dark"] .visualization-card__hint-note {
+  color: #9b8da5;
 }
 
 .app-shell[data-theme="dark"] .visualization-card__error {

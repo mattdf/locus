@@ -106,9 +106,19 @@ function buildPrompt(input: RespondInput, basePrompt: string) {
   const instructions = input.purpose === "visualization"
     ? `${basePrompt}\n\n${visualizationContract(input.visualizationEngine ?? "metapost")}`
     : basePrompt + customInstructions;
+  const hasSuppliedContext = input.context.some((node) =>
+    node.messages.some((message) => message.content.trim()),
+  );
+  const request = input.purpose === "visualization"
+    ? `${
+        hasSuppliedContext
+          ? `The learner explicitly supplied this additional context for interpreting the selection:\n\n${formatContext(input.context)}`
+          : "The learner chose to send only the highlighted passage. Do not assume access to the rest of its containing message."
+      }${highlighted}\n\n<learner_request>\n${input.message}\n</learner_request>`
+    : `Here is the complete path of conversation context:\n\n${formatContext(input.context)}${highlighted}\n\n<learner_request>\n${input.message}\n</learner_request>`;
   return {
     instructions,
-    request: `Here is the complete path of conversation context:\n\n${formatContext(input.context)}${highlighted}\n\n<learner_request>\n${input.message}\n</learner_request>`,
+    request,
   };
 }
 

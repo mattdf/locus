@@ -126,6 +126,7 @@ export type VisualizationStatus =
   | "error";
 
 export type VisualizationEngine = "metapost" | "tikz";
+export type VisualizationContextScope = "selection" | "nearby" | "message";
 
 export interface InlineVisualization {
   id: string;
@@ -134,6 +135,8 @@ export interface InlineVisualization {
   status: VisualizationStatus;
   /** Undefined on visualizations created before the engine selector was added. */
   engine?: VisualizationEngine;
+  /** Undefined on older visualizations; current behavior defaults to selection-only. */
+  contextScope?: VisualizationContextScope;
   /** Engine-agnostic source used by current visualizations. */
   source?: string;
   /** Legacy MetaPost source retained for backwards-compatible imports. */

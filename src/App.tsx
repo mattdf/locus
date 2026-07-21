@@ -76,6 +76,7 @@ import {
   anchorFromReplacementRange,
   containingMarkdownSection,
   createPositionMapper,
+  markdownBlockRanges,
   parseMarkedRewrite,
   remapAnchor,
   resolveAnchorRange,
@@ -117,6 +118,7 @@ import type {
   SelectionDraft,
   SourceEditUndo,
   ThreadNode,
+  VisualizationContextScope,
   VisualizationEngine,
   WorkspaceState,
 } from "./types";
@@ -410,6 +412,27 @@ function anchorFromDraft(selection: SelectionDraft): HighlightAnchor {
     suffix: selection.suffix,
     status: selection.status,
   };
+}
+
+function visualizationContextContent(
+  content: string,
+  anchor: HighlightAnchor,
+  scope: VisualizationContextScope,
+): string {
+  if (scope === "selection") return "";
+  if (scope === "message") return content;
+
+  const blocks = markdownBlockRanges(content);
+  if (!blocks.length) return content;
+  const selected = resolveAnchorRange(content, anchor);
+  const overlapping = blocks
+    .map((block, index) => ({ block, index }))
+    .filter(({ block }) => selected.start < block.end && selected.end > block.start);
+  const first = overlapping[0]?.index ?? Math.min(anchor.blockIndex, blocks.length - 1);
+  const last = overlapping.at(-1)?.index ?? first;
+  const start = blocks[Math.max(0, first - 1)]?.start ?? 0;
+  const end = blocks[Math.min(blocks.length - 1, last + 1)]?.end ?? content.length;
+  return content.slice(start, end);
 }
 
 function sourceAnnotations(
@@ -2268,6 +2291,7 @@ export default function App({
     hint: string,
     engineOverride?: VisualizationEngine,
     followup?: VisualizationFollowup,
+    contextScopeOverride?: VisualizationContextScope,
   ): Promise<void> => {
     const chat = workspaceRef.current.chats.find((item) => item.id === chatId);
     const node = chat?.nodes[nodeId];
@@ -2279,6 +2303,7 @@ export default function App({
       : null;
     if (!chat || !node || !visualization || !sourceMessage) return;
     const engine = engineOverride ?? visualizationEngine(visualization);
+    const contextScope = contextScopeOverride ?? visualization.contextScope ?? "selection";
     const engineLabel = visualizationEngineLabel(engine);
 
     if (followup?.kind !== "repair") {
@@ -2289,6 +2314,8 @@ export default function App({
           updateVisualization(chatId, nodeId, visualizationId, (current) => ({
             ...current,
             hint,
+            engine,
+            contextScope,
             status: "error",
             errorStage: "compile",
             errorMessage:
@@ -2301,6 +2328,8 @@ export default function App({
         updateVisualization(chatId, nodeId, visualizationId, (current) => ({
           ...current,
           hint,
+          engine,
+          contextScope,
           status: "error",
           errorStage: "compile",
           errorMessage: `Could not verify the ${engineLabel} compiler before generation.`,
@@ -2315,6 +2344,7 @@ export default function App({
       ...current,
       hint,
       engine,
+      contextScope,
       status: "generating",
       requestId,
       svg: followup ? current.svg : undefined,
@@ -2336,11 +2366,16 @@ export default function App({
         ? `Repair the following ${engineLabel} figure body so it compiles under the required restricted output contract. Preserve its intended content and return only the corrected body.\n\n<failed_source>\n${followup.source}\n</failed_source>\n\n<compiler_log>\n${followup.diagnostic.slice(-12_000)}\n</compiler_log>`
         : followup?.kind === "revision"
           ? `Revise the following existing ${engineLabel} figure body according to the one-time instruction. Return the complete replacement figure body, preserve everything that already works, and make only the changes needed to satisfy the instruction. Do not describe the changes.\n\n<existing_source>\n${followup.source}\n</existing_source>\n\n<revision_request>\n${followup.instruction}\n</revision_request>`
-          : `Visualize the highlighted passage according to the semantic-design criteria. Use the containing message only to resolve symbols and assumptions. ${
+          : `Visualize the highlighted passage according to the semantic-design criteria. Include one concise explainer line inside the figure stating the mathematical relationship it reveals. ${
               hint
-                ? `Treat this hint as an additional requirement, not as a substitute for a meaningful visual claim:\n<visualization_hint>\n${hint}\n</visualization_hint>`
+                ? `Use the following as private generation direction only. Never reproduce, quote, paraphrase, label, or footnote it in the figure:\n<private_visualization_direction>\n${hint}\n</private_visualization_direction>`
                 : "Choose the diagram form that best exposes the passage's most important relationship."
             }`;
+      const contextContent = visualizationContextContent(
+        sourceMessage.content,
+        visualization.anchor,
+        contextScope,
+      );
       const result = await modelRequest(
         requestId,
         {
@@ -2358,7 +2393,9 @@ export default function App({
           context: [
             {
               title: node.title,
-              messages: [{ role: sourceMessage.role, content: sourceMessage.content }],
+              messages: contextContent
+                ? [{ role: sourceMessage.role, content: contextContent }]
+                : [],
             },
           ],
           message: prompt,
@@ -2395,7 +2432,7 @@ export default function App({
       if (compileError && followup?.kind !== "repair") {
         await generateVisualization(chatId, nodeId, visualizationId, hint, engine, {
           kind: "repair", source, diagnostic: compileError.log || compileError.message,
-        });
+        }, contextScope);
       }
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -4033,6 +4070,7 @@ export default function App({
       hint: "",
       status: "draft",
       engine: "metapost",
+      contextScope: "selection",
       createdAt,
       updatedAt: createdAt,
     };
@@ -4715,9 +4753,15 @@ export default function App({
                 getAnchorRect,
               })
             }
-            onGenerateVisualization={(visualizationId, hint, engine) =>
+            onGenerateVisualization={(visualizationId, hint, engine, contextScope) =>
               void generateVisualization(
-                activeChat.id, leftPaneNode.id, visualizationId, hint, engine,
+                activeChat.id,
+                leftPaneNode.id,
+                visualizationId,
+                hint,
+                engine,
+                undefined,
+                contextScope,
               )
             }
             onFixVisualization={(visualizationId, instruction) =>
@@ -4989,9 +5033,15 @@ export default function App({
                 getAnchorRect,
               })
             }
-            onGenerateVisualization={(visualizationId, hint, engine) =>
+            onGenerateVisualization={(visualizationId, hint, engine, contextScope) =>
               void generateVisualization(
-                activeChat.id, sideNode.id, visualizationId, hint, engine,
+                activeChat.id,
+                sideNode.id,
+                visualizationId,
+                hint,
+                engine,
+                undefined,
+                contextScope,
               )
             }
             onFixVisualization={(visualizationId, instruction) =>

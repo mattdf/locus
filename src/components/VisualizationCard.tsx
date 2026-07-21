@@ -24,7 +24,12 @@ import {
   visualizationEngineLabel,
   visualizationSource,
 } from "../lib/visualization";
-import type { InlineVisualization, SendShortcut, VisualizationEngine } from "../types";
+import type {
+  InlineVisualization,
+  SendShortcut,
+  VisualizationContextScope,
+  VisualizationEngine,
+} from "../types";
 import { MathBlock } from "./MathText";
 
 interface VisualizationCardProps {
@@ -34,6 +39,7 @@ interface VisualizationCardProps {
     visualizationId: string,
     hint: string,
     engine: VisualizationEngine,
+    contextScope: VisualizationContextScope,
   ) => void;
   onFix: (visualizationId: string, instruction: string) => void;
   onCompile: (visualizationId: string, source: string) => void;
@@ -78,6 +84,9 @@ export function VisualizationCard({
 }: VisualizationCardProps) {
   const [hint, setHint] = useState(visualization.hint);
   const [engine, setEngine] = useState<VisualizationEngine>(visualizationEngine(visualization));
+  const [contextScope, setContextScope] = useState<VisualizationContextScope>(
+    visualization.contextScope ?? "selection",
+  );
   const [source, setSource] = useState(visualizationSource(visualization));
   const [editingSource, setEditingSource] = useState(false);
   const [fixing, setFixing] = useState(false);
@@ -119,6 +128,10 @@ export function VisualizationCard({
     [visualization.id, visualization.engine],
   );
   useEffect(
+    () => setContextScope(visualization.contextScope ?? "selection"),
+    [visualization.id, visualization.contextScope],
+  );
+  useEffect(
     () => setSource(visualizationSource(visualization)),
     [visualization.id, visualization.source, visualization.metapostSource],
   );
@@ -150,7 +163,7 @@ export function VisualizationCard({
 
   const engineLabel = visualizationEngineLabel(engine);
   const persistedSource = visualizationSource(visualization);
-  const generate = () => onGenerate(visualization.id, hint.trim(), engine);
+  const generate = () => onGenerate(visualization.id, hint.trim(), engine, contextScope);
   const applyFix = () => {
     const instruction = fixInstruction.trim();
     if (!instruction) return;
@@ -285,6 +298,16 @@ export function VisualizationCard({
             <option value="metapost">MetaPost</option>
             <option value="tikz">TikZ</option>
           </select>
+          <label htmlFor={`visualization-context-${visualization.id}`}>Context sent to model</label>
+          <select
+            id={`visualization-context-${visualization.id}`}
+            value={contextScope}
+            onChange={(event) => setContextScope(event.target.value as VisualizationContextScope)}
+          >
+            <option value="selection">Highlighted text only</option>
+            <option value="nearby">Highlight + nearby context</option>
+            <option value="message">Full message context</option>
+          </select>
           <label htmlFor={`visualization-hint-${visualization.id}`}>Visualization hint <small>optional</small></label>
           <textarea
             ref={hintRef}
@@ -301,6 +324,9 @@ export function VisualizationCard({
               }
             }}
           />
+          <p className="visualization-card__hint-note">
+            Used only to direct generation. It will not be displayed in the figure.
+          </p>
           <button className="visualization-card__primary" type="button" onClick={generate}>
             <Play size={14} /> Generate visualization
           </button>
@@ -323,8 +349,7 @@ export function VisualizationCard({
 
       {visualization.svg && svgUrl && !editingSource && (
         <figure className="visualization-card__figure">
-          <img src={svgUrl} alt={visualization.hint || "Generated mathematical visualization"} />
-          {visualization.hint && <figcaption>{visualization.hint}</figcaption>}
+          <img src={svgUrl} alt="Generated mathematical visualization of the selected passage" />
         </figure>
       )}
 
@@ -440,9 +465,8 @@ export function VisualizationCard({
             <figure>
               <img
                 src={svgUrl}
-                alt={visualization.hint || "Generated mathematical visualization"}
+                alt="Generated mathematical visualization of the selected passage"
               />
-              {visualization.hint && <figcaption>{visualization.hint}</figcaption>}
             </figure>
           </section>
         </div>,
