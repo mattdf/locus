@@ -264,15 +264,39 @@ const metapost = await request("/api/metapost/compile", {
   cookie: aliceCookie,
   body: JSON.stringify({
     source: `numeric canvasWidth, canvasHeight;
+pair p0, p1;
 canvasWidth := 220; canvasHeight := 120;
+p0 := (30,40); p1 := (190,90);
 fill unitsquare xscaled canvasWidth yscaled canvasHeight withcolor locusBg;
-drawarrow (30,40)--(190,90) withpen pencircle scaled locusStrong withcolor locusTeal;
-label(btex $x^2$ etex, (110,70)) withcolor locusInk;
+drawarrow p0--p1 withpen pencircle scaled locusStrong withcolor locusTeal;
+label(btex input \\(x^2\\) etex, (110,70)) withcolor locusInk;
 setbounds currentpicture to unitsquare xscaled canvasWidth yscaled canvasHeight;`,
   }),
 });
 const metapostBody = await json(metapost);
 assert(metapost.ok && metapostBody.svg?.includes("<svg"), `MetaPost compilation failed: ${JSON.stringify(metapostBody)}`);
+assert(
+  metapostBody.source?.includes("pair p[];") && !metapostBody.source?.includes("pair p0"),
+  `MetaPost numeric-suffix declarations were not normalized: ${JSON.stringify(metapostBody)}`,
+);
+
+const invalidMetaPostDelimiter = await request("/api/metapost/compile", {
+  method: "POST",
+  cookie: aliceCookie,
+  body: JSON.stringify({
+    source: `numeric canvasWidth, canvasHeight;
+canvasWidth := 220; canvasHeight := 120;
+fill unitsquare xscaled canvasWidth yscaled canvasHeight withcolor locusBg;
+label(btex \\(x^2 etex, (110,70)) withcolor locusInk;
+setbounds currentpicture to unitsquare xscaled canvasWidth yscaled canvasHeight;`,
+  }),
+});
+const invalidMetaPostDelimiterBody = await json(invalidMetaPostDelimiter);
+assert(
+  invalidMetaPostDelimiter.status === 400 &&
+    String(invalidMetaPostDelimiterBody.error ?? "").includes("unclosed \\("),
+  `Unbalanced MetaPost inline math was not rejected: ${JSON.stringify(invalidMetaPostDelimiterBody)}`,
+);
 
 const bobUser = adminUsers.users.find((user) => user.email === bob.email);
 assert(bobUser?.id, "Bob was missing from account management");

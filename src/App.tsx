@@ -180,6 +180,7 @@ interface VisualizationCompileResult {
   svg: string;
   log: string;
   durationMs: number;
+  source?: string;
 }
 
 type VisualizationFollowup =
@@ -2568,6 +2569,7 @@ export default function App({
       updateVisualization(chatId, nodeId, visualizationId, (current) => ({
         ...current,
         status: "ready",
+        source: result.source ?? source,
         svg: result.svg,
         compilerLog: result.log,
         compileDurationMs: result.durationMs,

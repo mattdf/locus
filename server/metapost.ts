@@ -68,7 +68,12 @@ const SAFE_TEX_COMMANDS = new Set([
   "quad", "qquad",
 ]);
 
-const SAFE_TEX_SYMBOL_COMMANDS = new Set([",", ";", ":", "!", "{", "}", "|", "_", " "]);
+const SAFE_TEX_SYMBOL_COMMANDS = new Set([
+  ",", ";", ":", "!", "{", "}", "|", "_", " ",
+  // Standard LaTeX inline-math delimiters. validateTexLabel separately
+  // requires them to be balanced and forbids mixing them with $...$.
+  "(", ")",
+]);
 
 interface InspectedSource {
   executable: string;
@@ -169,10 +174,30 @@ function validateTexLabel(label: string, labelIndex: number): void {
 
   let braceDepth = 0;
   let mathDelimiters = 0;
+  let parenthesizedMathOpen = false;
   for (let index = 0; index < label.length; index += 1) {
     const character = label[index];
     if (character === "\\") {
-      if (/[A-Za-z]/.test(label[index + 1] ?? "")) {
+      const next = label[index + 1] ?? "";
+      if (next === "(") {
+        if (parenthesizedMathOpen || mathDelimiters % 2 !== 0) {
+          throw new MetaPostCompileError(
+            `TeX label ${displayIndex} has nested or mixed inline-math delimiters.`,
+            400,
+          );
+        }
+        parenthesizedMathOpen = true;
+        index += 1;
+      } else if (next === ")") {
+        if (!parenthesizedMathOpen) {
+          throw new MetaPostCompileError(
+            `TeX label ${displayIndex} has an unmatched \\) math delimiter.`,
+            400,
+          );
+        }
+        parenthesizedMathOpen = false;
+        index += 1;
+      } else if (/[A-Za-z]/.test(next)) {
         while (/[A-Za-z]/.test(label[index + 1] ?? "")) index += 1;
       } else {
         index += 1;
@@ -190,6 +215,12 @@ function validateTexLabel(label: string, labelIndex: number): void {
         throw new MetaPostCompileError(`TeX label ${displayIndex} has unbalanced braces.`, 400);
       }
     } else if (character === "$") {
+      if (parenthesizedMathOpen) {
+        throw new MetaPostCompileError(
+          `TeX label ${displayIndex} has nested or mixed inline-math delimiters.`,
+          400,
+        );
+      }
       mathDelimiters += 1;
     }
   }
@@ -199,12 +230,16 @@ function validateTexLabel(label: string, labelIndex: number): void {
   if (mathDelimiters % 2 !== 0) {
     throw new MetaPostCompileError(`TeX label ${displayIndex} has an unclosed math delimiter.`, 400);
   }
+  if (parenthesizedMathOpen) {
+    throw new MetaPostCompileError(`TeX label ${displayIndex} has an unclosed \\( math delimiter.`, 400);
+  }
 }
 
 export interface MetaPostCompileResult {
   svg: string;
   log: string;
   durationMs: number;
+  source: string;
 }
 
 export class MetaPostCompileError extends Error {
@@ -215,6 +250,57 @@ export class MetaPostCompileError extends Error {
   ) {
     super(message);
   }
+}
+
+const METAPOST_DECLARATION =
+  /\b(numeric|pair|path|pen|picture|transform|color|cmykcolor|boolean|string)\b([^;]*);/gi;
+
+/**
+ * MetaPost reads a trailing number as a suffix, so `pair p0;` is not a valid
+ * declaration even though using `p0` is valid after declaring `pair p[];`.
+ * Models routinely get that distinction wrong. Repair only simple declaration
+ * lists here; labels, strings, and comments are masked by inspectSource and all
+ * executable references remain unchanged.
+ */
+function normalizeNumericSuffixDeclarations(source: string): string {
+  const executable = inspectSource(source).executable;
+  const replacements: Array<{ start: number; end: number; value: string }> = [];
+
+  for (const match of executable.matchAll(METAPOST_DECLARATION)) {
+    if (match.index == null) continue;
+    const declarationType = match[1];
+    const declarationBody = match[2];
+    const declarators = declarationBody.split(",").map((item) => item.trim());
+    if (declarators.some((item) => !item)) continue;
+
+    let changed = false;
+    const normalized: string[] = [];
+    const seen = new Set<string>();
+    for (const declarator of declarators) {
+      const numericSuffix = /^([A-Za-z_]+)\d+$/.exec(declarator);
+      const value = numericSuffix ? `${numericSuffix[1]}[]` : declarator;
+      if (numericSuffix) changed = true;
+      if (!seen.has(value)) {
+        normalized.push(value);
+        seen.add(value);
+      }
+    }
+    if (!changed) continue;
+
+    replacements.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      value: `${declarationType} ${normalized.join(", ")};`,
+    });
+  }
+
+  return replacements
+    .reverse()
+    .reduce(
+      (result, replacement) =>
+        result.slice(0, replacement.start) + replacement.value + result.slice(replacement.end),
+      source,
+    );
 }
 
 function validateBody(source: unknown): string {
@@ -231,7 +317,8 @@ function validateBody(source: unknown): string {
   if (/[^\u0009\u000a\u000d\u0020-\uffff]/u.test(body)) {
     throw new MetaPostCompileError("MetaPost source contains unsupported control characters.", 400);
   }
-  const inspected = inspectSource(body);
+  const normalizedBody = normalizeNumericSuffixDeclarations(body);
+  const inspected = inspectSource(normalizedBody);
   if (inspected.texLabels.length > MAX_TEX_LABELS) {
     throw new MetaPostCompileError(
       `A visualization may contain at most ${MAX_TEX_LABELS} TeX labels.`,
@@ -257,7 +344,7 @@ function validateBody(source: unknown): string {
       400,
     );
   }
-  return body;
+  return normalizedBody;
 }
 
 function wrappedSource(body: string): string {
@@ -371,6 +458,7 @@ export async function compileMetaPost(source: unknown): Promise<MetaPostCompileR
         svg: result.svg,
         log: result.log?.slice(-MAX_LOG_BYTES) ?? "",
         durationMs: result.durationMs ?? Date.now() - startedAt,
+        source: body,
       };
     }
 
@@ -440,7 +528,7 @@ export async function compileMetaPost(source: unknown): Promise<MetaPostCompileR
     if (Buffer.byteLength(svg, "utf8") > MAX_SVG_BYTES) {
       throw new MetaPostCompileError("The compiled SVG exceeds the 2 MB artifact limit.", 413, compilerLog);
     }
-    return { svg, log: compilerLog, durationMs: Date.now() - startedAt };
+    return { svg, log: compilerLog, durationMs: Date.now() - startedAt, source: body };
   } catch (error) {
     if (error instanceof MetaPostCompileError) throw error;
     const message = error instanceof Error ? error.message : "MetaPost compilation failed";

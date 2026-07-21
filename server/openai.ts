@@ -52,6 +52,8 @@ The compiler provides colors locusBg, locusPanel, locusInk, locusMuted, locusGui
 
 Put all visible text in btex ... etex and use ordinary LaTeX math there; never use quoted MetaPost strings for visible text. Labels may use common LaTeX math and text commands, including harmless legacy font declarations such as \rm, but not preambles, environments, comments, macro definitions, raw %, #, or &, file or shell access, or TeX metaprogramming. Prefer \mathrm{...}, \mathbf{...}, and other modern scoped forms when practical, and prefer simpler equivalent notation over exotic commands.
 
+MetaPost treats trailing digits as suffixes. Never declare names such as p0, q1, or x2 individually. Either use descriptive word names such as pZero, or declare each suffix family once (for example, pair p[];) before using p0, p1, and so on.
+
 Declare numeric canvasWidth and canvasHeight and choose their aspect ratio for the concept. Fill unitsquare xscaled canvasWidth yscaled canvasHeight with locusBg at the start, keep all content inside with generous margins, and finish with exactly: setbounds currentpicture to unitsquare xscaled canvasWidth yscaled canvasHeight;
 </engine_contract>`;
 }
