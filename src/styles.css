@@ -3188,6 +3188,62 @@ body.resizing-drawer {
   background: #e5f1f6;
 }
 
+.definition-popover__guidance {
+  margin-bottom: 9px;
+}
+
+.definition-popover__guidance > label {
+  display: block;
+  margin-bottom: 4px;
+  color: #617c88;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.definition-popover__guidance > label small {
+  color: #8ba0a9;
+  font-size: 8px;
+  font-weight: 500;
+}
+
+.definition-popover__guidance > div {
+  display: flex;
+  gap: 6px;
+}
+
+.definition-popover__guidance input {
+  min-width: 0;
+  flex: 1;
+  padding: 6px 8px;
+  color: #263a43;
+  background: white;
+  border: 1px solid #c8dee8;
+  border-radius: 5px;
+  outline: 0;
+  font: 10px/1.35 Inter, ui-sans-serif, sans-serif;
+}
+
+.definition-popover__guidance input:focus {
+  border-color: #68a7c7;
+  box-shadow: 0 0 0 2px rgba(52, 127, 169, 0.1);
+}
+
+.definition-popover__guidance button {
+  padding: 6px 9px;
+  color: white;
+  background: #347fa9;
+  border: 1px solid #347fa9;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.definition-popover__guidance button:hover {
+  background: #286d93;
+  border-color: #286d93;
+}
+
 .definition-popover .math-block,
 .definition-popover .math-block p {
   margin: 0;
@@ -6179,6 +6235,25 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .definition-popover > header button:disabled:hover {
   color: #91a8b2;
   background: transparent;
+}
+
+.app-shell[data-theme="dark"] .definition-popover__guidance > label {
+  color: #9db5c0;
+}
+
+.app-shell[data-theme="dark"] .definition-popover__guidance > label small {
+  color: #758f9a;
+}
+
+.app-shell[data-theme="dark"] .definition-popover__guidance input {
+  color: #d8e8ef;
+  background: #142025;
+  border-color: #365562;
+}
+
+.app-shell[data-theme="dark"] .definition-popover__guidance input:focus {
+  border-color: #5799ba;
+  box-shadow: 0 0 0 2px rgba(87, 153, 186, 0.14);
 }
 
 .app-shell[data-theme="dark"] .definition-popover > header .definition-popover__delete:not(:disabled):hover {

@@ -45,7 +45,14 @@ function completedMessage(message: Message): Message | null {
 
 function completedDefinition(definition: InlineDefinition): InlineDefinition | null {
   if (definition.pending || definition.error || !definition.content.trim()) return null;
-  const { pending: _pending, error: _error, requestId: _requestId, ...rest } = definition;
+  const {
+    pending: _pending,
+    error: _error,
+    requestId: _requestId,
+    hint: _hint,
+    draft: _draft,
+    ...rest
+  } = definition;
   return rest;
 }
 

@@ -48,6 +48,8 @@ function isDefinition(value: unknown): value is InlineDefinition {
     typeof value.id === "string" &&
     typeof value.content === "string" &&
     typeof value.createdAt === "string" &&
+    (value.hint === undefined || typeof value.hint === "string") &&
+    (value.draft === undefined || typeof value.draft === "boolean") &&
     typeof value.anchor.sourceNodeId === "string" &&
     typeof value.anchor.sourceMessageId === "string" &&
     typeof value.anchor.quote === "string" &&

@@ -815,6 +815,7 @@ function DefinitionPopover({
   rect,
   getAnchorRect,
   onStop,
+  onGenerate,
   onRegenerate,
   onDelete,
   onDismiss,
@@ -823,15 +824,22 @@ function DefinitionPopover({
   rect: SelectionDraft["rect"];
   getAnchorRect?: () => SelectionDraft["rect"];
   onStop: () => void;
-  onRegenerate: () => void;
+  onGenerate: (hint: string) => void;
+  onRegenerate: (hint: string) => void;
   onDelete: () => void;
   onDismiss: () => void;
 }) {
   const popoverRef = useRef<HTMLDivElement>(null);
+  const hintRef = useRef<HTMLInputElement>(null);
   const [anchorRect, setAnchorRect] = useState(rect);
   const [position, setPosition] = useState({ left: rect.left, top: rect.top });
+  const [hint, setHint] = useState(definition.hint ?? "");
 
   useEffect(() => setAnchorRect(rect), [rect]);
+  useEffect(() => setHint(definition.hint ?? ""), [definition.id, definition.hint]);
+  useEffect(() => {
+    if (definition.draft) hintRef.current?.focus({ preventScroll: true });
+  }, [definition.id, definition.draft]);
 
   useEffect(() => {
     const popover = popoverRef.current;
@@ -909,15 +917,15 @@ function DefinitionPopover({
       <header>
         <span><BookOpen size={13} /> Definition</span>
         <div className="definition-popover__actions">
-          <button
+          {!definition.draft && <button
             type="button"
             aria-label="Regenerate definition"
             title="Regenerate definition"
             disabled={definition.pending}
-            onClick={onRegenerate}
+            onClick={() => onRegenerate(hint.trim())}
           >
             <RotateCcw size={13} />
-          </button>
+          </button>}
           <button
             className="definition-popover__delete"
             type="button"
@@ -933,12 +941,39 @@ function DefinitionPopover({
           </button>
         </div>
       </header>
+      {!definition.pending && (
+        <div className="definition-popover__guidance">
+          <label htmlFor={`definition-hint-${definition.id}`}>
+            Guidance <small>optional</small>
+          </label>
+          <div>
+            <input
+              ref={hintRef}
+              id={`definition-hint-${definition.id}`}
+              type="text"
+              value={hint}
+              maxLength={500}
+              placeholder="e.g. Emphasize the geometric intuition"
+              onChange={(event) => setHint(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && definition.draft) {
+                  event.preventDefault();
+                  onGenerate(hint.trim());
+                }
+              }}
+            />
+            {definition.draft && (
+              <button type="button" onClick={() => onGenerate(hint.trim())}>Define</button>
+            )}
+          </div>
+        </div>
+      )}
       {definition.pending ? (
         <div className="definition-popover__loading" aria-live="polite">
           <span /> Defining…
           <button type="button" onClick={onStop}>Stop</button>
         </div>
-      ) : (
+      ) : definition.draft ? null : (
         <MathBlock
           className={definition.error ? "definition-popover__error" : ""}
           source={definition.content}
@@ -2062,7 +2097,11 @@ export default function App({
             },
           ],
           message:
-            "Define or explain only the selected passage in one concise paragraph. Return the paragraph directly: no heading, list, preamble, follow-up question, or second paragraph. Preserve useful mathematical notation with inline LaTeX.",
+            `Define or explain only the selected passage in one concise paragraph. Return the paragraph directly: no heading, list, preamble, follow-up question, or second paragraph. Preserve useful mathematical notation with inline LaTeX.${
+              definition.hint?.trim()
+                ? `\n\nUse the following as private guidance for emphasis or framing. Do not quote it, mention it, or describe it as an instruction in the answer:\n<definition_guidance>\n${definition.hint.trim()}\n</definition_guidance>`
+                : ""
+            }`,
           anchor: definition.anchor,
           purpose: "definition",
         },
@@ -2138,6 +2177,7 @@ export default function App({
     chatId: string,
     nodeId: string,
     definitionId: string,
+    hint: string,
   ) => {
     const chat = workspaceRef.current.chats.find((item) => item.id === chatId);
     const node = chat?.nodes[nodeId];
@@ -2147,6 +2187,8 @@ export default function App({
     const regenerated: InlineDefinition = {
       ...definition,
       content: "",
+      hint: hint.trim(),
+      draft: false,
       pending: true,
       error: false,
       requestId: newId(),
@@ -4156,8 +4198,9 @@ export default function App({
       anchor: anchorFromDraft(selection),
       content: "",
       createdAt,
-      pending: true,
-      requestId: newId(),
+      hint: "",
+      draft: true,
+      pending: false,
     };
     const nextChat: ChatTree = {
       ...activeChat,
@@ -4195,7 +4238,6 @@ export default function App({
     });
     setSelection(null);
     clearNativeSelectionAfterHighlight();
-    void askDefinition(nextChat, node.id, definition);
   };
 
   if (!loaded) {
@@ -5785,11 +5827,20 @@ export default function App({
               definitionPopover.definitionId,
             )
           }
-          onRegenerate={() =>
+          onGenerate={(hint) =>
             regenerateDefinition(
               definitionPopover.chatId,
               definitionPopover.nodeId,
               definitionPopover.definitionId,
+              hint,
+            )
+          }
+          onRegenerate={(hint) =>
+            regenerateDefinition(
+              definitionPopover.chatId,
+              definitionPopover.nodeId,
+              definitionPopover.definitionId,
+              hint,
             )
           }
           onDelete={() =>

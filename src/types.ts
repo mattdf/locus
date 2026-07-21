@@ -112,6 +112,10 @@ export interface InlineDefinition {
   anchor: HighlightAnchor;
   content: string;
   createdAt: string;
+  /** Optional private direction supplied by the learner. */
+  hint?: string;
+  /** A newly created definition waiting for the learner to submit its guidance. */
+  draft?: boolean;
   pending?: boolean;
   error?: boolean;
   requestId?: string;
