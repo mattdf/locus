@@ -3871,6 +3871,180 @@ body.resizing-drawer {
   flex-direction: column;
 }
 
+.settings-modal--providers {
+  display: flex;
+  width: min(980px, 100%);
+  max-height: calc(100vh - 48px);
+  flex-direction: column;
+}
+
+.provider-view {
+  min-height: 0;
+  margin-top: 16px;
+  overflow-y: auto;
+}
+
+.provider-view__section + .provider-view__section {
+  padding-top: 18px;
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.provider-view__section > header h3,
+.provider-route header strong,
+.provider-connection strong {
+  margin: 0;
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.provider-view__section > header p {
+  margin: 4px 0 12px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.provider-routes,
+.provider-connections {
+  display: grid;
+  gap: 8px;
+}
+
+.provider-route {
+  display: grid;
+  grid-template-columns: minmax(145px, .65fr) minmax(0, 2.35fr);
+  gap: 14px;
+  padding: 11px;
+  background: rgba(255, 255, 255, .38);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.provider-route > header,
+.provider-connection > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.provider-route header small,
+.provider-connection small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 8px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.provider-route__controls {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(120px, .9fr) minmax(130px, 1fr) minmax(115px, .8fr) 30px;
+  align-items: center;
+  gap: 6px;
+}
+
+.provider-route__controls select,
+.provider-route__controls input,
+.provider-editor input {
+  width: 100%;
+  min-width: 0;
+  height: 33px;
+  padding: 0 9px;
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  outline: 0;
+  font: inherit;
+  font-size: 9px;
+}
+
+.provider-route__refresh {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  place-items: center;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.provider-connection {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 20px minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.provider-connection > em {
+  color: var(--muted);
+  font-size: 8px;
+  font-style: normal;
+}
+
+.provider-connection > em[data-configured] { color: var(--accent); }
+
+.provider-connection > button,
+.provider-add-button {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.provider-connection > .provider-connection__danger { padding: 0 8px; color: var(--danger); }
+.provider-add-button { margin-top: 10px; }
+
+.provider-editor {
+  position: fixed;
+  z-index: 2;
+  width: min(480px, calc(100vw - 32px));
+  padding: 18px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 24px 80px rgba(20, 28, 25, .28);
+}
+
+.provider-editor > header,
+.provider-editor > footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-editor > header .icon-button { margin-left: auto; }
+.provider-editor h3 { margin: 0; font: 700 18px Georgia, serif; }
+.provider-editor > p { color: var(--muted); font-size: 9px; line-height: 1.5; }
+.provider-editor > label { display: grid; gap: 5px; margin-top: 10px; color: var(--muted); font-size: 9px; }
+.provider-editor > footer { justify-content: flex-end; margin-top: 15px; }
+
+@media (max-width: 760px) {
+  .provider-route { grid-template-columns: 1fr; }
+  .provider-route__controls { grid-template-columns: 1fr; }
+  .provider-route__refresh { width: 100%; }
+  .provider-connection { grid-template-columns: 20px minmax(0, 1fr) auto; }
+  .provider-connection > em { display: none; }
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

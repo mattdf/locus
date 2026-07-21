@@ -22,6 +22,7 @@ export interface GenerationJob {
   status: GenerationStatus;
   startedAt: number;
   provider: RespondInput["provider"];
+  providerLabel?: string;
   model: string;
   generation?: GenerationMetrics;
   error?: string;
@@ -146,6 +147,7 @@ function finish(
   job.generation = {
     durationMs: Date.now() - job.startedAt,
     provider: job.provider,
+    providerLabel: job.providerLabel,
     model: job.model,
     inputTokens: usage?.inputTokens ?? null,
     cachedInputTokens: usage?.cachedInputTokens ?? null,
@@ -222,6 +224,7 @@ export function createGeneration(ownerUserId: string, id: string, input: Respond
     status: "running",
     startedAt: Date.now(),
     provider: input.provider,
+    providerLabel: input.providerLabel,
     model: input.model,
     subscribers: new Set(),
     lastCheckpointAt: Date.now(),

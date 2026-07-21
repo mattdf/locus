@@ -51,8 +51,9 @@ node build/server/admin.mjs create-user --email you@example.com --name 'Your Nam
 
 - Every hosted data query is scoped by the authenticated Better Auth user ID.
 - Hosted mode never reads local JSON or project API-key files.
-- Arbitrary OpenAI-compatible endpoint URLs are disabled in hosted mode to prevent server-side
-  request forgery. They remain available in local mode.
+- Custom OpenAI-compatible endpoints may target arbitrary public HTTPS origins in hosted mode.
+  Locus rejects embedded credentials, private/loopback DNS results, and redirects. Local mode also
+  permits HTTP endpoints for loopback and LAN inference servers.
 - Cookies are HTTP-only, secure, and bound to the configured HTTPS origin.
 - State-changing application requests require the exact configured origin.
 - BYOK credentials use AES-256-GCM with per-record nonces and owner/provider authenticated data.

@@ -10,10 +10,12 @@ import {
   saveProviderApiKey,
   type ProviderCredentialStatus,
   type ProviderStatuses,
+  BUILT_IN_PROVIDER_IDS,
+  type BuiltInProviderId,
 } from "./providers.ts";
 
-function hostedProvider(provider: ProviderId): provider is Exclude<ProviderId, "local"> {
-  return provider === "openai" || provider === "openrouter";
+function hostedProvider(provider: ProviderId): provider is BuiltInProviderId {
+  return (BUILT_IN_PROVIDER_IDS as readonly string[]).includes(provider);
 }
 function keyAt(version: number): Buffer {
   const encoded = credentialEncryptionKeys[version];
@@ -21,7 +23,7 @@ function keyAt(version: number): Buffer {
   return Buffer.from(encoded, "base64url");
 }
 
-function encrypt(subject: string, provider: string, plaintext: string) {
+export function encryptCredential(subject: string, provider: string, plaintext: string) {
   const nonce = randomBytes(12);
   const cipher = createCipheriv("aes-256-gcm", keyAt(0), nonce);
   cipher.setAAD(Buffer.from(`${subject}:${provider}:v1`, "utf8"));
@@ -29,7 +31,7 @@ function encrypt(subject: string, provider: string, plaintext: string) {
   return { ciphertext, nonce, authTag: cipher.getAuthTag(), keyVersion: 0 };
 }
 
-function decrypt(
+export function decryptCredential(
   subject: string,
   provider: string,
   row: { ciphertext: Buffer; nonce: Buffer; authTag: Buffer; keyVersion: number },
@@ -57,16 +59,15 @@ export async function credentialStatuses(ownerUserId: string): Promise<ProviderS
   for (const row of configured.rows) {
     if (!sources.has(row.provider) || row.source === "saved") sources.set(row.provider, row.source);
   }
-  return {
-    openai: { configured: sources.has("openai"), required: true, source: sources.get("openai") ?? null },
-    openrouter: { configured: sources.has("openrouter"), required: true, source: sources.get("openrouter") ?? null },
-    local: { configured: false, required: false, source: null },
-  };
+  return Object.fromEntries(BUILT_IN_PROVIDER_IDS.map((provider) => [
+    provider,
+    { configured: sources.has(provider), required: true, source: sources.get(provider) ?? null },
+  ])) as ProviderStatuses;
 }
 
 export async function credentialStatus(
   ownerUserId: string,
-  provider: ProviderId,
+  provider: BuiltInProviderId,
 ): Promise<ProviderCredentialStatus> {
   if (!isHosted) return getProviderStatus(provider);
   return (await credentialStatuses(ownerUserId))[provider];
@@ -74,14 +75,14 @@ export async function credentialStatus(
 
 export async function saveCredential(
   ownerUserId: string,
-  provider: ProviderId,
+  provider: BuiltInProviderId,
   raw: string,
 ): Promise<ProviderCredentialStatus> {
   if (!isHosted) return saveProviderApiKey(provider, raw);
-  if (!hostedProvider(provider)) throw new Error("Local endpoints are unavailable in hosted mode");
+  if (!hostedProvider(provider)) throw new Error("Choose a built-in provider");
   const secret = raw.trim();
   if (secret.length < 10 || secret.length > 5_000) throw new Error("Enter a valid API key");
-  const encrypted = encrypt(ownerUserId, provider, secret);
+  const encrypted = encryptCredential(ownerUserId, provider, secret);
   await query(
     `insert into "locus_provider_credentials"
        ("ownerUserId", "provider", "ciphertext", "nonce", "authTag", "keyVersion", "updatedAt")
@@ -99,7 +100,7 @@ export async function saveCredential(
 
 export async function clearCredential(
   ownerUserId: string,
-  provider: ProviderId,
+  provider: BuiltInProviderId,
 ): Promise<ProviderCredentialStatus> {
   if (!isHosted) return clearProviderApiKey(provider);
   if (hostedProvider(provider)) {
@@ -113,10 +114,9 @@ export async function clearCredential(
 
 export async function resolveCredential(
   ownerUserId: string,
-  provider: ProviderId,
+  provider: BuiltInProviderId,
 ): Promise<string | null> {
   if (!isHosted) return readProviderApiKey(provider);
-  if (!hostedProvider(provider)) return null;
   const result = await query<{
     ciphertext: Buffer;
     nonce: Buffer;
@@ -128,7 +128,7 @@ export async function resolveCredential(
     [ownerUserId, provider],
   );
   const row = result.rows[0];
-  if (row) return decrypt(ownerUserId, provider, row);
+  if (row) return decryptCredential(ownerUserId, provider, row);
 
   const managed = await query<{
     id: string;
@@ -144,12 +144,12 @@ export async function resolveCredential(
     [ownerUserId, provider],
   );
   const managedRow = managed.rows[0];
-  return managedRow ? decrypt(`managed:${managedRow.id}`, provider, managedRow) : null;
+  return managedRow ? decryptCredential(`managed:${managedRow.id}`, provider, managedRow) : null;
 }
 
 export interface ManagedCredentialSummary {
   id: string;
-  provider: Exclude<ProviderId, "local">;
+  provider: BuiltInProviderId;
   label: string;
   createdAt: Date;
   revokedAt: Date | null;
@@ -175,18 +175,18 @@ export async function listManagedCredentials(): Promise<ManagedCredentialSummary
 }
 
 export async function createManagedCredential(input: {
-  provider: ProviderId;
+  provider: BuiltInProviderId;
   label: string;
   apiKey: string;
   administratorUserId: string;
 }): Promise<ManagedCredentialSummary> {
-  if (!hostedProvider(input.provider)) throw new Error("Managed keys support OpenAI and OpenRouter");
+  if (!hostedProvider(input.provider)) throw new Error("Choose a built-in provider");
   const label = input.label.trim();
   const secret = input.apiKey.trim();
   if (!label || label.length > 120) throw new Error("Enter a key label of at most 120 characters");
   if (secret.length < 10 || secret.length > 5_000) throw new Error("Enter a valid API key");
   const id = randomUUID();
-  const encrypted = encrypt(`managed:${id}`, input.provider, secret);
+  const encrypted = encryptCredential(`managed:${id}`, input.provider, secret);
   await query(
     `insert into "locus_managed_credentials"
        ("id", "provider", "label", "ciphertext", "nonce", "authTag", "keyVersion", "createdByUserId")

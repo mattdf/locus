@@ -1,13 +1,26 @@
 import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import OpenAI from "openai";
-import type { ProviderId, ProviderModelOption } from "../src/types.ts";
+import type { ProviderId, ProviderKind, ProviderModelOption } from "../src/types.ts";
 import { isHosted } from "./config.ts";
+import { guardedProviderFetch, normalizeProviderBaseUrl } from "./provider-url.ts";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+export const PROVIDER_BASE_URLS: Partial<Record<ProviderKind, string>> = {
+  openrouter: OPENROUTER_BASE_URL,
+  anthropic: "https://api.anthropic.com/v1",
+  kimi: "https://api.moonshot.ai/v1",
+  glm: "https://open.bigmodel.cn/api/paas/v4",
+  minimax: "https://api.minimax.io/v1",
+};
+
+export const BUILT_IN_PROVIDER_IDS = [
+  "openai", "openrouter", "anthropic", "kimi", "glm", "minimax",
+] as const satisfies ReadonlyArray<Exclude<ProviderId, "custom">>;
+export type BuiltInProviderId = (typeof BUILT_IN_PROVIDER_IDS)[number];
 
 const PROVIDER_KEYS: Record<
-  ProviderId,
+  BuiltInProviderId,
   { savedFile: string; projectFile: string; assignment: string; required: boolean }
 > = {
   openai: {
@@ -22,11 +35,29 @@ const PROVIDER_KEYS: Record<
     assignment: "OPENROUTER_API_KEY",
     required: true,
   },
-  local: {
-    savedFile: path.resolve("data", "local-api-key.txt"),
-    projectFile: path.resolve("LOCAL_API_KEY.txt"),
-    assignment: "LOCAL_API_KEY",
-    required: false,
+  anthropic: {
+    savedFile: path.resolve("data", "anthropic-api-key.txt"),
+    projectFile: path.resolve("ANTHROPIC_API_KEY.txt"),
+    assignment: "ANTHROPIC_API_KEY",
+    required: true,
+  },
+  kimi: {
+    savedFile: path.resolve("data", "kimi-api-key.txt"),
+    projectFile: path.resolve("KIMI_API_KEY.txt"),
+    assignment: "KIMI_API_KEY",
+    required: true,
+  },
+  glm: {
+    savedFile: path.resolve("data", "glm-api-key.txt"),
+    projectFile: path.resolve("GLM_API_KEY.txt"),
+    assignment: "GLM_API_KEY",
+    required: true,
+  },
+  minimax: {
+    savedFile: path.resolve("data", "minimax-api-key.txt"),
+    projectFile: path.resolve("MINIMAX_API_KEY.txt"),
+    assignment: "MINIMAX_API_KEY",
+    required: true,
   },
 };
 
@@ -36,7 +67,7 @@ export interface ProviderCredentialStatus {
   source: "saved" | "project-file" | "managed" | null;
 }
 
-export type ProviderStatuses = Record<ProviderId, ProviderCredentialStatus>;
+export type ProviderStatuses = Record<BuiltInProviderId, ProviderCredentialStatus>;
 
 function normalizeApiKey(raw: string, assignment: string): string {
   const value = raw.trim();
@@ -53,7 +84,7 @@ async function readKeyFile(file: string, assignment: string): Promise<string | n
   }
 }
 
-export async function readProviderApiKey(provider: ProviderId): Promise<string | null> {
+export async function readProviderApiKey(provider: BuiltInProviderId): Promise<string | null> {
   const config = PROVIDER_KEYS[provider];
   return (
     (await readKeyFile(config.savedFile, config.assignment)) ??
@@ -62,7 +93,7 @@ export async function readProviderApiKey(provider: ProviderId): Promise<string |
 }
 
 export async function getProviderStatus(
-  provider: ProviderId,
+  provider: BuiltInProviderId,
 ): Promise<ProviderCredentialStatus> {
   const config = PROVIDER_KEYS[provider];
   if (await readKeyFile(config.savedFile, config.assignment)) {
@@ -75,24 +106,21 @@ export async function getProviderStatus(
 }
 
 export async function getProviderStatuses(): Promise<ProviderStatuses> {
-  const [openai, openrouter, local] = await Promise.all([
-    getProviderStatus("openai"),
-    getProviderStatus("openrouter"),
-    getProviderStatus("local"),
-  ]);
-  return { openai, openrouter, local };
+  const entries = await Promise.all(
+    BUILT_IN_PROVIDER_IDS.map(async (provider) => [provider, await getProviderStatus(provider)] as const),
+  );
+  return Object.fromEntries(entries) as ProviderStatuses;
 }
 
 export async function saveProviderApiKey(
-  provider: ProviderId,
+  provider: BuiltInProviderId,
   raw: string,
 ): Promise<ProviderCredentialStatus> {
   const config = PROVIDER_KEYS[provider];
   const apiKey = normalizeApiKey(raw, config.assignment);
-  const minimumLength = provider === "local" ? 1 : 10;
+  const minimumLength = 10;
   if (apiKey.length < minimumLength) {
-    const label =
-      provider === "openrouter" ? "OpenRouter" : provider === "local" ? "local" : "OpenAI";
+    const label = provider;
     throw new Error(`Enter a valid ${label} API key.`);
   }
 
@@ -104,7 +132,7 @@ export async function saveProviderApiKey(
 }
 
 export async function clearProviderApiKey(
-  provider: ProviderId,
+  provider: BuiltInProviderId,
 ): Promise<ProviderCredentialStatus> {
   try {
     await unlink(PROVIDER_KEYS[provider].savedFile);
@@ -114,51 +142,37 @@ export async function clearProviderApiKey(
   return getProviderStatus(provider);
 }
 
-export function normalizeLocalBaseUrl(raw: string): string {
-  if (raw.length > 2_000) throw new Error("The local endpoint URL is too long");
-  let url: URL;
-  try {
-    url = new URL(raw.trim());
-  } catch {
-    throw new Error("Enter a valid local endpoint URL");
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error("The local endpoint must use http:// or https://");
-  }
-  if (url.username || url.password) {
-    throw new Error("Put endpoint credentials in the API key field, not the URL");
-  }
-  return url.toString().replace(/\/$/, "");
-}
+export const normalizeLocalBaseUrl = normalizeProviderBaseUrl;
 
 export async function createProviderClient(
-  provider: ProviderId,
-  localBaseUrl?: string,
+  provider: ProviderKind,
+  baseUrl?: string,
   credential?: string,
 ): Promise<OpenAI> {
-  const savedKey = credential ?? (isHosted ? null : await readProviderApiKey(provider));
-  if (!savedKey && provider !== "local") {
-    const label = provider === "openrouter" ? "OpenRouter" : "OpenAI";
-    const projectFile = provider === "openrouter" ? "OPENROUTER_API_KEY.txt" : "OPENAI_API_KEY.txt";
-    throw new Error(`No ${label} API key is configured. Add one in Settings or ${projectFile}.`);
+  const builtIn = provider !== "custom" ? provider as BuiltInProviderId : null;
+  const savedKey = credential ?? (!isHosted && builtIn ? await readProviderApiKey(builtIn) : null);
+  if (!savedKey && provider !== "custom") {
+    throw new Error(`No ${provider} API key is configured. Add one in Providers.`);
   }
-
+  const resolvedBaseUrl = provider === "custom"
+    ? normalizeProviderBaseUrl(baseUrl ?? "")
+    : PROVIDER_BASE_URLS[provider];
   return new OpenAI({
-    apiKey: savedKey ?? "local",
+    apiKey: savedKey ?? "no-key",
+    ...(resolvedBaseUrl ? { baseURL: resolvedBaseUrl } : {}),
     ...(provider === "openrouter"
       ? {
-          baseURL: OPENROUTER_BASE_URL,
           defaultHeaders: { "X-OpenRouter-Title": "Locus" },
         }
-      : provider === "local"
-        ? { baseURL: normalizeLocalBaseUrl(localBaseUrl ?? "") }
-        : {}),
+      : {}),
+    ...(provider === "custom" && isHosted ? { fetch: guardedProviderFetch() } : {}),
   });
 }
 
 export async function listProviderModels(
-  provider: Exclude<ProviderId, "openai">,
-  localBaseUrl?: string,
+  provider: Exclude<ProviderKind, "openai">,
+  baseUrl?: string,
+  credential?: string,
 ): Promise<ProviderModelOption[]> {
   if (provider === "openrouter") {
     const response = await fetch(`${OPENROUTER_BASE_URL}/models`);
@@ -174,7 +188,7 @@ export async function listProviderModels(
       }));
   }
 
-  const client = await createProviderClient("local", localBaseUrl);
+  const client = await createProviderClient(provider, baseUrl, credential);
   const page = await client.models.list();
   return page.data.map((model) => ({ id: model.id }));
 }

@@ -1,7 +1,6 @@
 import type { PoolClient } from "pg";
 import type { ChatCategory, ChatTree, WorkspaceState } from "../src/types.ts";
 import { normalizeChatRevisions } from "../src/lib/revisions.ts";
-import { hostedLocalProviderEnabled } from "./config.ts";
 import { getPool, transaction } from "./db.ts";
 import { emptyState, normalizeState } from "./storage.ts";
 
@@ -45,16 +44,7 @@ function validateSync(input: WorkspaceSyncInput): void {
 }
 
 function hostedSafeState(state: WorkspaceState): WorkspaceState {
-  const normalized = normalizeState(state);
-  if (hostedLocalProviderEnabled || normalized.settings.provider !== "local") return normalized;
-  return {
-    ...normalized,
-    settings: {
-      ...normalized.settings,
-      provider: "openai",
-      model: normalized.settings.providerModels.openai,
-    },
-  };
+  return normalizeState(state);
 }
 
 async function ensureWorkspace(client: PoolClient, ownerUserId: string): Promise<void> {

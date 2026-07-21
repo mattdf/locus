@@ -36,7 +36,3 @@ if (isHosted) {
     throw new Error("Each LOCUS_CREDENTIAL_KEYS entry must be a base64url-encoded 32-byte key");
   }
 }
-
-// Arbitrary OpenAI-compatible URLs are intentionally unavailable in hosted mode.
-// They remain fully supported in local mode, where they cannot be used as server-side SSRF.
-export const hostedLocalProviderEnabled = false;

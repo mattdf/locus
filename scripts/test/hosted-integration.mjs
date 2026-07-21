@@ -68,6 +68,7 @@ assert(bootstrap.status === 201, `Bootstrap failed: ${JSON.stringify(await json(
 const aliceCookie = await signIn(alice);
 const runtime = await json(await request("/api/runtime", { cookie: aliceCookie }));
 assert(runtime.authenticated && runtime.user?.email === alice.email, "Authenticated runtime is incorrect");
+const aliceId = runtime.user.id;
 
 const createBob = await request("/api/admin/users", {
   method: "POST",
@@ -206,6 +207,30 @@ const bobProviders = await json(await request("/api/providers", { cookie: bobCoo
 assert(aliceProviders.openai.configured, "Alice's saved credential was not reported");
 assert(!bobProviders.openai.configured, "Bob could see Alice's credential status");
 
+const customKey = "custom-hosted-secret-never-returned";
+const customProviderResponse = await request("/api/provider-connections", {
+  method: "POST",
+  cookie: aliceCookie,
+  body: JSON.stringify({
+    label: "Hosted compatible test",
+    baseUrl: "https://example.com/v1",
+    apiKey: customKey,
+  }),
+});
+const customProvider = await json(customProviderResponse);
+assert(customProviderResponse.status === 201 && customProvider.provider?.id, `Custom provider save failed: ${JSON.stringify(customProvider)}`);
+assert(!JSON.stringify(customProvider).includes(customKey), "Custom provider response exposed its API key");
+const aliceConnections = await json(await request("/api/provider-connections", { cookie: aliceCookie }));
+const bobConnections = await json(await request("/api/provider-connections", { cookie: bobCookie }));
+assert(aliceConnections.providers?.some((provider) => provider.id === customProvider.provider.id), "Alice's custom provider was not listed");
+assert(!bobConnections.providers?.some((provider) => provider.id === customProvider.provider.id), "Bob could see Alice's custom provider");
+const privateCustomProvider = await request("/api/provider-connections", {
+  method: "POST",
+  cookie: aliceCookie,
+  body: JSON.stringify({ label: "Blocked private endpoint", baseUrl: "https://127.0.0.1/v1" }),
+});
+assert(privateCustomProvider.status === 400, "Hosted mode accepted a private-network custom endpoint");
+
 if (process.env.DATABASE_URL) {
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
   try {
@@ -215,6 +240,13 @@ if (process.env.DATABASE_URL) {
     );
     assert(credentials.rowCount === 1, "Unexpected credential row count");
     assert(!credentials.rows[0].ciphertext.includes(dummyKey), "Provider credential was stored as plaintext");
+    const customCredentials = await pool.query(
+      `select encode("ciphertext", 'escape') as "ciphertext" from "locus_custom_providers"
+        where "ownerUserId" = $1 and "id" = $2`,
+      [aliceId, customProvider.provider.id],
+    );
+    assert(customCredentials.rowCount === 1, "Custom provider was not stored for its owner");
+    assert(!customCredentials.rows[0].ciphertext.includes(customKey), "Custom provider key was stored as plaintext");
     const owners = await pool.query(
       `select u.email, count(c.id)::int as chats
        from "user" u left join "locus_chats" c on c."ownerUserId" = u.id

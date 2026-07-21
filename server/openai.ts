@@ -1,9 +1,10 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import Anthropic from "@anthropic-ai/sdk";
 import type {
   ContextNode,
   HighlightAnchor,
-  ProviderId,
+  ProviderKind,
   ReasoningEffort,
 } from "../src/types.ts";
 import {
@@ -68,8 +69,9 @@ function formatContext(context: ContextNode[]): string {
 }
 
 export interface RespondInput {
-  provider: ProviderId;
-  localBaseUrl?: string;
+  provider: ProviderKind;
+  providerLabel?: string;
+  baseUrl?: string;
   model: string;
   context: ContextNode[];
   message: string;
@@ -190,39 +192,53 @@ async function streamCompatibleChat(
   onDelta: (delta: string) => void,
   signal?: AbortSignal,
 ): Promise<TokenUsage | null> {
-  const client = await createProviderClient(input.provider, input.localBaseUrl, input.apiKey);
+  const client = await createProviderClient(input.provider, input.baseUrl, input.apiKey);
   const messages = [
     { role: "system" as const, content: instructions },
     { role: "user" as const, content: request },
   ];
-  const createStream = (minimalLocalRequest = false) =>
+  const supportsReasoningEffort = input.provider === "openrouter" || input.provider === "custom";
+  const createStream = (minimalRequest = false) =>
     client.chat.completions.create(
       {
         model: input.model,
         messages,
-        ...(minimalLocalRequest ? {} : { reasoning_effort: input.reasoningEffort }),
+        ...(minimalRequest || !supportsReasoningEffort ? {} : { reasoning_effort: input.reasoningEffort }),
+        ...(!minimalRequest && input.provider === "glm"
+          ? { thinking: { type: input.reasoningEffort === "none" ? "disabled" : "enabled" } }
+          : {}),
         ...(input.maxOutputTokens === 0
           ? {}
-          : input.provider === "local"
-            ? { max_tokens: input.maxOutputTokens }
-            : { max_completion_tokens: input.maxOutputTokens }),
+          : input.provider === "openrouter"
+            ? { max_completion_tokens: input.maxOutputTokens }
+            : { max_tokens: input.maxOutputTokens }),
         stream: true,
-        ...(minimalLocalRequest ? {} : { stream_options: { include_usage: true } }),
-      },
+        ...(minimalRequest ? {} : { stream_options: { include_usage: true } }),
+      } as Parameters<typeof client.chat.completions.create>[0],
       { signal },
     );
-  let stream;
+  let stream: AsyncIterable<{
+    choices: Array<{ delta?: { content?: string | null }; finish_reason?: string | null }>;
+    usage?: {
+      prompt_tokens: number;
+      completion_tokens: number;
+      total_tokens: number;
+      prompt_tokens_details?: { cached_tokens?: number } | null;
+      completion_tokens_details?: { reasoning_tokens?: number } | null;
+      cost?: number;
+    } | null;
+  }>;
   try {
-    stream = await createStream();
+    stream = await createStream() as unknown as typeof stream;
   } catch (error) {
     const status =
       typeof error === "object" && error && "status" in error
         ? (error as { status?: unknown }).status
         : null;
-    if (input.provider !== "local" || status !== 400) throw error;
-    // Older local servers often implement the core OpenAI chat schema but reject
+    if (input.provider !== "custom" || status !== 400) throw error;
+    // Some compatible servers implement the core OpenAI chat schema but reject
     // newer optional fields such as reasoning_effort or stream_options.
-    stream = await createStream(true);
+    stream = await createStream(true) as unknown as typeof stream;
   }
 
   let receivedText = false;
@@ -257,6 +273,59 @@ async function streamCompatibleChat(
   return usage;
 }
 
+function anthropicThinking(
+  effort: ReasoningEffort,
+  maxTokens: number,
+): { type: "enabled"; budget_tokens: number } | undefined {
+  if (effort === "none" || maxTokens < 2_048) return undefined;
+  const requested = {
+    low: 1_024,
+    medium: 4_096,
+    high: 10_000,
+    xhigh: 32_000,
+    max: 64_000,
+  }[effort];
+  return { type: "enabled", budget_tokens: Math.max(1_024, Math.min(requested, maxTokens - 1_024)) };
+}
+
+async function streamAnthropicResponse(
+  input: RespondInput,
+  instructions: string,
+  request: string,
+  onDelta: (delta: string) => void,
+  signal?: AbortSignal,
+): Promise<TokenUsage | null> {
+  if (!input.apiKey) throw new Error("No Claude API key is configured. Add one in Providers.");
+  const maxTokens = input.maxOutputTokens === 0 ? 128_000 : input.maxOutputTokens;
+  const thinking = anthropicThinking(input.reasoningEffort, maxTokens);
+  const client = new Anthropic({ apiKey: input.apiKey });
+  const stream = client.messages.stream(
+    {
+      model: input.model,
+      system: instructions,
+      messages: [{ role: "user", content: request }],
+      max_tokens: maxTokens,
+      ...(thinking ? { thinking } : {}),
+    },
+    { signal },
+  );
+  let receivedText = false;
+  stream.on("text", (text) => {
+    if (!text) return;
+    receivedText = true;
+    onDelta(text);
+  });
+  const message = await stream.finalMessage();
+  ensureVisibleText(receivedText, message.stop_reason === "max_tokens" ? "length" : null);
+  return {
+    inputTokens: message.usage.input_tokens,
+    cachedInputTokens: message.usage.cache_read_input_tokens ?? 0,
+    outputTokens: message.usage.output_tokens,
+    reasoningTokens: 0,
+    totalTokens: message.usage.input_tokens + message.usage.output_tokens,
+  };
+}
+
 export async function streamResponse(
   input: RespondInput,
   onDelta: (delta: string) => void,
@@ -268,7 +337,11 @@ export async function streamResponse(
       ? await readPromptFile(SOURCE_REWRITE_PROMPT_FILE, "SOURCE_REWRITE_PROMPT.md")
       : await readPromptFile(SYSTEM_PROMPT_FILE, "SYSTEM_PROMPT.md");
   const prompt = buildPrompt(input, basePrompt);
-  return input.provider === "openai"
-    ? streamOpenAIResponse(input, prompt.instructions, prompt.request, onDelta, signal)
-    : streamCompatibleChat(input, prompt.instructions, prompt.request, onDelta, signal);
+  if (input.provider === "openai") {
+    return streamOpenAIResponse(input, prompt.instructions, prompt.request, onDelta, signal);
+  }
+  if (input.provider === "anthropic") {
+    return streamAnthropicResponse(input, prompt.instructions, prompt.request, onDelta, signal);
+  }
+  return streamCompatibleChat(input, prompt.instructions, prompt.request, onDelta, signal);
 }

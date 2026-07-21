@@ -6,6 +6,7 @@ import {
   DEFAULT_LOCAL_BASE_URL,
   DEFAULT_PROVIDER_MODELS,
   DEFAULT_VISUALIZATION_MODELS,
+  LEGACY_CUSTOM_PROVIDER_ID,
   isProviderId,
 } from "../src/lib/providers.ts";
 import { normalizeChatRevisions } from "../src/lib/revisions.ts";
@@ -20,10 +21,16 @@ export const emptyState = (): WorkspaceState => ({
   activeChatId: null,
   settings: {
     provider: "openai",
+    definitionProvider: "openai",
+    visualizationProvider: "openai",
+    rewriteProvider: "openai",
     providerModels: { ...DEFAULT_PROVIDER_MODELS },
     definitionModels: { ...DEFAULT_DEFINITION_MODELS },
     visualizationModels: { ...DEFAULT_VISUALIZATION_MODELS },
-    visualizationReasoningEfforts: { openai: "high", openrouter: "high", local: "medium" },
+    rewriteModels: { ...DEFAULT_PROVIDER_MODELS },
+    definitionReasoningEfforts: { openai: "medium", openrouter: "medium", anthropic: "medium", kimi: "medium", glm: "medium", minimax: "medium", custom: "medium" },
+    visualizationReasoningEfforts: { openai: "high", openrouter: "high", anthropic: "high", kimi: "high", glm: "high", minimax: "high", custom: "medium" },
+    rewriteReasoningEfforts: { openai: "high", openrouter: "high", anthropic: "high", kimi: "high", glm: "high", minimax: "high", custom: "medium" },
     localBaseUrl: DEFAULT_LOCAL_BASE_URL,
     model: "gpt-5.6-sol",
     reasoningEffort: "max",
@@ -49,54 +56,57 @@ export function normalizeState(state: WorkspaceState): WorkspaceState {
     : [];
   const categoryIds = new Set(categories.map((category) => category.id));
   const hasReasoningEffort = Boolean(state.settings?.reasoningEffort);
-  const provider = isProviderId(state.settings?.provider)
-    ? state.settings.provider
+  const legacyProvider = state.settings?.provider === "local" || state.settings?.provider === "custom"
+    ? LEGACY_CUSTOM_PROVIDER_ID
+    : state.settings?.provider;
+  const provider = typeof legacyProvider === "string" && legacyProvider.trim()
+    ? legacyProvider.trim()
     : "openai";
   const legacyModel =
     !hasReasoningEffort && state.chats.length === 0
       ? "gpt-5.6-sol"
       : state.settings?.model || "gpt-5.6-sol";
   const savedProviderModels = state.settings?.providerModels;
-  const providerModels = {
-    openai:
-      provider === "openai"
-        ? legacyModel
-        : savedProviderModels?.openai || DEFAULT_PROVIDER_MODELS.openai,
-    openrouter:
-      provider === "openrouter"
-        ? legacyModel
-        : savedProviderModels?.openrouter || DEFAULT_PROVIDER_MODELS.openrouter,
-    local:
-      provider === "local"
-        ? legacyModel
-        : savedProviderModels?.local || DEFAULT_PROVIDER_MODELS.local,
+  const providerModels: Record<string, string> = {
+    ...DEFAULT_PROVIDER_MODELS,
+    ...(savedProviderModels ?? {}),
+    ...(provider === LEGACY_CUSTOM_PROVIDER_ID && (state.settings?.provider === "local" || state.settings?.provider === "custom")
+      ? { [LEGACY_CUSTOM_PROVIDER_ID]: savedProviderModels?.local || savedProviderModels?.custom || legacyModel }
+      : { [provider]: legacyModel }),
   };
   const model = providerModels[provider];
   const savedDefinitionModels = state.settings?.definitionModels;
-  const definitionModels = {
-    openai:
-      savedDefinitionModels?.openai?.trim() || DEFAULT_DEFINITION_MODELS.openai,
-    openrouter:
-      savedDefinitionModels?.openrouter?.trim() ||
-      DEFAULT_DEFINITION_MODELS.openrouter,
-    local:
-      savedDefinitionModels?.local?.trim() || DEFAULT_DEFINITION_MODELS.local,
+  const definitionModels: Record<string, string> = {
+    ...DEFAULT_DEFINITION_MODELS,
+    ...(savedDefinitionModels ?? {}),
   };
   const savedVisualizationModels = state.settings?.visualizationModels;
-  const visualizationModels = {
-    openai:
-      savedVisualizationModels?.openai?.trim() || DEFAULT_VISUALIZATION_MODELS.openai,
-    openrouter:
-      savedVisualizationModels?.openrouter?.trim() ||
-      DEFAULT_VISUALIZATION_MODELS.openrouter,
-    local:
-      savedVisualizationModels?.local?.trim() || DEFAULT_VISUALIZATION_MODELS.local,
+  const visualizationModels: Record<string, string> = {
+    ...DEFAULT_VISUALIZATION_MODELS,
+    ...(savedVisualizationModels ?? {}),
   };
   const savedVisualizationEfforts = state.settings?.visualizationReasoningEfforts;
-  const visualizationReasoningEfforts = {
-    openai: savedVisualizationEfforts?.openai ?? "high",
-    openrouter: savedVisualizationEfforts?.openrouter ?? "high",
-    local: savedVisualizationEfforts?.local ?? "medium",
+  const visualizationReasoningEfforts: Record<string, import("../src/types.ts").ReasoningEffort> = {
+    openai: "high", openrouter: "high", anthropic: "high", kimi: "high", glm: "high", minimax: "high", custom: "medium",
+    ...(savedVisualizationEfforts ?? {}),
+  };
+  const definitionReasoningEfforts = {
+    openai: "medium", openrouter: "medium", anthropic: "medium", kimi: "medium", glm: "medium", minimax: "medium", custom: "medium",
+    ...(state.settings?.definitionReasoningEfforts ?? {}),
+  } as Record<string, import("../src/types.ts").ReasoningEffort>;
+  const definitionProvider = typeof state.settings?.definitionProvider === "string"
+    ? state.settings.definitionProvider
+    : provider;
+  const visualizationProvider = typeof state.settings?.visualizationProvider === "string"
+    ? state.settings.visualizationProvider
+    : provider;
+  const rewriteProvider = typeof state.settings?.rewriteProvider === "string"
+    ? state.settings.rewriteProvider
+    : provider;
+  const rewriteModels = { ...providerModels, ...(state.settings?.rewriteModels ?? {}) };
+  const rewriteReasoningEfforts = {
+    ...visualizationReasoningEfforts,
+    ...(state.settings?.rewriteReasoningEfforts ?? {}),
   };
   return {
     ...state,
@@ -112,10 +122,16 @@ export function normalizeState(state: WorkspaceState): WorkspaceState {
     ),
     settings: {
       provider,
+      definitionProvider,
+      visualizationProvider,
+      rewriteProvider,
       providerModels,
       definitionModels,
       visualizationModels,
+      rewriteModels,
+      definitionReasoningEfforts,
       visualizationReasoningEfforts,
+      rewriteReasoningEfforts,
       localBaseUrl:
         typeof state.settings?.localBaseUrl === "string" &&
         state.settings.localBaseUrl.trim()

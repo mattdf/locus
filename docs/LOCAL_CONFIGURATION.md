@@ -9,7 +9,7 @@ Keys entered in Settings are saved to provider-specific files under `data/` with
 permissions. These values take precedence over `OPENAI_API_KEY.txt` and
 `OPENROUTER_API_KEY.txt` in the project directory.
 
-OpenAI-compatible local endpoints default to `http://127.0.0.1:1234/v1`. Their URL and model ID
+Custom OpenAI-compatible endpoints may use HTTP or HTTPS locally. Their URL and model ID
 can be changed in Settings, and a key is optional.
 
 ## Data and prompts

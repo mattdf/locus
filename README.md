@@ -12,7 +12,8 @@ conversation.
 - Inline definitions, quotations, and sandboxed MetaPost or TikZ visualizations
 - Markdown, syntax-highlighted code, and KaTeX rendering throughout the interface
 - Streaming responses with cancellation, regeneration variants, editable prompts, usage, and cost details
-- OpenAI, OpenRouter, and local OpenAI-compatible model providers with BYOK credentials
+- OpenAI, OpenRouter, Claude, Kimi, GLM, MiniMax, and multiple custom OpenAI-compatible providers with BYOK credentials
+- Independent provider/model routing for chat, definitions, visualizations, and rewrites
 - Hosted access controls with public signup, waitlists, invite links, managed API access, and account suspension
 - Markdown import plus portable JSON import and export
 - Categories, sharing, search-friendly URLs, and persistent navigation through nested threads
@@ -33,7 +34,7 @@ requests to the local API on port 8787.
 
 Configure a provider and API key in **Settings**. Alternatively, place
 `OPENAI_API_KEY.txt` or `OPENROUTER_API_KEY.txt` in the project directory. Local
-OpenAI-compatible endpoints default to `http://127.0.0.1:1234/v1` and do not require a key.
+Custom OpenAI-compatible endpoints can use HTTP or HTTPS locally and may omit a key when the server does not require one.
 
 For a production-style local build:
 

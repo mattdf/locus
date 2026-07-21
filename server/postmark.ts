@@ -119,7 +119,7 @@ Your email is verified and your Locus Chat account is ready.
 
 To get started:
 
-1. Open Settings and choose a model provider. Add an API key if your invite does not include managed access.
+1. Open Providers and choose model connections for chat, definitions, visualizations, and rewrites. Add API keys if your invite does not include managed access.
 2. Start a new chat, or import existing Markdown without making a model call.
 3. Highlight any passage or equation to elaborate, define, quote, or visualize it.
 
@@ -139,7 +139,7 @@ Open Locus Chat: ${input.appUrl}`,
             <p style="margin:0 0 22px;font-size:15px;line-height:1.6">Your email is verified and your Locus Chat account is ready.</p>
             <p style="margin:0 0 10px;font-size:15px;font-weight:700;line-height:1.5">To get started:</p>
             <ol style="margin:0 0 24px;padding-left:22px;font-size:15px;line-height:1.7">
-              <li style="margin-bottom:8px">Open Settings and choose a model provider. Add an API key if your invite does not include managed access.</li>
+              <li style="margin-bottom:8px">Open Providers and choose model connections for chat, definitions, visualizations, and rewrites. Add API keys if your invite does not include managed access.</li>
               <li style="margin-bottom:8px">Start a new chat, or import existing Markdown without making a model call.</li>
               <li>Highlight any passage or equation to elaborate, define, quote, or visualize it.</li>
             </ol>

@@ -12,6 +12,7 @@ import {
   Trash2,
   UserPlus,
 } from "lucide-react";
+import type { ProviderKind } from "../types";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { adminRequest } from "../lib/admin";
 
@@ -22,7 +23,7 @@ interface AccessPolicy {
 
 interface ManagedCredential {
   id: string;
-  provider: "openai" | "openrouter";
+  provider: Exclude<ProviderKind, "custom">;
   label: string;
   createdAt: string;
   revokedAt: string | null;
@@ -71,7 +72,7 @@ export function AdminAccessPanel() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [keyLabel, setKeyLabel] = useState("");
-  const [keyProvider, setKeyProvider] = useState<"openai" | "openrouter">("openai");
+  const [keyProvider, setKeyProvider] = useState<Exclude<ProviderKind, "custom">>("openai");
   const [apiKey, setApiKey] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteExpiry, setInviteExpiry] = useState("7");
@@ -249,9 +250,13 @@ export function AdminAccessPanel() {
         <p>Keys remain encrypted on the server. Users see only availability metadata and can never retrieve the key.</p>
         <div className="admin-access__fields admin-access__fields--key">
           <input placeholder="Key label" maxLength={120} value={keyLabel} onChange={(event) => setKeyLabel(event.target.value)} />
-          <select value={keyProvider} onChange={(event) => setKeyProvider(event.target.value === "openrouter" ? "openrouter" : "openai")}>
+          <select value={keyProvider} onChange={(event) => setKeyProvider(event.target.value as Exclude<ProviderKind, "custom">)}>
             <option value="openai">OpenAI</option>
             <option value="openrouter">OpenRouter</option>
+            <option value="anthropic">Claude</option>
+            <option value="kimi">Kimi</option>
+            <option value="glm">GLM</option>
+            <option value="minimax">MiniMax</option>
           </select>
           <input type="password" placeholder="API key" autoComplete="off" spellCheck={false} value={apiKey} onChange={(event) => setApiKey(event.target.value)} />
           <button className="primary-button" type="submit" disabled={busy !== null || !keyLabel.trim() || !apiKey.trim()}>

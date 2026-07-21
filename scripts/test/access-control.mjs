@@ -154,6 +154,36 @@ const providers = await json(await request("/api/providers", { cookie: inviteeCo
 assert(providers.openai?.configured && providers.openai?.source === "managed", "Invitee did not receive managed provider access");
 assert(!JSON.stringify(providers).includes(managedApiKey), "Provider status exposed the managed key");
 
+const customKey = "hosted-custom-key-never-exposed";
+const createCustom = await request("/api/provider-connections", {
+  method: "POST",
+  cookie: inviteeCookie,
+  body: JSON.stringify({ label: "Compatible test", baseUrl: "https://example.com/v1", apiKey: customKey }),
+});
+const createdCustom = await json(createCustom);
+assert(createCustom.status === 201 && createdCustom.provider?.id, `Could not create hosted custom provider: ${JSON.stringify(createdCustom)}`);
+assert(!JSON.stringify(createdCustom).includes(customKey), "Custom provider response exposed plaintext key");
+const customConnections = await json(await request("/api/provider-connections", { cookie: inviteeCookie }));
+assert(customConnections.providers?.some((provider) => provider.id === createdCustom.provider.id), "Custom provider was not listed");
+assert(!JSON.stringify(customConnections).includes(customKey), "Custom provider listing exposed plaintext key");
+const blockedPrivate = await request("/api/provider-connections", {
+  method: "POST",
+  cookie: inviteeCookie,
+  body: JSON.stringify({ label: "Private target", baseUrl: "https://127.0.0.1/v1" }),
+});
+assert(blockedPrivate.status === 400, "Hosted custom provider accepted a private-network target");
+const customPool = new pg.Pool({ connectionString: databaseUrl });
+try {
+  const storedCustom = await customPool.query(
+    `select encode("ciphertext", 'escape') as "ciphertext" from "locus_custom_providers" where "id" = $1`,
+    [createdCustom.provider.id],
+  );
+  assert(storedCustom.rowCount === 1, "Custom provider was not persisted");
+  assert(!storedCustom.rows[0].ciphertext.includes(customKey), "Custom provider key was stored as plaintext");
+} finally {
+  await customPool.end();
+}
+
 const revokeKey = await request(
   `/api/admin/access/managed-credentials/${encodeURIComponent(createdKey.credential.id)}`,
   { method: "DELETE", cookie: adminCookie },

@@ -1,7 +1,29 @@
 export type MessageRole = "user" | "assistant" | "source";
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 export type SendShortcut = "enter" | "mod-enter";
-export type ProviderId = "openai" | "openrouter" | "local";
+export type ProviderKind =
+  | "openai"
+  | "openrouter"
+  | "anthropic"
+  | "kimi"
+  | "glm"
+  | "minimax"
+  | "custom";
+/** Built-in provider IDs are also their provider kind. Custom providers use stable UUIDs. */
+export type ProviderId = ProviderKind;
+export type ProviderRef = string;
+
+export interface ProviderConnectionSummary {
+  id: ProviderRef;
+  kind: ProviderKind;
+  label: string;
+  note: string;
+  baseUrl: string | null;
+  configured: boolean;
+  required: boolean;
+  source: "saved" | "project-file" | "managed" | null;
+  removable: boolean;
+}
 
 export interface ProviderModelOption {
   id: string;
@@ -10,7 +32,8 @@ export interface ProviderModelOption {
 
 export interface GenerationMetrics {
   durationMs: number;
-  provider?: ProviderId | null;
+  provider?: ProviderKind | null;
+  providerLabel?: string | null;
   model?: string | null;
   inputTokens: number | null;
   cachedInputTokens?: number | null;
@@ -166,11 +189,18 @@ export interface WorkspaceState {
   chats: ChatTree[];
   activeChatId: string | null;
   settings: {
-    provider: ProviderId;
-    providerModels: Record<ProviderId, string>;
-    definitionModels: Record<ProviderId, string>;
-    visualizationModels: Record<ProviderId, string>;
-    visualizationReasoningEfforts: Record<ProviderId, ReasoningEffort>;
+    /** Provider connection used for ordinary chat. Built-ins use their kind; custom providers use UUIDs. */
+    provider: ProviderRef;
+    definitionProvider: ProviderRef;
+    visualizationProvider: ProviderRef;
+    rewriteProvider: ProviderRef;
+    providerModels: Record<ProviderRef, string>;
+    definitionModels: Record<ProviderRef, string>;
+    visualizationModels: Record<ProviderRef, string>;
+    rewriteModels: Record<ProviderRef, string>;
+    definitionReasoningEfforts: Record<ProviderRef, ReasoningEffort>;
+    visualizationReasoningEfforts: Record<ProviderRef, ReasoningEffort>;
+    rewriteReasoningEfforts: Record<ProviderRef, ReasoningEffort>;
     localBaseUrl: string;
     model: string;
     reasoningEffort: ReasoningEffort;

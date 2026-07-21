@@ -34,7 +34,14 @@ import {
 } from "./metapost.ts";
 import { compileTikz, TikzCompileError, tikzImageAvailable } from "./tikz.ts";
 import { assertMigrationsCurrent } from "./migrate.ts";
-import { listProviderModels, normalizeLocalBaseUrl } from "./providers.ts";
+import { listProviderModels } from "./providers.ts";
+import {
+  createCustomProvider,
+  deleteCustomProvider,
+  listProviderConnections,
+  resolveProviderConnection,
+  updateCustomProvider,
+} from "./provider-connections.ts";
 import { readState, writeState } from "./storage.ts";
 import {
   readHostedWorkspace,
@@ -42,11 +49,10 @@ import {
   WorkspaceConflictError,
   type WorkspaceSyncInput,
 } from "./workspaces.ts";
-import { isProviderId } from "../src/lib/providers.ts";
+import { isBuiltInProviderId } from "../src/lib/providers.ts";
 import type {
   ContextNode,
   HighlightAnchor,
-  ProviderId,
   ReasoningEffort,
   WorkspaceState,
 } from "../src/types.ts";
@@ -353,16 +359,95 @@ app.get("/api/providers", async (_request, response, next) => {
   }
 });
 
+app.get("/api/provider-connections", async (_request, response, next) => {
+  try {
+    response.setHeader("Cache-Control", "no-store");
+    response.json({ providers: await listProviderConnections(owner(response)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/provider-connections", async (request, response, next) => {
+  try {
+    const provider = await createCustomProvider({
+      ownerUserId: owner(response),
+      label: typeof request.body?.label === "string" ? request.body.label : "",
+      baseUrl: typeof request.body?.baseUrl === "string" ? request.body.baseUrl : "",
+      apiKey: typeof request.body?.apiKey === "string" ? request.body.apiKey : undefined,
+    });
+    response.status(201).json({ provider });
+  } catch (error) {
+    if (error instanceof Error) {
+      response.status(400).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+app.patch("/api/provider-connections/:providerId", async (request, response, next) => {
+  try {
+    const provider = await updateCustomProvider({
+      ownerUserId: owner(response),
+      id: request.params.providerId,
+      label: typeof request.body?.label === "string" ? request.body.label : "",
+      baseUrl: typeof request.body?.baseUrl === "string" ? request.body.baseUrl : "",
+      ...(request.body && Object.hasOwn(request.body, "apiKey")
+        ? { apiKey: typeof request.body.apiKey === "string" ? request.body.apiKey : null }
+        : {}),
+    });
+    if (!provider) {
+      response.status(404).json({ error: "Custom provider not found" });
+      return;
+    }
+    response.json({ provider });
+  } catch (error) {
+    if (error instanceof Error) {
+      response.status(400).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+app.delete("/api/provider-connections/:providerId", async (request, response, next) => {
+  try {
+    if (!await deleteCustomProvider(owner(response), request.params.providerId)) {
+      response.status(404).json({ error: "Custom provider not found" });
+      return;
+    }
+    response.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/provider-connections/:providerId/models", async (request, response, next) => {
+  try {
+    const provider = await resolveProviderConnection(owner(response), request.params.providerId);
+    if (!provider) {
+      response.status(404).json({ error: "Provider not found" });
+      return;
+    }
+    if (provider.kind === "openai") {
+      response.status(400).json({ error: "OpenAI models are built into the model picker" });
+      return;
+    }
+    response.json({
+      models: await listProviderModels(provider.kind, provider.baseUrl, provider.apiKey),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.put("/api/providers/:provider/api-key", async (request, response, next) => {
   try {
     const provider = request.params.provider;
     const apiKey = request.body?.apiKey;
-    if (!isProviderId(provider)) {
+    if (!isBuiltInProviderId(provider)) {
       response.status(404).json({ error: "Unknown provider" });
-      return;
-    }
-    if (isHosted && provider === "local") {
-      response.status(403).json({ error: "Local endpoints are unavailable in hosted mode" });
       return;
     }
     if (typeof apiKey !== "string" || !apiKey.trim() || apiKey.length > 5_000) {
@@ -378,7 +463,7 @@ app.put("/api/providers/:provider/api-key", async (request, response, next) => {
 app.delete("/api/providers/:provider/api-key", async (request, response, next) => {
   try {
     const provider = request.params.provider;
-    if (!isProviderId(provider)) {
+    if (!isBuiltInProviderId(provider)) {
       response.status(404).json({ error: "Unknown provider" });
       return;
     }
@@ -391,7 +476,7 @@ app.delete("/api/providers/:provider/api-key", async (request, response, next) =
 app.get("/api/providers/:provider/models", async (request, response, next) => {
   try {
     const provider = request.params.provider;
-    if (!isProviderId(provider)) {
+    if (!isBuiltInProviderId(provider)) {
       response.status(404).json({ error: "Unknown provider" });
       return;
     }
@@ -399,14 +484,8 @@ app.get("/api/providers/:provider/models", async (request, response, next) => {
       response.status(400).json({ error: "OpenAI models are built into the model picker" });
       return;
     }
-    if (isHosted && provider === "local") {
-      response.status(403).json({ error: "Local endpoints are unavailable in hosted mode" });
-      return;
-    }
-    const localBaseUrl = provider === "local"
-      ? normalizeLocalBaseUrl(String(request.query.baseUrl ?? ""))
-      : undefined;
-    response.json({ models: await listProviderModels(provider, localBaseUrl) });
+    const credential = await resolveCredential(owner(response), provider);
+    response.json({ models: await listProviderModels(provider, undefined, credential ?? undefined) });
   } catch (error) {
     next(error);
   }
@@ -499,8 +578,7 @@ app.post("/api/respond", async (request, response, next) => {
   try {
     const body = request.body as {
       requestId?: string;
-      provider?: ProviderId;
-      localBaseUrl?: string;
+      provider?: string;
       model?: string;
       reasoningEffort?: ReasoningEffort;
       maxOutputTokens?: number;
@@ -519,7 +597,7 @@ app.post("/api/respond", async (request, response, next) => {
       response.status(400).json({ error: "A valid request ID is required" });
       return;
     }
-    if (!isProviderId(provider) || (isHosted && provider === "local")) {
+    if (typeof provider !== "string" || provider.length > 200) {
       response.status(400).json({ error: "Unsupported provider" });
       return;
     }
@@ -553,14 +631,19 @@ app.post("/api/respond", async (request, response, next) => {
     }
 
     const ownerUserId = owner(response);
-    const apiKey = await resolveCredential(ownerUserId, provider);
-    if (!apiKey && provider !== "local") {
-      response.status(400).json({ error: "Add an API key for this provider in Settings" });
+    const connection = await resolveProviderConnection(ownerUserId, provider);
+    if (!connection) {
+      response.status(400).json({ error: "The selected provider no longer exists" });
+      return;
+    }
+    if (!connection.apiKey && connection.kind !== "custom") {
+      response.status(400).json({ error: `Add an API key for ${connection.label} in Providers` });
       return;
     }
     const job = createGeneration(ownerUserId, body.requestId, {
-      provider,
-      localBaseUrl: provider === "local" ? normalizeLocalBaseUrl(body.localBaseUrl ?? "") : undefined,
+      provider: connection.kind,
+      providerLabel: connection.label,
+      baseUrl: connection.baseUrl,
       model,
       context: body.context,
       message: body.message,
@@ -580,7 +663,7 @@ app.post("/api/respond", async (request, response, next) => {
         body.purpose === "visualization" && body.visualizationEngine === "tikz"
           ? "tikz"
           : "metapost",
-      apiKey: apiKey ?? undefined,
+      apiKey: connection.apiKey,
     });
     attachGenerationStream(response, job);
   } catch (error) {

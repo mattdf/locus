@@ -15,7 +15,7 @@ export function formatDuration(durationMs: number): string {
 export function generationDetails(generation: GenerationMetrics): string {
   const duration = formatDuration(generation.durationMs);
   const route = [
-    generation.provider ? providerLabel(generation.provider) : null,
+    generation.providerLabel || (generation.provider ? providerLabel(generation.provider) : null),
     generation.model,
   ]
     .filter(Boolean)

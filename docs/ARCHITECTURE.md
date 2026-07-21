@@ -14,7 +14,8 @@ exact ancestor path supplied to the model while keeping individual updates inexp
 ## Server
 
 - `server/openai.ts` builds prompts and streams either the OpenAI Responses API or an
-  OpenAI-compatible Chat Completions request.
+  provider-native or OpenAI-compatible streaming request. Feature routes independently select a
+  provider connection and model.
 - `server/providers.ts` manages provider credentials, base URLs, and model discovery.
 - `server/storage.ts` atomically persists the local mode's versioned JSON document.
 - `server/workspaces.ts` applies owner-scoped, optimistic PostgreSQL workspace updates in hosted mode.

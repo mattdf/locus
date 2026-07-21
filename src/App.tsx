@@ -58,6 +58,7 @@ import {
 import { InlineMath, MathBlock } from "./components/MathText";
 import { MODEL_OPTIONS, ModelPicker, REASONING_OPTIONS } from "./components/ModelPicker";
 import { ThreadView } from "./components/ThreadView";
+import { ProviderManagementView } from "./components/ProviderManagementView";
 import {
   SourceRewriteModal,
   type SourceRewriteMode,
@@ -109,7 +110,8 @@ import type {
   Message,
   MessageRevisionGroup,
   ResponseRevisionGroup,
-  ProviderId,
+  ProviderConnectionSummary,
+  ProviderKind,
   ProviderModelOption,
   ReasoningEffort,
   SelectionDraft,
@@ -123,9 +125,7 @@ import {
   DEFAULT_LOCAL_BASE_URL,
   DEFAULT_PROVIDER_MODELS,
   DEFAULT_VISUALIZATION_MODELS,
-  PROVIDER_OPTIONS,
   compatibleReasoningEffort,
-  providerLabel,
 } from "./lib/providers";
 import type { RuntimeInfo } from "./runtime";
 
@@ -138,10 +138,16 @@ const DEFAULT_STATE: WorkspaceState = {
   activeChatId: null,
   settings: {
     provider: "openai",
+    definitionProvider: "openai",
+    visualizationProvider: "openai",
+    rewriteProvider: "openai",
     providerModels: { ...DEFAULT_PROVIDER_MODELS },
     definitionModels: { ...DEFAULT_DEFINITION_MODELS },
     visualizationModels: { ...DEFAULT_VISUALIZATION_MODELS },
-    visualizationReasoningEfforts: { openai: "high", openrouter: "high", local: "medium" },
+    rewriteModels: { ...DEFAULT_PROVIDER_MODELS },
+    definitionReasoningEfforts: { openai: "medium", openrouter: "medium", anthropic: "medium", kimi: "medium", glm: "medium", minimax: "medium", custom: "medium" },
+    visualizationReasoningEfforts: { openai: "high", openrouter: "high", anthropic: "high", kimi: "high", glm: "high", minimax: "high", custom: "medium" },
+    rewriteReasoningEfforts: { openai: "high", openrouter: "high", anthropic: "high", kimi: "high", glm: "high", minimax: "high", custom: "medium" },
     localBaseUrl: DEFAULT_LOCAL_BASE_URL,
     model: "gpt-5.6-sol",
     reasoningEffort: "max",
@@ -159,14 +165,6 @@ const DEFAULT_STATE: WorkspaceState = {
 interface ApiError {
   error?: string;
 }
-
-interface ProviderCredentialStatus {
-  configured: boolean;
-  required: boolean;
-  source: "saved" | "project-file" | "managed" | null;
-}
-
-type ProviderStatuses = Record<ProviderId, ProviderCredentialStatus>;
 
 interface GenerationResult {
   content: string;
@@ -952,7 +950,7 @@ function NewChatScreen({
   ) => void;
   onOpenSidebar: () => void;
   categories: ChatCategory[];
-  provider: ProviderId;
+  provider: ProviderKind;
   modelOptions: ProviderModelOption[];
   model: string;
   onModelChange: (model: string) => void;
@@ -1140,6 +1138,7 @@ export default function App({
   const [newMode, setNewMode] = useState<"ask" | "import">("ask");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [providersOpen, setProvidersOpen] = useState(false);
   const [adminAccountsOpen, setAdminAccountsOpen] = useState(false);
   const [sharedChatsOpen, setSharedChatsOpen] = useState(false);
   const [shareCreating, setShareCreating] = useState(false);
@@ -1148,12 +1147,7 @@ export default function App({
   const [saveState, setSaveState] = useState<"saved" | "saving" | "error">("saved");
   const [customInstructionsOpen, setCustomInstructionsOpen] = useState(false);
   const [customInstructionsDraft, setCustomInstructionsDraft] = useState("");
-  const [providerStatuses, setProviderStatuses] = useState<ProviderStatuses | null>(null);
-  const [credentialProvider, setCredentialProvider] = useState<ProviderId>("openai");
-  const [apiKeyOpen, setApiKeyOpen] = useState(false);
-  const [apiKeyDraft, setApiKeyDraft] = useState("");
-  const [apiKeySaving, setApiKeySaving] = useState(false);
-  const [apiKeyError, setApiKeyError] = useState("");
+  const [providerConnections, setProviderConnections] = useState<ProviderConnectionSummary[]>([]);
   const [providerModels, setProviderModels] = useState<ProviderModelOption[]>([]);
   const [providerModelsStatus, setProviderModelsStatus] =
     useState<"idle" | "loading" | "loaded" | "error">("idle");
@@ -1208,6 +1202,12 @@ export default function App({
   const isAdministrator = runtime.mode === "hosted" && Boolean(
     runtime.user?.role?.split(",").includes("admin"),
   );
+  const providerKind = (providerRef: string): ProviderKind =>
+    providerConnections.find((connection) => connection.id === providerRef)?.kind ??
+    (providerRef === "openai" || providerRef === "openrouter" || providerRef === "anthropic" ||
+    providerRef === "kimi" || providerRef === "glm" || providerRef === "minimax"
+      ? providerRef
+      : "custom");
   const rootNode = activeChat ? activeChat.nodes[activeChat.rootId] : null;
   const activeNode =
     activeChat && activeNodeId && activeChat.nodes[activeNodeId]
@@ -1487,13 +1487,16 @@ export default function App({
   }, [loaded, activeChat?.id, activeChat?.title, activeNode?.id, activeNode?.title, focusMaximized]);
 
   useEffect(() => {
-    fetch("/api/providers")
+    fetch("/api/provider-connections", { cache: "no-store" })
       .then(async (response) => {
-        if (!response.ok) throw new Error("Could not check provider credentials");
-        return (await response.json()) as ProviderStatuses;
+        const result = (await response.json().catch(() => ({}))) as {
+          providers?: ProviderConnectionSummary[];
+        };
+        if (!response.ok || !result.providers) throw new Error("Could not load providers");
+        return result.providers;
       })
-      .then(setProviderStatuses)
-      .catch(() => setProviderStatuses(null));
+      .then(setProviderConnections)
+      .catch(() => setProviderConnections([]));
   }, []);
 
   useEffect(() => {
@@ -1501,25 +1504,24 @@ export default function App({
       managedProviderAppliedRef.current ||
       runtime.mode !== "hosted" ||
       !loaded ||
-      !providerStatuses ||
+      !providerConnections.length ||
       workspace.chats.length > 0
     ) return;
     const currentProvider = workspace.settings.provider;
-    if (providerStatuses[currentProvider].configured) {
+    if (providerConnections.find((connection) => connection.id === currentProvider)?.configured) {
       managedProviderAppliedRef.current = true;
       return;
     }
-    const managedProvider = (["openai", "openrouter"] as const).find(
-      (provider) => providerStatuses[provider].source === "managed",
-    );
-    if (!managedProvider) return;
+    const managedConnection = providerConnections.find((connection) => connection.source === "managed");
+    if (!managedConnection) return;
+    const managedProvider = managedConnection.id;
     managedProviderAppliedRef.current = true;
     setWorkspace((current) => {
       const providerModels = {
         ...current.settings.providerModels,
         [current.settings.provider]: current.settings.model,
       };
-      const model = providerModels[managedProvider] || DEFAULT_PROVIDER_MODELS[managedProvider];
+      const model = providerModels[managedProvider] || DEFAULT_PROVIDER_MODELS[managedConnection.kind];
       return {
         ...current,
         settings: {
@@ -1528,17 +1530,17 @@ export default function App({
           providerModels,
           model,
           reasoningEffort: compatibleReasoningEffort(
-            managedProvider,
+            managedConnection.kind,
             model,
             current.settings.reasoningEffort,
           ),
         },
       };
     });
-  }, [loaded, providerStatuses, runtime.mode, workspace.chats.length, workspace.settings.provider]);
+  }, [loaded, providerConnections, runtime.mode, workspace.chats.length, workspace.settings.provider]);
 
   useEffect(() => {
-    if (!loaded || workspace.settings.provider === "openai") {
+    if (!loaded || providerKind(workspace.settings.provider) === "openai") {
       setProviderModels([]);
       setProviderModelsStatus("idle");
       return;
@@ -1546,11 +1548,7 @@ export default function App({
     const controller = new AbortController();
     const timeout = window.setTimeout(() => {
       setProviderModelsStatus("loading");
-      const query =
-        workspace.settings.provider === "local"
-          ? `?baseUrl=${encodeURIComponent(workspace.settings.localBaseUrl)}`
-          : "";
-      fetch(`/api/providers/${workspace.settings.provider}/models${query}`, {
+      fetch(`/api/provider-connections/${encodeURIComponent(workspace.settings.provider)}/models`, {
         signal: controller.signal,
       })
         .then(async (response) => {
@@ -1576,7 +1574,7 @@ export default function App({
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [loaded, workspace.settings.provider, workspace.settings.localBaseUrl]);
+  }, [loaded, workspace.settings.provider, providerConnections]);
 
   useEffect(() => {
     if (!loaded || loadError) return;
@@ -1642,10 +1640,8 @@ export default function App({
         window.getSelection()?.removeAllRanges();
         closeElaborationDraft();
         setSettingsOpen(false);
+        setProvidersOpen(false);
         setCustomInstructionsOpen(false);
-        setApiKeyOpen(false);
-        setApiKeyDraft("");
-        setApiKeyError("");
         setChatMenuOpen(false);
         setBranchMenuOpen(false);
         setRenamingNodeId(null);
@@ -2015,18 +2011,19 @@ export default function App({
     responseControllers.current.set(definition.id, controller);
     try {
       const definitionModel =
-        workspace.settings.definitionModels[workspace.settings.provider]?.trim() ||
-        workspace.settings.model;
+        workspace.settings.definitionModels[workspace.settings.definitionProvider]?.trim() ||
+        DEFAULT_DEFINITION_MODELS[providerKind(workspace.settings.definitionProvider)];
       const result = await modelRequest(
         definition.requestId,
         {
-          provider: workspace.settings.provider,
-          localBaseUrl: workspace.settings.localBaseUrl,
+          provider: workspace.settings.definitionProvider,
           model: definitionModel,
           reasoningEffort: compatibleReasoningEffort(
-            workspace.settings.provider,
+            providerKind(workspace.settings.definitionProvider),
             definitionModel,
-            workspace.settings.reasoningEffort,
+            workspace.settings.definitionReasoningEfforts[
+              workspace.settings.definitionProvider
+            ] || "medium",
           ),
           maxOutputTokens: workspace.settings.maxOutputTokens,
           customInstructions: workspace.settings.customInstructions,
@@ -2331,8 +2328,10 @@ export default function App({
     try {
       const visualizationModel =
         workspaceRef.current.settings.visualizationModels[
-          workspaceRef.current.settings.provider
-        ]?.trim() || workspaceRef.current.settings.model;
+          workspaceRef.current.settings.visualizationProvider
+        ]?.trim() || DEFAULT_VISUALIZATION_MODELS[
+          providerKind(workspaceRef.current.settings.visualizationProvider)
+        ];
       const prompt = followup?.kind === "repair"
         ? `Repair the following ${engineLabel} figure body so it compiles under the required restricted output contract. Preserve its intended content and return only the corrected body.\n\n<failed_source>\n${followup.source}\n</failed_source>\n\n<compiler_log>\n${followup.diagnostic.slice(-12_000)}\n</compiler_log>`
         : followup?.kind === "revision"
@@ -2345,15 +2344,14 @@ export default function App({
       const result = await modelRequest(
         requestId,
         {
-          provider: workspaceRef.current.settings.provider,
-          localBaseUrl: workspaceRef.current.settings.localBaseUrl,
+          provider: workspaceRef.current.settings.visualizationProvider,
           model: visualizationModel,
           reasoningEffort: compatibleReasoningEffort(
-            workspaceRef.current.settings.provider,
+            providerKind(workspaceRef.current.settings.visualizationProvider),
             visualizationModel,
             workspaceRef.current.settings.visualizationReasoningEfforts[
-              workspaceRef.current.settings.provider
-            ],
+              workspaceRef.current.settings.visualizationProvider
+            ] || "high",
           ),
           maxOutputTokens: workspaceRef.current.settings.maxOutputTokens,
           customInstructions: workspaceRef.current.settings.customInstructions,
@@ -2958,10 +2956,10 @@ export default function App({
       const result = await modelRequest(
         requestId,
         {
-          provider: settings.provider,
-          localBaseUrl: settings.localBaseUrl,
-          model: settings.model,
-          reasoningEffort: settings.reasoningEffort,
+          provider: settings.rewriteProvider,
+          model: settings.rewriteModels[settings.rewriteProvider] ||
+            DEFAULT_PROVIDER_MODELS[providerKind(settings.rewriteProvider)],
+          reasoningEffort: settings.rewriteReasoningEfforts[settings.rewriteProvider] || "high",
           maxOutputTokens: settings.maxOutputTokens,
           customInstructions: "",
           context: [
@@ -3335,7 +3333,7 @@ export default function App({
         ? {
             model: modelOverride ?? workspace.settings.model,
             reasoningEffort: compatibleReasoningEffort(
-              workspace.settings.provider,
+              providerKind(workspace.settings.provider),
               modelOverride ?? workspace.settings.model,
               reasoningEffortOverride ?? workspace.settings.reasoningEffort,
             ),
@@ -3956,7 +3954,7 @@ export default function App({
   const selectModel = (model: string) => {
     setWorkspace((current) => {
       const reasoningEffort =
-        current.settings.provider === "openai" &&
+        providerKind(current.settings.provider) === "openai" &&
         current.settings.reasoningEffort === "max" &&
         !model.startsWith("gpt-5.6")
           ? "xhigh"
@@ -3971,82 +3969,6 @@ export default function App({
             ...current.settings.providerModels,
             [current.settings.provider]: model,
           },
-        },
-      };
-    });
-  };
-
-  const selectDefinitionModel = (model: string) => {
-    setWorkspace((current) => ({
-      ...current,
-      settings: {
-        ...current.settings,
-        definitionModels: {
-          ...current.settings.definitionModels,
-          [current.settings.provider]: model,
-        },
-      },
-    }));
-  };
-
-  const selectVisualizationModel = (model: string) => {
-    setWorkspace((current) => {
-      const provider = current.settings.provider;
-      return {
-        ...current,
-        settings: {
-          ...current.settings,
-          visualizationModels: {
-            ...current.settings.visualizationModels,
-            [provider]: model,
-          },
-          visualizationReasoningEfforts: {
-            ...current.settings.visualizationReasoningEfforts,
-            [provider]: compatibleReasoningEffort(
-              provider,
-              model,
-              current.settings.visualizationReasoningEfforts[provider],
-            ),
-          },
-        },
-      };
-    });
-  };
-
-  const selectVisualizationReasoningEffort = (reasoningEffort: ReasoningEffort) => {
-    setWorkspace((current) => ({
-      ...current,
-      settings: {
-        ...current.settings,
-        visualizationReasoningEfforts: {
-          ...current.settings.visualizationReasoningEfforts,
-          [current.settings.provider]: reasoningEffort,
-        },
-      },
-    }));
-  };
-
-  const selectProvider = (provider: ProviderId) => {
-    setWorkspace((current) => {
-      const providerModels = {
-        ...current.settings.providerModels,
-        [current.settings.provider]: current.settings.model,
-      };
-      const model = providerModels[provider] || DEFAULT_PROVIDER_MODELS[provider];
-      const reasoningEffort =
-        provider === "openai" &&
-        current.settings.reasoningEffort === "max" &&
-        !model.startsWith("gpt-5.6")
-          ? "xhigh"
-          : current.settings.reasoningEffort;
-      return {
-        ...current,
-        settings: {
-          ...current.settings,
-          provider,
-          providerModels,
-          model,
-          reasoningEffort,
         },
       };
     });
@@ -4067,54 +3989,6 @@ export default function App({
         theme: current.settings.theme === "dark" ? "light" : "dark",
       },
     }));
-  };
-
-  const closeApiKeyModal = () => {
-    setApiKeyOpen(false);
-    setApiKeyDraft("");
-    setApiKeyError("");
-  };
-
-  const savePastedApiKey = async () => {
-    setApiKeySaving(true);
-    setApiKeyError("");
-    try {
-      const response = await fetch(`/api/providers/${credentialProvider}/api-key`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: apiKeyDraft }),
-      });
-      const result = (await response.json()) as ProviderCredentialStatus & ApiError;
-      if (!response.ok) throw new Error(result.error || "Could not save the API key");
-      setProviderStatuses((current) =>
-        current ? { ...current, [credentialProvider]: result } : current,
-      );
-      closeApiKeyModal();
-    } catch (error) {
-      setApiKeyError(error instanceof Error ? error.message : "Could not save the API key");
-    } finally {
-      setApiKeySaving(false);
-    }
-  };
-
-  const clearSavedApiKey = async () => {
-    setApiKeySaving(true);
-    setApiKeyError("");
-    try {
-      const response = await fetch(`/api/providers/${credentialProvider}/api-key`, {
-        method: "DELETE",
-      });
-      const result = (await response.json()) as ProviderCredentialStatus & ApiError;
-      if (!response.ok) throw new Error(result.error || "Could not clear the API key");
-      setProviderStatuses((current) =>
-        current ? { ...current, [credentialProvider]: result } : current,
-      );
-      closeApiKeyModal();
-    } catch (error) {
-      setApiKeyError(error instanceof Error ? error.message : "Could not clear the API key");
-    } finally {
-      setApiKeySaving(false);
-    }
   };
 
   const applyComposerInsertion = (id: string) => {
@@ -4307,9 +4181,7 @@ export default function App({
   }
 
   const drawerOpen = Boolean(activeChat && (draft || sideNode));
-  const availableProviders = runtime.localProviderEnabled
-    ? PROVIDER_OPTIONS
-    : PROVIDER_OPTIONS.filter((provider) => provider.id !== "local");
+  const chatProviderKind = providerKind(workspace.settings.provider);
   const activeBranchCount = activeChat ? Object.keys(activeChat.nodes).length - 1 : 0;
   const activePath = activeChat && sideNode ? threadPath(activeChat, sideNode.id) : [];
   const draftPath = activeChat && draft ? threadPath(activeChat, draft.sourceNodeId) : [];
@@ -4643,7 +4515,7 @@ export default function App({
           onCreate={createChat}
           onOpenSidebar={openSidebar}
           categories={workspace.categories}
-          provider={workspace.settings.provider}
+          provider={chatProviderKind}
           modelOptions={providerModels}
           model={workspace.settings.model}
           onModelChange={selectModel}
@@ -4825,7 +4697,7 @@ export default function App({
           <ThreadView
             chat={activeChat}
             node={leftPaneNode}
-            provider={workspace.settings.provider}
+            provider={chatProviderKind}
             modelOptions={providerModels}
             onSelect={setSelection}
             onOpenElaboration={(id) => {
@@ -4959,7 +4831,7 @@ export default function App({
                 placeholder="e.g. Show every algebraic step between these two lines…"
                 submitLabel="Start elaboration"
                 onSend={beginElaboration}
-                provider={workspace.settings.provider}
+                provider={chatProviderKind}
                 modelOptions={providerModels}
                 model={workspace.settings.model}
                 onModelChange={selectModel}
@@ -5100,7 +4972,7 @@ export default function App({
             chat={activeChat}
             node={sideNode}
             side
-            provider={workspace.settings.provider}
+            provider={chatProviderKind}
             modelOptions={providerModels}
             onSelect={setSelection}
             onOpenElaboration={(id) => {
@@ -5277,28 +5149,9 @@ export default function App({
               <section className="settings-view__section">
                 <header>
                   <h3>Generation</h3>
-                  <p>Model and reasoning effort are selected together in each chat box.</p>
+                  <p>Providers and feature-specific models are managed in the dedicated Providers view.</p>
                 </header>
                 <div className="settings-view__grid">
-                  <label className="settings-select-control">
-                    <ServerCog size={15} />
-                    <span>
-                      <small>Provider</small>
-                      <select
-                        aria-label="Model provider"
-                        value={workspace.settings.provider}
-                        onChange={(event) =>
-                          selectProvider(event.target.value as ProviderId)
-                        }
-                      >
-                        {availableProviders.map((provider) => (
-                          <option value={provider.id} key={provider.id}>
-                            {provider.label} · {provider.note}
-                          </option>
-                        ))}
-                      </select>
-                    </span>
-                  </label>
                   <label className="model-select">
                     <Hash size={15} />
                     <span>
@@ -5327,172 +5180,7 @@ export default function App({
                       />
                     </span>
                   </label>
-                  <label className="model-select">
-                    <BookOpen size={15} />
-                    <span>
-                      <small>Define model · {providerLabel(workspace.settings.provider)}</small>
-                      {workspace.settings.provider === "openai" ? (
-                        <select
-                          aria-label="Model used for definitions"
-                          value={
-                            workspace.settings.definitionModels[
-                              workspace.settings.provider
-                            ]
-                          }
-                          onChange={(event) =>
-                            selectDefinitionModel(event.target.value)
-                          }
-                        >
-                          {MODEL_OPTIONS.map((model) => (
-                            <option value={model.value} key={model.value}>
-                              {model.label} · {model.note}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <>
-                          <input
-                            aria-label="Model used for definitions"
-                            value={
-                              workspace.settings.definitionModels[
-                                workspace.settings.provider
-                              ]
-                            }
-                            onChange={(event) =>
-                              selectDefinitionModel(event.target.value)
-                            }
-                            list="definition-model-options"
-                            placeholder={
-                              workspace.settings.provider === "openrouter"
-                                ? "provider/model"
-                                : "Model ID"
-                            }
-                            spellCheck={false}
-                          />
-                          <datalist id="definition-model-options">
-                            {providerModels.map((model) => (
-                              <option value={model.id} key={model.id}>
-                                {model.name ?? model.id}
-                              </option>
-                            ))}
-                          </datalist>
-                        </>
-                      )}
-                    </span>
-                  </label>
-                  <label className="model-select">
-                    <ChartNoAxesCombined size={15} />
-                    <span>
-                      <small>Visualization model · {providerLabel(workspace.settings.provider)}</small>
-                      {workspace.settings.provider === "openai" ? (
-                        <select
-                          aria-label="Model used for visualizations"
-                          value={
-                            workspace.settings.visualizationModels[
-                              workspace.settings.provider
-                            ]
-                          }
-                          onChange={(event) => selectVisualizationModel(event.target.value)}
-                        >
-                          {MODEL_OPTIONS.map((model) => (
-                            <option value={model.value} key={model.value}>
-                              {model.label} · {model.note}
-                            </option>
-                          ))}
-                        </select>
-                      ) : (
-                        <>
-                          <input
-                            aria-label="Model used for visualizations"
-                            value={
-                              workspace.settings.visualizationModels[
-                                workspace.settings.provider
-                              ]
-                            }
-                            onChange={(event) => selectVisualizationModel(event.target.value)}
-                            list="visualization-model-options"
-                            placeholder={
-                              workspace.settings.provider === "openrouter"
-                                ? "provider/model"
-                                : "Model ID"
-                            }
-                            spellCheck={false}
-                          />
-                          <datalist id="visualization-model-options">
-                            {providerModels.map((model) => (
-                              <option value={model.id} key={model.id}>
-                                {model.name ?? model.id}
-                              </option>
-                            ))}
-                          </datalist>
-                        </>
-                      )}
-                      <select
-                        className="visualization-reasoning-select"
-                        aria-label="Reasoning effort used for visualizations"
-                        value={
-                          workspace.settings.visualizationReasoningEfforts[
-                            workspace.settings.provider
-                          ]
-                        }
-                        onChange={(event) =>
-                          selectVisualizationReasoningEffort(
-                            event.target.value as ReasoningEffort,
-                          )
-                        }
-                      >
-                        {REASONING_OPTIONS.map((effort) => (
-                          <option
-                            value={effort.value}
-                            key={effort.value}
-                            disabled={
-                              effort.value === "max" &&
-                              workspace.settings.provider === "openai" &&
-                              !workspace.settings.visualizationModels.openai.startsWith("gpt-5.6")
-                            }
-                          >
-                            {effort.label} reasoning
-                          </option>
-                        ))}
-                      </select>
-                    </span>
-                  </label>
-                  {workspace.settings.provider === "local" && (
-                    <label className="model-select provider-url-control">
-                      <ServerCog size={15} />
-                      <span>
-                        <small>OpenAI-compatible base URL</small>
-                        <input
-                          type="url"
-                          value={workspace.settings.localBaseUrl}
-                          onChange={(event) =>
-                            setWorkspace((current) => ({
-                              ...current,
-                              settings: {
-                                ...current.settings,
-                                localBaseUrl: event.target.value,
-                              },
-                            }))
-                          }
-                          placeholder={DEFAULT_LOCAL_BASE_URL}
-                          aria-label="Local OpenAI-compatible base URL"
-                          spellCheck={false}
-                        />
-                      </span>
-                    </label>
-                  )}
                 </div>
-                {workspace.settings.provider !== "openai" && (
-                  <p className={`provider-catalog-status provider-catalog-status--${providerModelsStatus}`}>
-                    {providerModelsStatus === "loading"
-                      ? "Loading model IDs…"
-                      : providerModelsStatus === "loaded"
-                        ? `${providerModels.length.toLocaleString()} model IDs available in the chat, Define, and Visualization model fields.`
-                        : providerModelsStatus === "error"
-                          ? "The model catalog is unavailable; you can still enter a model ID manually."
-                          : "Enter a model ID in the chat box."}
-                  </p>
-                )}
               </section>
 
               <section className="settings-view__section">
@@ -5501,35 +5189,17 @@ export default function App({
                 </header>
                 <div className="settings-view__actions">
                   <button
-                    className="custom-instructions-button api-key-button"
+                    className="custom-instructions-button"
                     type="button"
                     onClick={() => {
                       setSettingsOpen(false);
-                      setCredentialProvider(workspace.settings.provider);
-                      setApiKeyDraft("");
-                      setApiKeyError("");
-                      setApiKeyOpen(true);
+                      setProvidersOpen(true);
                     }}
                   >
-                    <KeyRound size={15} />
+                    <ServerCog size={15} />
                     <span>
-                      <small>
-                        {providerLabel(workspace.settings.provider)} API key
-                        {workspace.settings.provider === "local" ? " · optional" : ""}
-                      </small>
-                      <strong>
-                        {!providerStatuses
-                          ? "Checking…"
-                          : providerStatuses[workspace.settings.provider].source === "saved"
-                            ? "Saved in Locus"
-                            : providerStatuses[workspace.settings.provider].source === "managed"
-                              ? "Provided by administrator"
-                            : providerStatuses[workspace.settings.provider].source === "project-file"
-                              ? "Project file"
-                              : workspace.settings.provider === "local"
-                                ? "No key"
-                                : "Not configured"}
-                      </strong>
+                      <small>Model access</small>
+                      <strong>Providers and feature routing</strong>
                     </span>
                     <ChevronRight size={13} />
                   </button>
@@ -5908,6 +5578,22 @@ export default function App({
         </div>
       )}
 
+      {providersOpen && (
+        <ProviderManagementView
+          mode={runtime.mode}
+          connections={providerConnections}
+          settings={workspace.settings}
+          onConnectionsChange={setProviderConnections}
+          updateSettings={(update) =>
+            setWorkspace((current) => ({
+              ...current,
+              settings: update(current.settings),
+            }))
+          }
+          onClose={() => setProvidersOpen(false)}
+        />
+      )}
+
       {customInstructionsOpen && (
         <div
           className="settings-modal-backdrop"
@@ -5980,105 +5666,6 @@ export default function App({
                 }}
               >
                 Save instructions
-              </button>
-            </footer>
-          </section>
-        </div>
-      )}
-
-      {apiKeyOpen && (
-        <div
-          className="settings-modal-backdrop"
-          role="presentation"
-          onMouseDown={(event) => {
-            if (event.target === event.currentTarget) closeApiKeyModal();
-          }}
-        >
-          <section
-            className="settings-modal settings-modal--api-key"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="api-key-title"
-          >
-            <header>
-              <div>
-                <span>Connection</span>
-                <h2 id="api-key-title">{providerLabel(credentialProvider)} API key</h2>
-              </div>
-              <button
-                className="icon-button"
-                type="button"
-                aria-label="Close API key settings"
-                onClick={closeApiKeyModal}
-              >
-                <X size={17} />
-              </button>
-            </header>
-            <p>
-              Paste a key here to store it in a private local file. Locus never returns the
-              saved value to the browser or includes it in your chat data.
-              {credentialProvider === "local"
-                ? " Local endpoints that do not require authentication can leave this unset."
-                : " A pasted key takes precedence over the matching project key file."}
-            </p>
-            <input
-              autoFocus
-              type="password"
-              value={apiKeyDraft}
-              onChange={(event) => setApiKeyDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && apiKeyDraft.trim() && !apiKeySaving) {
-                  void savePastedApiKey();
-                }
-              }}
-              placeholder={
-                credentialProvider === "openai"
-                  ? "sk-… or OPENAI_API_KEY=sk-…"
-                  : credentialProvider === "openrouter"
-                    ? "sk-or-… or OPENROUTER_API_KEY=sk-or-…"
-                    : "Optional bearer token"
-              }
-              aria-label={`${providerLabel(credentialProvider)} API key`}
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <p className="api-key-storage-note">
-              {runtime.mode === "hosted"
-                ? providerStatuses?.[credentialProvider].source === "managed"
-                  ? "An administrator-managed key is available. It is decrypted only for server-side model calls and is never sent to this browser. Saving your own key overrides it."
-                  : "Saved keys are encrypted at rest and are returned to this browser only as availability metadata."
-                : <>
-                    Stored at <code>
-                      {credentialProvider === "openai"
-                        ? "data/openai-api-key.txt"
-                        : credentialProvider === "openrouter"
-                          ? "data/openrouter-api-key.txt"
-                          : "data/local-api-key.txt"}
-                    </code> with owner-only permissions.
-                  </>}
-            </p>
-            {apiKeyError && <p className="api-key-error" role="alert">{apiKeyError}</p>}
-            <footer>
-              {providerStatuses?.[credentialProvider].source === "saved" && (
-                <button
-                  className="secondary-button api-key-clear-button"
-                  type="button"
-                  disabled={apiKeySaving}
-                  onClick={() => void clearSavedApiKey()}
-                >
-                  Clear saved key
-                </button>
-              )}
-              <button className="secondary-button" type="button" onClick={closeApiKeyModal}>
-                Cancel
-              </button>
-              <button
-                className="primary-button"
-                type="button"
-                disabled={!apiKeyDraft.trim() || apiKeySaving}
-                onClick={() => void savePastedApiKey()}
-              >
-                {apiKeySaving ? "Saving…" : "Save API key"}
               </button>
             </footer>
           </section>
