@@ -70,6 +70,50 @@ const runtime = await json(await request("/api/runtime", { cookie: aliceCookie }
 assert(runtime.authenticated && runtime.user?.email === alice.email, "Authenticated runtime is incorrect");
 const aliceId = runtime.user.id;
 
+const invalidNameUpdate = await request("/api/auth/update-user", {
+  method: "POST",
+  cookie: aliceCookie,
+  body: JSON.stringify({ name: "   " }),
+});
+assert(invalidNameUpdate.status === 400, "The self-service profile endpoint accepted an empty name");
+const updatedAliceName = "Alice Updated";
+const updateOwnName = await request("/api/auth/update-user", {
+  method: "POST",
+  cookie: aliceCookie,
+  body: JSON.stringify({ name: `  ${updatedAliceName}  ` }),
+});
+assert(updateOwnName.ok, `Self-service name update failed: ${JSON.stringify(await json(updateOwnName))}`);
+const renamedRuntime = await json(await request("/api/runtime", { cookie: aliceCookie }));
+assert(renamedRuntime.user?.name === updatedAliceName, "Updated account name was not returned by runtime");
+
+const selfServicePassword = "updated-correct-horse-battery-staple";
+const invalidPasswordChange = await request("/api/auth/change-password", {
+  method: "POST",
+  cookie: aliceCookie,
+  body: JSON.stringify({
+    currentPassword: "not-the-current-password",
+    newPassword: selfServicePassword,
+    revokeOtherSessions: false,
+  }),
+});
+assert(!invalidPasswordChange.ok, "Password change accepted an incorrect current password");
+const changeOwnPassword = await request("/api/auth/change-password", {
+  method: "POST",
+  cookie: aliceCookie,
+  body: JSON.stringify({
+    currentPassword: alice.password,
+    newPassword: selfServicePassword,
+    revokeOtherSessions: false,
+  }),
+});
+assert(changeOwnPassword.ok, `Self-service password change failed: ${JSON.stringify(await json(changeOwnPassword))}`);
+const oldPasswordSignIn = await request("/api/auth/sign-in/email", {
+  method: "POST",
+  body: JSON.stringify({ email: alice.email, password: alice.password, rememberMe: true }),
+});
+assert(!oldPasswordSignIn.ok, "The previous password remained valid after a self-service change");
+await signIn({ ...alice, password: selfServicePassword });
+
 const createBob = await request("/api/admin/users", {
   method: "POST",
   cookie: aliceCookie,
@@ -335,4 +379,4 @@ assert(deleteBob.status === 204, `Admin could not delete an account: ${JSON.stri
 const finalUsers = await json(await request("/api/admin/users", { cookie: aliceCookie }));
 assert(finalUsers.users?.length === 1 && finalUsers.users[0].email === alice.email, "Deleted account remained in account management");
 
-console.log("Hosted integration checks passed: admin accounts, auth, sharing, isolation, conflicts, CSRF, encrypted BYOK, and MetaPost");
+console.log("Hosted integration checks passed: self-service accounts, admin accounts, auth, sharing, isolation, conflicts, CSRF, encrypted BYOK, and MetaPost");

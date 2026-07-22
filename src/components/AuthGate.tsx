@@ -21,7 +21,11 @@ interface PublicInvite {
 export function AuthGate({
   children,
 }: {
-  children: (runtime: RuntimeInfo, signOut: () => Promise<void>) => ReactNode;
+  children: (
+    runtime: RuntimeInfo,
+    signOut: () => Promise<void>,
+    refreshRuntime: () => Promise<void>,
+  ) => ReactNode;
 }) {
   const [runtime, setRuntime] = useState<RuntimeInfo | null>(null);
   const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
@@ -367,5 +371,5 @@ export function AuthGate({
     );
   }
 
-  return children(runtime, signOut);
+  return children(runtime, signOut, refresh);
 }

@@ -168,7 +168,7 @@ body {
 .loading-screen--error { gap: 8px; text-align: center; }
 .loading-screen--error button { margin-top: 8px; padding: 7px 14px; cursor: pointer; }
 
-.account-summary { cursor: default; }
+.account-summary { cursor: pointer; }
 
 button,
 input,
@@ -4559,6 +4559,139 @@ body.resizing-drawer {
   flex-direction: column;
 }
 
+.settings-modal--account {
+  display: flex;
+  width: min(650px, 100%);
+  max-height: calc(100vh - 48px);
+  flex-direction: column;
+}
+
+.account-settings {
+  min-height: 0;
+  margin-top: 15px;
+  overflow-y: auto;
+}
+
+.account-settings__identity {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 8px;
+}
+
+.account-settings__identity > span,
+.account-settings__section > header > div,
+.account-settings__session-option > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.account-settings__identity strong,
+.account-settings__section > header strong,
+.account-settings__session-option strong {
+  color: var(--ink);
+  font-size: 10px;
+}
+
+.account-settings__identity small,
+.account-settings__section > header small,
+.account-settings__session-option small {
+  color: #7f8984;
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.account-settings__feedback {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 9px 10px;
+  margin: 10px 0 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  font-size: 9px;
+  line-height: 1.5;
+}
+
+.account-settings__feedback svg { flex: 0 0 auto; margin-top: 1px; }
+
+.account-settings__feedback--success {
+  color: #28604e;
+  background: #e7f2ed;
+  border-color: #c5ddd4;
+}
+
+.account-settings__feedback--error {
+  color: var(--danger);
+  background: #f6e9e6;
+  border-color: #e7cbc6;
+}
+
+.account-settings__section {
+  padding: 13px;
+  margin-top: 10px;
+  background: rgba(255, 255, 255, 0.38);
+  border: 1px solid #ddd9cf;
+  border-radius: 8px;
+}
+
+.account-settings__section > header {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: var(--accent);
+}
+
+.account-settings__section .settings-field { margin-top: 11px; }
+.account-settings__section .settings-field > span small {
+  color: #929a96;
+  font-size: 8px;
+  font-weight: 550;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.account-settings__section > footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.account-settings__password-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 8px;
+}
+
+.account-settings__password-fields > label:first-child { grid-column: 1 / -1; }
+
+.account-settings__session-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  margin-top: 11px;
+  color: #65716b;
+  background: rgba(13, 112, 101, .04);
+  border: 1px solid rgba(13, 112, 101, .14);
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.account-settings__session-option > input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.account-settings__footer { justify-content: flex-end; }
+
 .settings-modal--providers {
   display: flex;
   width: min(980px, 100%);
@@ -6284,6 +6417,9 @@ body.resizing-drawer {
     grid-template-columns: 1fr;
   }
 
+  .account-settings__password-fields { grid-template-columns: 1fr; }
+  .account-settings__password-fields > label:first-child { grid-column: auto; }
+
   .primary-button {
     width: 100%;
     justify-content: center;
@@ -7275,6 +7411,39 @@ body.resizing-drawer {
   background: #1b211e;
   border-color: #39413d;
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
+}
+
+.app-shell[data-theme="dark"] .account-settings__section {
+  background: rgba(255, 255, 255, 0.025);
+  border-color: #3a433f;
+}
+
+.app-shell[data-theme="dark"] .account-settings__identity {
+  background: #203a35;
+}
+
+.app-shell[data-theme="dark"] .account-settings__identity small,
+.app-shell[data-theme="dark"] .account-settings__section > header small,
+.app-shell[data-theme="dark"] .account-settings__session-option small {
+  color: #7e8883;
+}
+
+.app-shell[data-theme="dark"] .account-settings__feedback--success {
+  color: #9ed7c6;
+  background: #1c302a;
+  border-color: #31584d;
+}
+
+.app-shell[data-theme="dark"] .account-settings__feedback--error {
+  color: #efb5aa;
+  background: #352321;
+  border-color: #573631;
+}
+
+.app-shell[data-theme="dark"] .account-settings__session-option {
+  color: #aab4af;
+  background: rgba(85, 179, 164, .055);
+  border-color: rgba(85, 179, 164, .2);
 }
 
 .app-shell[data-theme="dark"] .admin-account-create,

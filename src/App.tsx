@@ -51,6 +51,7 @@ import type {
 } from "react";
 import { Composer } from "./components/Composer";
 import { AdminAccountsModal } from "./components/AdminAccountsModal";
+import { AccountSettingsModal } from "./components/AccountSettingsModal";
 import {
   ShareCreatedModal,
   SharedChatsModal,
@@ -1204,9 +1205,11 @@ function NewChatScreen({
 export default function App({
   runtime,
   onSignOut,
+  onRefreshRuntime,
 }: {
   runtime: RuntimeInfo;
   onSignOut: () => Promise<void>;
+  onRefreshRuntime: () => Promise<void>;
 }) {
   const [workspace, setWorkspace] = useState<WorkspaceState>(DEFAULT_STATE);
   const [loaded, setLoaded] = useState(false);
@@ -1240,6 +1243,7 @@ export default function App({
   const [newMode, setNewMode] = useState<"ask" | "import">("ask");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [providersOpen, setProvidersOpen] = useState(false);
   const [adminAccountsOpen, setAdminAccountsOpen] = useState(false);
   const [sharedChatsOpen, setSharedChatsOpen] = useState(false);
@@ -6131,13 +6135,21 @@ export default function App({
                     <p>Your chats, settings, usage, and provider keys are private to this account.</p>
                   </header>
                   <div className="settings-view__actions">
-                    <div className="custom-instructions-button account-summary">
+                    <button
+                      className="custom-instructions-button account-summary"
+                      type="button"
+                      onClick={() => {
+                        setSettingsOpen(false);
+                        setAccountSettingsOpen(true);
+                      }}
+                    >
                       <UserRound size={15} />
                       <span>
                         <small>{runtime.user.email}</small>
                         <strong>{runtime.user.name}</strong>
                       </span>
-                    </div>
+                      <ChevronRight size={13} />
+                    </button>
                     <button
                       className="custom-instructions-button"
                       type="button"
@@ -6404,6 +6416,14 @@ export default function App({
         <AdminAccountsModal
           currentUserId={runtime.user.id}
           onClose={() => setAdminAccountsOpen(false)}
+        />
+      )}
+
+      {accountSettingsOpen && runtime.mode === "hosted" && runtime.user && (
+        <AccountSettingsModal
+          user={runtime.user}
+          onRefresh={onRefreshRuntime}
+          onClose={() => setAccountSettingsOpen(false)}
         />
       )}
 

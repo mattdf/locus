@@ -14,7 +14,13 @@ createRoot(document.getElementById("root")!).render(
       <SharedChatView token={sharedToken} />
     ) : (
       <AuthGate>
-        {(runtime, signOut) => <App runtime={runtime} onSignOut={signOut} />}
+        {(runtime, signOut, refreshRuntime) => (
+          <App
+            runtime={runtime}
+            onSignOut={signOut}
+            onRefreshRuntime={refreshRuntime}
+          />
+        )}
       </AuthGate>
     )}
   </StrictMode>,
