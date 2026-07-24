@@ -1,5 +1,5 @@
 import { CornerUpRight, ExternalLink } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
@@ -34,7 +34,61 @@ const MARKDOWN_COMPONENTS: Components = {
       <ExternalLink size={11} aria-hidden="true" />
     </a>
   ),
+  table: ({ node, children, ...props }) => {
+    void node;
+    return (
+      <div
+        className="markdown-table-scroll"
+        role="region"
+        aria-label="Scrollable table"
+        tabIndex={0}
+      >
+        <table {...props}>{children}</table>
+      </div>
+    );
+  },
 };
+
+const selectionCaptureByContainer = new WeakMap<HTMLElement, () => void>();
+let selectionCaptureSubscriberCount = 0;
+let selectionCaptureTimer: number | null = null;
+
+function selectionContainerForNode(node: Node): HTMLElement | null {
+  const element = node instanceof Element ? node : node.parentElement;
+  return element?.closest<HTMLElement>(".markdown-message") ?? null;
+}
+
+function handleDocumentSelectionChange() {
+  if (selectionCaptureTimer !== null) window.clearTimeout(selectionCaptureTimer);
+  selectionCaptureTimer = window.setTimeout(() => {
+    selectionCaptureTimer = null;
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+    const container = selectionContainerForNode(selection.getRangeAt(0).commonAncestorContainer);
+    if (!container) return;
+    selectionCaptureByContainer.get(container)?.();
+  }, 80);
+}
+
+function subscribeToSelectionCapture(container: HTMLElement, capture: () => void) {
+  selectionCaptureByContainer.set(container, capture);
+  selectionCaptureSubscriberCount += 1;
+  if (selectionCaptureSubscriberCount === 1) {
+    document.addEventListener("selectionchange", handleDocumentSelectionChange);
+  }
+
+  return () => {
+    selectionCaptureByContainer.delete(container);
+    selectionCaptureSubscriberCount = Math.max(0, selectionCaptureSubscriberCount - 1);
+    if (selectionCaptureSubscriberCount === 0) {
+      document.removeEventListener("selectionchange", handleDocumentSelectionChange);
+      if (selectionCaptureTimer !== null) {
+        window.clearTimeout(selectionCaptureTimer);
+        selectionCaptureTimer = null;
+      }
+    }
+  };
+}
 
 interface MarkdownMessageProps {
   message: Message;
@@ -502,7 +556,7 @@ function MarkdownMessageComponent({
     };
   }, [inlineElaborationHighlightName, inlineElaborations, message.content]);
 
-  const captureSelection = () => {
+  const captureSelection = useCallback(() => {
     const container = containerRef.current;
     const selection = window.getSelection();
     if (!container || !selection || selection.isCollapsed || !selection.rangeCount) return;
@@ -544,7 +598,20 @@ function MarkdownMessageComponent({
         height: bounds.height,
       },
     });
-  };
+  }, [
+    message.content,
+    message.id,
+    nodeId,
+    normalizedContent,
+    onSelect,
+    selectionSurface,
+  ]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    return subscribeToSelectionCapture(container, captureSelection);
+  }, [captureSelection]);
 
   const annotationAtPoint = (
     targetNode: EventTarget | null,
@@ -606,6 +673,15 @@ function MarkdownMessageComponent({
           event.target.closest(".inline-annotation-slot")
         ) return;
         captureSelection();
+        if (selectionSurface === "inline-elaboration") event.stopPropagation();
+      }}
+      onTouchEnd={(event) => {
+        if (
+          selectionSurface !== "inline-elaboration" &&
+          event.target instanceof Element &&
+          event.target.closest(".inline-annotation-slot")
+        ) return;
+        window.setTimeout(captureSelection, 80);
         if (selectionSurface === "inline-elaboration") event.stopPropagation();
       }}
       onKeyUp={(event) => {

@@ -865,7 +865,7 @@ function SelectionToolbar({
         ),
         top: rect.top > 70 ? rect.top - 12 : rect.top + rect.height + 46,
       }}
-      onMouseDown={(event) => event.preventDefault()}
+      onPointerDown={(event) => event.preventDefault()}
     >
       <span className="selection-toolbar__quote">
         “<InlineMath source={selection.quote} />”

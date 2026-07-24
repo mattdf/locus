@@ -1440,6 +1440,7 @@ a:focus-visible {
 .thread-view {
   position: relative;
   display: flex;
+  min-width: 0;
   min-height: 0;
   flex: 1;
   flex-direction: column;
@@ -1504,9 +1505,11 @@ a:focus-visible {
 }
 
 .thread-messages {
+  min-width: 0;
   min-height: 0;
   flex: 1;
   padding: 38px max(38px, calc((100% - 760px) / 2)) 28px;
+  overflow-x: clip;
   overflow-y: auto;
   scroll-behavior: smooth;
   scrollbar-color: #d3d0c7 transparent;
@@ -1515,6 +1518,8 @@ a:focus-visible {
 
 .message {
   position: relative;
+  width: 100%;
+  min-width: 0;
   max-width: 760px;
   margin: 0 auto 30px;
   scroll-margin-top: 18px;
@@ -1853,6 +1858,8 @@ a:focus-visible {
 }
 
 .markdown-message {
+  min-width: 0;
+  max-width: 100%;
   color: #293430;
   font-family: Georgia, "Times New Roman", serif;
   font-size: calc(15px * var(--text-scale, 1));
@@ -2033,6 +2040,22 @@ a:focus-visible {
   border-collapse: collapse;
   font-family: Inter, ui-sans-serif, sans-serif;
   font-size: calc(12px * var(--text-scale, 1));
+}
+
+.markdown-message .markdown-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  margin: 0 0 1.1em;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.markdown-message .markdown-table-scroll > table {
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
 }
 
 .markdown-message th,
@@ -7201,6 +7224,15 @@ body.resizing-drawer {
 
   .selection-toolbar > span {
     display: none;
+  }
+
+  .selection-toolbar {
+    width: calc(100vw - 16px);
+    max-width: none;
+    justify-content: center;
+    gap: 5px;
+    padding: 5px;
+    flex-wrap: wrap;
   }
 
   .settings-modal-backdrop {
