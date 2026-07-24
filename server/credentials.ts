@@ -26,6 +26,8 @@ function providerName(provider: BuiltInProviderId): string {
     kimi: "Kimi",
     glm: "GLM",
     minimax: "MiniMax",
+    deepseek: "DeepSeek",
+    qwen: "Qwen",
   }[provider];
 }
 function keyAt(version: number): Buffer {

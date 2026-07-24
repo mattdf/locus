@@ -248,10 +248,31 @@ const saveKey = await request("/api/providers/openai/api-key", {
   body: JSON.stringify({ apiKey: dummyKey }),
 });
 assert(saveKey.ok, `Alice credential save failed: ${JSON.stringify(await json(saveKey))}`);
+const deepSeekKey = "sk-test-deepseek-never-returned-000000";
+const qwenKey = "sk-test-qwen-never-returned-000000000";
+const saveDeepSeekKey = await request("/api/providers/deepseek/api-key", {
+  method: "PUT",
+  cookie: aliceCookie,
+  body: JSON.stringify({ apiKey: deepSeekKey }),
+});
+assert(
+  saveDeepSeekKey.ok,
+  `DeepSeek credential save failed: ${JSON.stringify(await json(saveDeepSeekKey))}`,
+);
+const saveQwenKey = await request("/api/providers/qwen/api-key", {
+  method: "PUT",
+  cookie: aliceCookie,
+  body: JSON.stringify({ apiKey: qwenKey }),
+});
+assert(saveQwenKey.ok, `Qwen credential save failed: ${JSON.stringify(await json(saveQwenKey))}`);
 const aliceProviders = await json(await request("/api/providers", { cookie: aliceCookie }));
 const bobProviders = await json(await request("/api/providers", { cookie: bobCookie }));
 assert(aliceProviders.openai.configured, "Alice's saved credential was not reported");
+assert(aliceProviders.deepseek.configured, "Alice's DeepSeek credential was not reported");
+assert(aliceProviders.qwen.configured, "Alice's Qwen credential was not reported");
 assert(!bobProviders.openai.configured, "Bob could see Alice's credential status");
+assert(!bobProviders.deepseek.configured, "Bob could see Alice's DeepSeek credential status");
+assert(!bobProviders.qwen.configured, "Bob could see Alice's Qwen credential status");
 
 const customKey = "custom-hosted-secret-never-returned";
 const customProviderResponse = await request("/api/provider-connections", {
@@ -285,8 +306,13 @@ if (process.env.DATABASE_URL) {
               encode("ciphertext", 'escape') as "ciphertext"
        from "locus_provider_credentials"`,
     );
-    assert(credentials.rowCount === 1, "Unexpected credential row count");
-    assert(!credentials.rows[0].ciphertext.includes(dummyKey), "Provider credential was stored as plaintext");
+    assert(credentials.rowCount === 3, "Unexpected credential row count");
+    const serializedCredentials = JSON.stringify(credentials.rows);
+    assert(!serializedCredentials.includes(dummyKey), "OpenAI credential was stored as plaintext");
+    assert(!serializedCredentials.includes(deepSeekKey), "DeepSeek credential was stored as plaintext");
+    assert(!serializedCredentials.includes(qwenKey), "Qwen credential was stored as plaintext");
+    const openAiCredential = credentials.rows.find((row) => row.provider === "openai");
+    assert(openAiCredential?.credentialId, "OpenAI credential attribution ID was not stored");
     const customCredentials = await pool.query(
       `select "credentialId", encode("ciphertext", 'escape') as "ciphertext"
          from "locus_custom_providers"
@@ -303,7 +329,7 @@ if (process.env.DATABASE_URL) {
     const counts = Object.fromEntries(owners.rows.map((row) => [row.email, row.chats]));
     assert(counts[alice.email] === 1 && counts[bob.email] === 0, "Database ownership isolation failed");
 
-    const personalRef = `personal:${credentials.rows[0].credentialId}`;
+    const personalRef = `personal:${openAiCredential.credentialId}`;
     const customRef = `custom:${customCredentials.rows[0].credentialId}`;
     await pool.query(
       `insert into "locus_generation_jobs"

@@ -11,6 +11,8 @@ export const PROVIDER_OPTIONS: Array<{
   { id: "kimi", label: "Kimi", note: "Moonshot API" },
   { id: "glm", label: "GLM", note: "Z.AI API" },
   { id: "minimax", label: "MiniMax", note: "MiniMax API" },
+  { id: "deepseek", label: "DeepSeek", note: "DeepSeek OpenAI-compatible API" },
+  { id: "qwen", label: "Qwen", note: "Alibaba Model Studio · Singapore endpoint" },
   { id: "custom", label: "Custom OpenAI Compatible", note: "User-defined endpoint" },
 ];
 
@@ -21,6 +23,8 @@ export const DEFAULT_PROVIDER_MODELS: Record<ProviderId, string> = {
   kimi: "kimi-k2.5",
   glm: "glm-5.2",
   minimax: "MiniMax-M2.7",
+  deepseek: "deepseek-v4-pro",
+  qwen: "qwen3.7-max",
   custom: "model-id",
 };
 
@@ -31,6 +35,8 @@ export const DEFAULT_DEFINITION_MODELS: Record<ProviderId, string> = {
   kimi: "kimi-k2.5",
   glm: "glm-5.2",
   minimax: "MiniMax-M2.7",
+  deepseek: "deepseek-v4-flash",
+  qwen: "qwen3.6-flash",
   custom: "model-id",
 };
 
@@ -41,6 +47,8 @@ export const DEFAULT_VISUALIZATION_MODELS: Record<ProviderId, string> = {
   kimi: "kimi-k2.5",
   glm: "glm-5.2",
   minimax: "MiniMax-M2.7",
+  deepseek: "deepseek-v4-pro",
+  qwen: "qwen3.7-max",
   custom: "model-id",
 };
 

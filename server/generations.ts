@@ -182,8 +182,7 @@ function finish(
   if (job.status !== "running") return;
   job.status = status;
   job.error = error;
-  const estimatedCost =
-    job.provider === "openai" ? calculateGenerationCost(job.model, usage) : null;
+  const estimatedCost = calculateGenerationCost(job.provider, job.model, usage);
   const reportedCost = usage?.costUsd;
   job.generation = {
     durationMs: Date.now() - job.startedAt,

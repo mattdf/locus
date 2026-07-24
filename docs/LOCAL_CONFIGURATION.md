@@ -6,8 +6,10 @@ binds the API to `127.0.0.1` by default so provider credentials are not exposed 
 ## Provider credentials
 
 Keys entered in Settings are saved to provider-specific files under `data/` with owner-only
-permissions. These values take precedence over `OPENAI_API_KEY.txt` and
-`OPENROUTER_API_KEY.txt` in the project directory.
+permissions. These values take precedence over project-directory key files:
+`OPENAI_API_KEY.txt`, `OPENROUTER_API_KEY.txt`, `ANTHROPIC_API_KEY.txt`,
+`KIMI_API_KEY.txt`, `GLM_API_KEY.txt`, `MINIMAX_API_KEY.txt`,
+`DEEPSEEK_API_KEY.txt`, and `QWEN_API_KEY.txt`.
 
 Custom OpenAI-compatible endpoints may use HTTP or HTTPS locally. Their URL and model ID
 can be changed in Settings, and a key is optional.

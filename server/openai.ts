@@ -209,15 +209,33 @@ async function streamCompatibleChat(
     { role: "system" as const, content: instructions },
     { role: "user" as const, content: request },
   ];
-  const supportsReasoningEffort = input.provider === "openrouter" || input.provider === "custom";
+  const supportsReasoningEffort =
+    input.provider === "openrouter" ||
+    input.provider === "deepseek" ||
+    input.provider === "custom";
+  const deepSeekEffort =
+    input.reasoningEffort === "max" || input.reasoningEffort === "xhigh"
+      ? "max"
+      : "high";
   const createStream = (minimalRequest = false) =>
     client.chat.completions.create(
       {
         model: input.model,
         messages,
-        ...(minimalRequest || !supportsReasoningEffort ? {} : { reasoning_effort: input.reasoningEffort }),
+        ...(minimalRequest || !supportsReasoningEffort || input.reasoningEffort === "none"
+          ? {}
+          : {
+              reasoning_effort:
+                input.provider === "deepseek" ? deepSeekEffort : input.reasoningEffort,
+            }),
         ...(!minimalRequest && input.provider === "glm"
           ? { thinking: { type: input.reasoningEffort === "none" ? "disabled" : "enabled" } }
+          : {}),
+        ...(!minimalRequest && input.provider === "deepseek"
+          ? { thinking: { type: input.reasoningEffort === "none" ? "disabled" : "enabled" } }
+          : {}),
+        ...(!minimalRequest && input.provider === "qwen"
+          ? { enable_thinking: input.reasoningEffort !== "none" }
           : {}),
         ...(input.maxOutputTokens === 0
           ? {}
@@ -236,6 +254,7 @@ async function streamCompatibleChat(
       completion_tokens: number;
       total_tokens: number;
       prompt_tokens_details?: { cached_tokens?: number } | null;
+      prompt_cache_hit_tokens?: number;
       completion_tokens_details?: { reasoning_tokens?: number } | null;
       cost?: number;
     } | null;
@@ -270,7 +289,10 @@ async function streamCompatibleChat(
       const providerUsage = chunk.usage as typeof chunk.usage & { cost?: number };
       usage = {
         inputTokens: providerUsage.prompt_tokens,
-        cachedInputTokens: providerUsage.prompt_tokens_details?.cached_tokens ?? 0,
+        cachedInputTokens:
+          providerUsage.prompt_tokens_details?.cached_tokens ??
+          providerUsage.prompt_cache_hit_tokens ??
+          0,
         outputTokens: providerUsage.completion_tokens,
         reasoningTokens:
           providerUsage.completion_tokens_details?.reasoning_tokens ?? 0,

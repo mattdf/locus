@@ -12,10 +12,12 @@ export const PROVIDER_BASE_URLS: Partial<Record<ProviderKind, string>> = {
   kimi: "https://api.moonshot.ai/v1",
   glm: "https://open.bigmodel.cn/api/paas/v4",
   minimax: "https://api.minimax.io/v1",
+  deepseek: "https://api.deepseek.com",
+  qwen: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
 };
 
 export const BUILT_IN_PROVIDER_IDS = [
-  "openai", "openrouter", "anthropic", "kimi", "glm", "minimax",
+  "openai", "openrouter", "anthropic", "kimi", "glm", "minimax", "deepseek", "qwen",
 ] as const satisfies ReadonlyArray<Exclude<ProviderId, "custom">>;
 export type BuiltInProviderId = (typeof BUILT_IN_PROVIDER_IDS)[number];
 
@@ -57,6 +59,18 @@ const PROVIDER_KEYS: Record<
     savedFile: path.resolve("data", "minimax-api-key.txt"),
     projectFile: path.resolve("MINIMAX_API_KEY.txt"),
     assignment: "MINIMAX_API_KEY",
+    required: true,
+  },
+  deepseek: {
+    savedFile: path.resolve("data", "deepseek-api-key.txt"),
+    projectFile: path.resolve("DEEPSEEK_API_KEY.txt"),
+    assignment: "DEEPSEEK_API_KEY",
+    required: true,
+  },
+  qwen: {
+    savedFile: path.resolve("data", "qwen-api-key.txt"),
+    projectFile: path.resolve("QWEN_API_KEY.txt"),
+    assignment: "QWEN_API_KEY",
     required: true,
   },
 };

@@ -168,9 +168,9 @@ const DEFAULT_STATE: WorkspaceState = {
     definitionModels: { ...DEFAULT_DEFINITION_MODELS },
     visualizationModels: { ...DEFAULT_VISUALIZATION_MODELS },
     rewriteModels: { ...DEFAULT_PROVIDER_MODELS },
-    definitionReasoningEfforts: { openai: "medium", openrouter: "medium", anthropic: "medium", kimi: "medium", glm: "medium", minimax: "medium", custom: "medium" },
-    visualizationReasoningEfforts: { openai: "high", openrouter: "high", anthropic: "high", kimi: "high", glm: "high", minimax: "high", custom: "medium" },
-    rewriteReasoningEfforts: { openai: "high", openrouter: "high", anthropic: "high", kimi: "high", glm: "high", minimax: "high", custom: "medium" },
+    definitionReasoningEfforts: { openai: "medium", openrouter: "medium", anthropic: "medium", kimi: "medium", glm: "medium", minimax: "medium", deepseek: "high", qwen: "medium", custom: "medium" },
+    visualizationReasoningEfforts: { openai: "high", openrouter: "high", anthropic: "high", kimi: "high", glm: "high", minimax: "high", deepseek: "max", qwen: "high", custom: "medium" },
+    rewriteReasoningEfforts: { openai: "high", openrouter: "high", anthropic: "high", kimi: "high", glm: "high", minimax: "high", deepseek: "max", qwen: "high", custom: "medium" },
     localBaseUrl: DEFAULT_LOCAL_BASE_URL,
     model: "gpt-5.6-sol",
     reasoningEffort: "max",
@@ -1315,7 +1315,8 @@ export default function App({
   const providerKind = (providerRef: string): ProviderKind =>
     providerConnections.find((connection) => connection.id === providerRef)?.kind ??
     (providerRef === "openai" || providerRef === "openrouter" || providerRef === "anthropic" ||
-    providerRef === "kimi" || providerRef === "glm" || providerRef === "minimax"
+    providerRef === "kimi" || providerRef === "glm" || providerRef === "minimax" ||
+    providerRef === "deepseek" || providerRef === "qwen"
       ? providerRef
       : "custom");
   const rootNode = activeChat ? activeChat.nodes[activeChat.rootId] : null;

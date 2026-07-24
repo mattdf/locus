@@ -8,34 +8,44 @@ interface ModelPrice {
 }
 
 const STANDARD_PRICES: Record<string, ModelPrice> = {
-  "gpt-5.6-sol": {
+  "openai:gpt-5.6-sol": {
     inputPerMillion: 5,
     cachedInputPerMillion: 0.5,
     outputPerMillion: 30,
     longContextThreshold: 272_000,
   },
-  "gpt-5.6-terra": {
+  "openai:gpt-5.6-terra": {
     inputPerMillion: 2.5,
     cachedInputPerMillion: 0.25,
     outputPerMillion: 15,
     longContextThreshold: 272_000,
   },
-  "gpt-5.4": {
+  "openai:gpt-5.4": {
     inputPerMillion: 2.5,
     cachedInputPerMillion: 0.25,
     outputPerMillion: 15,
     longContextThreshold: 272_000,
   },
-  "gpt-5.4-mini": {
+  "openai:gpt-5.4-mini": {
     inputPerMillion: 0.75,
     cachedInputPerMillion: 0.075,
     outputPerMillion: 4.5,
+  },
+  "deepseek:deepseek-v4-flash": {
+    inputPerMillion: 0.14,
+    cachedInputPerMillion: 0.0028,
+    outputPerMillion: 0.28,
+  },
+  "deepseek:deepseek-v4-pro": {
+    inputPerMillion: 0.435,
+    cachedInputPerMillion: 0.003625,
+    outputPerMillion: 0.87,
   },
 };
 
 export function hasGenerationPricing(provider: string, model: string): boolean {
   return provider === "openrouter" || (
-    provider === "openai" && Object.prototype.hasOwnProperty.call(STANDARD_PRICES, model)
+    Object.prototype.hasOwnProperty.call(STANDARD_PRICES, `${provider}:${model}`)
   );
 }
 
@@ -46,10 +56,11 @@ export interface GenerationCost {
 }
 
 export function calculateGenerationCost(
+  provider: string,
   model: string,
   usage?: TokenUsage | null,
 ): GenerationCost | null {
-  const price = STANDARD_PRICES[model];
+  const price = STANDARD_PRICES[`${provider}:${model}`];
   if (!price || !usage) return null;
 
   const cachedInputTokens = Math.min(

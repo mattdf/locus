@@ -8,6 +8,8 @@ export type ProviderKind =
   | "kimi"
   | "glm"
   | "minimax"
+  | "deepseek"
+  | "qwen"
   | "custom";
 /** Built-in provider IDs are also their provider kind. Custom providers use stable UUIDs. */
 export type ProviderId = ProviderKind;

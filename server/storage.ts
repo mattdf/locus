@@ -28,9 +28,9 @@ export const emptyState = (): WorkspaceState => ({
     definitionModels: { ...DEFAULT_DEFINITION_MODELS },
     visualizationModels: { ...DEFAULT_VISUALIZATION_MODELS },
     rewriteModels: { ...DEFAULT_PROVIDER_MODELS },
-    definitionReasoningEfforts: { openai: "medium", openrouter: "medium", anthropic: "medium", kimi: "medium", glm: "medium", minimax: "medium", custom: "medium" },
-    visualizationReasoningEfforts: { openai: "high", openrouter: "high", anthropic: "high", kimi: "high", glm: "high", minimax: "high", custom: "medium" },
-    rewriteReasoningEfforts: { openai: "high", openrouter: "high", anthropic: "high", kimi: "high", glm: "high", minimax: "high", custom: "medium" },
+    definitionReasoningEfforts: { openai: "medium", openrouter: "medium", anthropic: "medium", kimi: "medium", glm: "medium", minimax: "medium", deepseek: "high", qwen: "medium", custom: "medium" },
+    visualizationReasoningEfforts: { openai: "high", openrouter: "high", anthropic: "high", kimi: "high", glm: "high", minimax: "high", deepseek: "max", qwen: "high", custom: "medium" },
+    rewriteReasoningEfforts: { openai: "high", openrouter: "high", anthropic: "high", kimi: "high", glm: "high", minimax: "high", deepseek: "max", qwen: "high", custom: "medium" },
     localBaseUrl: DEFAULT_LOCAL_BASE_URL,
     model: "gpt-5.6-sol",
     reasoningEffort: "max",
@@ -87,11 +87,11 @@ export function normalizeState(state: WorkspaceState): WorkspaceState {
   };
   const savedVisualizationEfforts = state.settings?.visualizationReasoningEfforts;
   const visualizationReasoningEfforts: Record<string, import("../src/types.ts").ReasoningEffort> = {
-    openai: "high", openrouter: "high", anthropic: "high", kimi: "high", glm: "high", minimax: "high", custom: "medium",
+    openai: "high", openrouter: "high", anthropic: "high", kimi: "high", glm: "high", minimax: "high", deepseek: "max", qwen: "high", custom: "medium",
     ...(savedVisualizationEfforts ?? {}),
   };
   const definitionReasoningEfforts = {
-    openai: "medium", openrouter: "medium", anthropic: "medium", kimi: "medium", glm: "medium", minimax: "medium", custom: "medium",
+    openai: "medium", openrouter: "medium", anthropic: "medium", kimi: "medium", glm: "medium", minimax: "medium", deepseek: "high", qwen: "medium", custom: "medium",
     ...(state.settings?.definitionReasoningEfforts ?? {}),
   } as Record<string, import("../src/types.ts").ReasoningEffort>;
   const definitionProvider = typeof state.settings?.definitionProvider === "string"

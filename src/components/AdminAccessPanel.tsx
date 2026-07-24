@@ -348,6 +348,8 @@ export function AdminAccessPanel() {
             <option value="kimi">Kimi</option>
             <option value="glm">GLM</option>
             <option value="minimax">MiniMax</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="qwen">Qwen</option>
           </select>
           <input type="password" placeholder="API key" autoComplete="off" spellCheck={false} value={apiKey} onChange={(event) => setApiKey(event.target.value)} />
           <input
