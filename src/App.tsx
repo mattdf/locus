@@ -259,7 +259,7 @@ interface HostedWorkspaceSync {
   categories?: ChatCategory[];
   upsertChats?: ChatTree[];
   deleteChatIds?: string[];
-  activeChatId?: string | null;
+  chatBaseUpdatedAt?: Record<string, string | null>;
 }
 
 type SourceAnnotationKind = AssistantAnnotationKind;
@@ -331,7 +331,18 @@ function workspaceSyncChanges(
     .map((chat) => chat.id);
   if (upsertChats.length) changes.upsertChats = upsertChats;
   if (deleteChatIds.length) changes.deleteChatIds = deleteChatIds;
-  if (before.activeChatId !== after.activeChatId) changes.activeChatId = after.activeChatId;
+  if (upsertChats.length || deleteChatIds.length) {
+    changes.chatBaseUpdatedAt = Object.fromEntries([
+      ...upsertChats.map((chat) => [
+        chat.id,
+        previousChats.get(chat.id)?.updatedAt ?? null,
+      ] as const),
+      ...deleteChatIds.map((chatId) => [
+        chatId,
+        previousChats.get(chatId)?.updatedAt ?? null,
+      ] as const),
+    ]);
+  }
   return Object.keys(changes).length === 1 ? null : changes;
 }
 
@@ -1892,7 +1903,7 @@ export default function App({
         const requestedView = readViewLocation();
         const chat = requestedView.chatId
           ? state.chats.find((item) => item.id === requestedView.chatId) ?? null
-          : state.chats.find((item) => item.id === state.activeChatId) ?? null;
+          : null;
         const requestedNode =
           chat && requestedView.nodeId && chat.nodes[requestedView.nodeId]
             ? requestedView.nodeId
@@ -2085,6 +2096,16 @@ export default function App({
 
   useEffect(() => {
     if (!loaded || loadError) return;
+    const currentBaseline = lastSavedWorkspaceRef.current;
+    if (
+      currentBaseline &&
+      !workspaceSyncChanges(currentBaseline, workspace, hostedRevisionRef.current)
+    ) {
+      lastSavedWorkspaceRef.current = workspace;
+      setSaveState("saved");
+      setSaveFailure(null);
+      return;
+    }
     setSaveState("saving");
     const timeout = window.setTimeout(() => {
       const target = workspace;
@@ -2096,11 +2117,19 @@ export default function App({
       saveQueueRef.current = saveQueueRef.current
         .catch(() => undefined)
         .then(async () => {
+          const baseline = lastSavedWorkspaceRef.current;
+          if (!baseline) throw new Error("Workspace has not finished loading");
+          const changes = workspaceSyncChanges(baseline, target, hostedRevisionRef.current);
+          if (!changes) {
+            lastSavedWorkspaceRef.current = target;
+            markTargetSaved();
+            return;
+          }
           if (runtime.mode === "local") {
-            const response = await fetch("/api/state", {
-              method: "PUT",
+            const response = await fetch("/api/state/sync", {
+              method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(target),
+              body: JSON.stringify(changes),
             });
             if (!response.ok) {
               const result = (await response.json().catch(() => ({}))) as ApiError;
@@ -2114,13 +2143,6 @@ export default function App({
             return;
           }
 
-          const baseline = lastSavedWorkspaceRef.current;
-          if (!baseline) throw new Error("Workspace has not finished loading");
-          const changes = workspaceSyncChanges(baseline, target, hostedRevisionRef.current);
-          if (!changes) {
-            markTargetSaved();
-            return;
-          }
           const response = await fetch("/api/workspace/sync", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -2138,7 +2160,7 @@ export default function App({
           }
           if (response.status === 409) {
             throw new Error(
-              "This workspace changed in another tab. Download an unsaved backup before reloading or resolving the conflict.",
+              "This chat changed in another tab. Download an unsaved backup before reloading or resolving the conflict.",
             );
           }
           if (!response.ok || !Number.isSafeInteger(result.revision)) {

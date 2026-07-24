@@ -25,7 +25,7 @@ export const DEFAULT_PROVIDER_MODELS: Record<ProviderId, string> = {
   minimax: "MiniMax-M2.7",
   deepseek: "deepseek-v4-pro",
   qwen: "qwen3.7-max",
-  custom: "model-id",
+  custom: "",
 };
 
 export const DEFAULT_DEFINITION_MODELS: Record<ProviderId, string> = {
@@ -37,7 +37,7 @@ export const DEFAULT_DEFINITION_MODELS: Record<ProviderId, string> = {
   minimax: "MiniMax-M2.7",
   deepseek: "deepseek-v4-flash",
   qwen: "qwen3.6-flash",
-  custom: "model-id",
+  custom: "",
 };
 
 export const DEFAULT_VISUALIZATION_MODELS: Record<ProviderId, string> = {
@@ -49,7 +49,7 @@ export const DEFAULT_VISUALIZATION_MODELS: Record<ProviderId, string> = {
   minimax: "MiniMax-M2.7",
   deepseek: "deepseek-v4-pro",
   qwen: "qwen3.7-max",
-  custom: "model-id",
+  custom: "",
 };
 
 export const DEFAULT_LOCAL_BASE_URL = "http://127.0.0.1:1234/v1";

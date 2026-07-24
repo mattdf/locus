@@ -53,10 +53,16 @@ import {
   resolveProviderConnection,
   updateCustomProvider,
 } from "./provider-connections.ts";
-import { readState, writeState } from "./storage.ts";
+import {
+  LocalStateConflictError,
+  readState,
+  syncState,
+  writeState,
+} from "./storage.ts";
 import {
   readHostedWorkspace,
   syncHostedWorkspace,
+  validateWorkspaceSync,
   WorkspaceConflictError,
   type WorkspaceSyncInput,
 } from "./workspaces.ts";
@@ -814,6 +820,25 @@ app.put("/api/state", async (request, response, next) => {
   }
 });
 
+app.post("/api/state/sync", async (request, response, next) => {
+  try {
+    if (isHosted) {
+      response.status(404).json({ error: "Use the hosted workspace endpoint" });
+      return;
+    }
+    const input = request.body as WorkspaceSyncInput;
+    validateWorkspaceSync(input);
+    await syncState(input);
+    response.status(204).end();
+  } catch (error) {
+    if (error instanceof LocalStateConflictError) {
+      response.status(409).json({ error: error.message, chatId: error.chatId });
+      return;
+    }
+    next(error);
+  }
+});
+
 app.get("/api/workspace", async (_request, response, next) => {
   try {
     if (!isHosted) {
@@ -837,7 +862,11 @@ app.post("/api/workspace/sync", async (request, response, next) => {
     response.json({ revision });
   } catch (error) {
     if (error instanceof WorkspaceConflictError) {
-      response.status(409).json({ error: error.message, revision: error.currentRevision });
+      response.status(409).json({
+        error: error.message,
+        revision: error.currentRevision,
+        chatId: error.chatId,
+      });
       return;
     }
     next(error);

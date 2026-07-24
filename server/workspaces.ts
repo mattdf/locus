@@ -15,12 +15,15 @@ export interface WorkspaceSyncInput {
   categories?: ChatCategory[];
   upsertChats?: ChatTree[];
   deleteChatIds?: string[];
-  activeChatId?: string | null;
+  chatBaseUpdatedAt?: Record<string, string | null>;
 }
 
 export class WorkspaceConflictError extends Error {
-  constructor(readonly currentRevision: number) {
-    super("The workspace changed in another tab");
+  constructor(
+    readonly currentRevision: number,
+    readonly chatId?: string,
+  ) {
+    super(chatId ? "The chat changed in another tab" : "The workspace changed in another tab");
   }
 }
 
@@ -28,7 +31,7 @@ function validId(value: unknown): value is string {
   return typeof value === "string" && value.length >= 1 && value.length <= 200;
 }
 
-function validateSync(input: WorkspaceSyncInput): void {
+export function validateWorkspaceSync(input: WorkspaceSyncInput): void {
   if (!Number.isSafeInteger(input.baseRevision) || input.baseRevision < 0) {
     throw new Error("A valid workspace revision is required");
   }
@@ -40,6 +43,16 @@ function validateSync(input: WorkspaceSyncInput): void {
   }
   if (input.deleteChatIds && (input.deleteChatIds.length > 10_000 || input.deleteChatIds.some((id) => !validId(id)))) {
     throw new Error("Invalid chat deletion");
+  }
+  if (
+    input.chatBaseUpdatedAt &&
+    Object.entries(input.chatBaseUpdatedAt).some(
+      ([id, updatedAt]) =>
+        !validId(id) ||
+        (updatedAt !== null && typeof updatedAt !== "string"),
+    )
+  ) {
+    throw new Error("Invalid chat base versions");
   }
 }
 
@@ -60,8 +73,8 @@ async function loadWithClient(
   ownerUserId: string,
 ): Promise<HostedWorkspaceSnapshot> {
   const [workspaceResult, settingsResult, categoryResult, chatResult] = await Promise.all([
-    client.query<{ revision: string; activeChatId: string | null }>(
-      `select "revision", "activeChatId" from "locus_workspace" where "ownerUserId" = $1`,
+    client.query<{ revision: string }>(
+      `select "revision" from "locus_workspace" where "ownerUserId" = $1`,
       [ownerUserId],
     ),
     client.query<{ settings: WorkspaceState["settings"] }>(
@@ -95,7 +108,7 @@ async function loadWithClient(
       pinned: row.pinned,
       categoryId: row.categoryId,
     })),
-    activeChatId: workspace?.activeChatId ?? null,
+    activeChatId: null,
     settings: settingsResult.rows[0]?.settings ?? fallback.settings,
   });
   return { state, revision: Number(workspace?.revision ?? 0) };
@@ -114,7 +127,7 @@ export async function syncHostedWorkspace(
   ownerUserId: string,
   input: WorkspaceSyncInput,
 ): Promise<number> {
-  validateSync(input);
+  validateWorkspaceSync(input);
   return transaction(async (client) => {
     await ensureWorkspace(client, ownerUserId);
     const locked = await client.query<{ revision: string }>(
@@ -123,7 +136,42 @@ export async function syncHostedWorkspace(
       [ownerUserId],
     );
     const revision = Number(locked.rows[0].revision);
-    if (revision !== input.baseRevision) throw new WorkspaceConflictError(revision);
+    const persistentMutation = Boolean(
+      input.settings ||
+      input.categories ||
+      input.upsertChats?.length ||
+      input.deleteChatIds?.length,
+    );
+    if (!persistentMutation) return revision;
+
+    const touchedChatIds = [
+      ...(input.upsertChats?.map((chat) => chat.id) ?? []),
+      ...(input.deleteChatIds ?? []),
+    ];
+    if (touchedChatIds.length && input.chatBaseUpdatedAt) {
+      const currentChats = await client.query<{
+        id: string;
+        updatedAt: string | null;
+      }>(
+        `select "id", "document" ->> 'updatedAt' as "updatedAt"
+           from "locus_chats"
+          where "ownerUserId" = $1 and "id" = any($2::text[])`,
+        [ownerUserId, [...new Set(touchedChatIds)]],
+      );
+      const currentUpdatedAt = new Map(
+        currentChats.rows.map((chat) => [chat.id, chat.updatedAt]),
+      );
+      for (const chatId of touchedChatIds) {
+        if (!Object.prototype.hasOwnProperty.call(input.chatBaseUpdatedAt, chatId)) {
+          continue;
+        }
+        const expected = input.chatBaseUpdatedAt[chatId];
+        const current = currentUpdatedAt.get(chatId) ?? null;
+        if (expected !== current) {
+          throw new WorkspaceConflictError(revision, chatId);
+        }
+      }
+    }
 
     if (input.categories) {
       const categories = normalizeState({
@@ -213,20 +261,13 @@ export async function syncHostedWorkspace(
       );
     }
 
-    const activeChatId =
-      input.activeChatId === undefined
-        ? undefined
-        : input.activeChatId && validId(input.activeChatId)
-          ? input.activeChatId
-          : null;
     const nextRevision = revision + 1;
     await client.query(
       `update "locus_workspace"
        set "revision" = $2,
-           "activeChatId" = case when $3::boolean then $4 else "activeChatId" end,
            "updatedAt" = current_timestamp
        where "ownerUserId" = $1`,
-      [ownerUserId, nextRevision, activeChatId !== undefined, activeChatId ?? null],
+      [ownerUserId, nextRevision],
     );
     return nextRevision;
   });

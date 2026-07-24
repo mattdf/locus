@@ -358,6 +358,7 @@ def upgrade_document_images(
     padding_points: float = 6.0,
     scan_padding_points: float = 0.0,
     center_images: bool = True,
+    page_number_offset: int = 0,
 ) -> Path:
     """Create high-quality assets and an HQ Markdown variant for one OCR result."""
     pdf_path = pdf_path.resolve()
@@ -386,7 +387,7 @@ def upgrade_document_images(
     try:
         for position, page_data in enumerate(response.get("pages") or []):
             page_index = int(page_data.get("index", position))
-            page_number = page_index + 1
+            page_number = page_index + 1 + page_number_offset
             page = document.load_page(page_index)
             dimensions = page_data.get("dimensions") or {}
             ocr_width = float(dimensions.get("width") or 0)

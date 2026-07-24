@@ -13,9 +13,6 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
-  DEFAULT_DEFINITION_MODELS,
-  DEFAULT_PROVIDER_MODELS,
-  DEFAULT_VISUALIZATION_MODELS,
   compatibleReasoningEffort,
 } from "../lib/providers";
 import type {
@@ -45,10 +42,13 @@ function featureProvider(settings: Settings, feature: Feature): ProviderRef {
 }
 
 function featureModel(settings: Settings, feature: Feature, provider: ProviderRef): string {
-  if (feature === "chat") return settings.providerModels[provider] || settings.model;
-  if (feature === "definition") return settings.definitionModels[provider] || "model-id";
-  if (feature === "visualization") return settings.visualizationModels[provider] || "model-id";
-  return settings.rewriteModels[provider] || "model-id";
+  if (feature === "chat") {
+    return settings.providerModels[provider] ??
+      (provider === settings.provider ? settings.model : "");
+  }
+  if (feature === "definition") return settings.definitionModels[provider] ?? "";
+  if (feature === "visualization") return settings.visualizationModels[provider] ?? "";
+  return settings.rewriteModels[provider] ?? "";
 }
 
 function featureEffort(settings: Settings, feature: Feature, provider: ProviderRef): ReasoningEffort {
@@ -56,12 +56,6 @@ function featureEffort(settings: Settings, feature: Feature, provider: ProviderR
   if (feature === "definition") return settings.definitionReasoningEfforts[provider] || "medium";
   if (feature === "visualization") return settings.visualizationReasoningEfforts[provider] || "high";
   return settings.rewriteReasoningEfforts[provider] || "high";
-}
-
-function defaultModel(connection: ProviderConnectionSummary, feature: Feature): string {
-  if (feature === "definition") return DEFAULT_DEFINITION_MODELS[connection.kind];
-  if (feature === "visualization") return DEFAULT_VISUALIZATION_MODELS[connection.kind];
-  return DEFAULT_PROVIDER_MODELS[connection.kind];
 }
 
 export function ProviderManagementView({
@@ -141,7 +135,7 @@ export function ProviderManagementView({
     const connection = connectionMap.get(providerId);
     if (!connection) return;
     updateSettings((current) => {
-      const model = featureModel(current, feature, providerId) || defaultModel(connection, feature);
+      const model = featureModel(current, feature, providerId);
       if (feature === "chat") {
         return {
           ...current,

@@ -156,17 +156,58 @@ const aliceSync = await request("/api/workspace/sync", {
       createdAt: now,
       updatedAt: now,
     }],
-    activeChatId: "alice-chat",
+    chatBaseUpdatedAt: { "alice-chat": null },
   }),
 });
 assert(aliceSync.ok && (await json(aliceSync)).revision === 1, "Alice workspace sync failed");
 
-const staleSync = await request("/api/workspace/sync", {
+const oldClientNavigation = await request("/api/workspace/sync", {
   method: "POST",
   cookie: aliceCookie,
   body: JSON.stringify({ baseRevision: 0, activeChatId: null }),
 });
-assert(staleSync.status === 409, "A stale workspace write did not conflict");
+assert(
+  oldClientNavigation.ok && (await json(oldClientNavigation)).revision === 1,
+  "A browser-local navigation update unexpectedly mutated or conflicted with the workspace",
+);
+
+const loadedAfterNavigation = await json(await request("/api/workspace", { cookie: aliceCookie }));
+assert(
+  loadedAfterNavigation.state.activeChatId === null,
+  "The hosted workspace persisted a browser-specific active chat",
+);
+
+const secondUpdatedAt = new Date(Date.now() + 500).toISOString();
+const disjointStaleSync = await request("/api/workspace/sync", {
+  method: "POST",
+  cookie: aliceCookie,
+  body: JSON.stringify({
+    baseRevision: 0,
+    upsertChats: [{
+      id: "alice-second-chat",
+      title: "Alice second private chat",
+      categoryId: "private-category",
+      rootId: "alice-second-root",
+      nodes: {
+        "alice-second-root": {
+          id: "alice-second-root",
+          parentId: null,
+          title: "Alice second private chat",
+          messages: [{ id: "alice-second-source", role: "source", content: "$z$", createdAt: now }],
+          createdAt: now,
+          updatedAt: secondUpdatedAt,
+        },
+      },
+      createdAt: now,
+      updatedAt: secondUpdatedAt,
+    }],
+    chatBaseUpdatedAt: { "alice-second-chat": null },
+  }),
+});
+assert(
+  disjointStaleSync.ok && (await json(disjointStaleSync)).revision === 2,
+  "A stale browser could not save a different chat",
+);
 
 const missingOrigin = await request("/api/workspace/sync", {
   method: "POST",
@@ -197,6 +238,7 @@ assert(
 const listedShares = await json(await request("/api/shares", { cookie: aliceCookie }));
 assert(listedShares.shares?.length === 1, "The owner could not list the shared snapshot");
 
+const mutatedAt = new Date(Date.now() + 1000).toISOString();
 const mutateOriginal = await request("/api/workspace/sync", {
   method: "POST",
   cookie: aliceCookie,
@@ -214,15 +256,44 @@ const mutateOriginal = await request("/api/workspace/sync", {
           title: "Alice private chat",
           messages: [{ id: "alice-source", role: "source", content: "$y^3$", createdAt: now }],
           createdAt: now,
-          updatedAt: new Date(Date.now() + 1000).toISOString(),
+          updatedAt: mutatedAt,
         },
       },
       createdAt: now,
-      updatedAt: new Date(Date.now() + 1000).toISOString(),
+      updatedAt: mutatedAt,
     }],
+    chatBaseUpdatedAt: { "alice-chat": now },
   }),
 });
 assert(mutateOriginal.ok, "Could not update the original after sharing");
+
+const sameChatStaleSync = await request("/api/workspace/sync", {
+  method: "POST",
+  cookie: aliceCookie,
+  body: JSON.stringify({
+    baseRevision: 2,
+    upsertChats: [{
+      id: "alice-chat",
+      title: "Stale overwrite",
+      categoryId: "private-category",
+      rootId: "alice-root",
+      nodes: {
+        "alice-root": {
+          id: "alice-root",
+          parentId: null,
+          title: "Stale overwrite",
+          messages: [{ id: "alice-source", role: "source", content: "$stale$", createdAt: now }],
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+      createdAt: now,
+      updatedAt: now,
+    }],
+    chatBaseUpdatedAt: { "alice-chat": now },
+  }),
+});
+assert(sameChatStaleSync.status === 409, "A stale write overwrote the same chat");
 const unchangedSnapshot = await json(await request(`/api/public/shares/${shareToken}`));
 assert(
   unchangedSnapshot.chat?.nodes?.["alice-root"]?.messages?.[0]?.content === "$x^2$",

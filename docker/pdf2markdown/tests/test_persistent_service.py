@@ -13,7 +13,9 @@ from fastapi.testclient import TestClient
 from pdf2markdown.persistent_service import (
     MistralKey,
     PersistentSettings,
+    _slice_pdf_page_range,
     create_app,
+    process_persistent_job,
 )
 from pdf2markdown.mistral_ocr import make_request
 from pdf2markdown.persistent_store import PersistentStore
@@ -277,11 +279,112 @@ def test_staged_pdf_range_is_validated_and_can_be_retried(tmp_path: Path) -> Non
         assert retried.status_code == 202, retried.text
 
 
-def test_mistral_request_includes_only_the_requested_pages(tmp_path: Path) -> None:
-    pdf_path = tmp_path / "book.pdf"
-    pdf_path.write_bytes(make_pdf(4))
-    body = json.loads(make_request(pdf_path, "mistral-ocr-4-0", "1-2"))
-    assert body["pages"] == "1-2"
+def test_selected_pages_are_cut_locally_before_building_mistral_request(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "book.pdf"
+    selected_path = tmp_path / "selected.pdf"
+    source_path.write_bytes(make_pdf(5))
+
+    _slice_pdf_page_range(source_path, selected_path, 2, 4)
+
+    with fitz.open(selected_path) as selected:
+        assert selected.page_count == 3
+        assert "Page 2" in selected.load_page(0).get_text()
+        assert "Page 4" in selected.load_page(2).get_text()
+
+    body = json.loads(make_request(selected_path, "mistral-ocr-4-0"))
+    assert "pages" not in body
+    encoded_pdf = body["document"]["document_url"].split(",", 1)[1]
+    with fitz.open(stream=base64.b64decode(encoded_pdf), filetype="pdf") as uploaded:
+        assert uploaded.page_count == 3
+
+
+def test_persistent_worker_uploads_the_local_slice_not_the_full_pdf(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    settings = PersistentSettings(
+        data_root=tmp_path / "data",
+        work_root=tmp_path / "work",
+        database_path=tmp_path / "data" / "service.db",
+        api_token="client-secret",
+        admin_token="admin-secret",
+        signing_secret="signing-secret",
+    )
+    document_root = settings.data_root / "documents" / "document-a"
+    document_root.mkdir(parents=True)
+    source_path = document_root / "source.pdf"
+    source_path.write_bytes(make_pdf(5))
+    observed: dict[str, Any] = {}
+
+    def fake_process_pdf(**options: Any) -> Path:
+        pdf_path = Path(options["pdf_path"])
+        with fitz.open(pdf_path) as uploaded:
+            observed["uploaded_pages"] = uploaded.page_count
+            observed["first_page"] = uploaded.load_page(0).get_text()
+            observed["last_page"] = uploaded.load_page(2).get_text()
+        observed["page_number_offset"] = options["page_number_offset"]
+        result_dir = Path(options["output_root"]) / pdf_path.stem
+        result_dir.mkdir(parents=True)
+        (result_dir / "metadata.json").write_text(
+            json.dumps({"usage_info": {"pages_processed": 3}}),
+            encoding="utf-8",
+        )
+        markdown = result_dir / "selected.md"
+        markdown.write_text("# Selected pages\n", encoding="utf-8")
+        return markdown
+
+    def fake_upgrade(**options: Any) -> Path:
+        pdf_path = Path(options["pdf_path"])
+        with fitz.open(pdf_path) as selected:
+            observed["upgrade_pages"] = selected.page_count
+        observed["upgrade_page_number_offset"] = options["page_number_offset"]
+        output = Path(options["result_dir"]) / "selected-hq.md"
+        output.write_text("# Selected pages\n", encoding="utf-8")
+        return output
+
+    class UsageRecorder:
+        def record_usage(self, **options: Any) -> None:
+            observed["usage"] = options
+
+    monkeypatch.setattr(
+        "pdf2markdown.persistent_service.process_pdf",
+        fake_process_pdf,
+    )
+    monkeypatch.setattr(
+        "pdf2markdown.persistent_service.upgrade_document_images",
+        fake_upgrade,
+    )
+
+    result = process_persistent_job(
+        {
+            "job_id": "job-a",
+            "storage_relpath": "documents/document-a",
+            "page_count": 5,
+            "page_start": 2,
+            "page_end": 4,
+            "reserved_pages": 3,
+        },
+        MistralKey(
+            key_id="embedded",
+            label="Test key",
+            secret="test-mistral-key",
+            fingerprint="testfingerprint",
+        ),
+        settings,
+        UsageRecorder(),  # type: ignore[arg-type]
+    )
+
+    assert observed["uploaded_pages"] == 3
+    assert "Page 2" in observed["first_page"]
+    assert "Page 4" in observed["last_page"]
+    assert observed["page_number_offset"] == 1
+    assert observed["upgrade_pages"] == 3
+    assert observed["upgrade_page_number_offset"] == 1
+    assert result.endswith("/selected-hq.md")
+    with fitz.open(source_path) as original:
+        assert original.page_count == 5
 
 
 def test_tenant_resources_are_not_visible_to_another_user(tmp_path: Path) -> None:

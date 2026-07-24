@@ -1,6 +1,10 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { WorkspaceState } from "../src/types.ts";
+import type {
+  ChatCategory,
+  ChatTree,
+  WorkspaceState,
+} from "../src/types.ts";
 import {
   DEFAULT_DEFINITION_MODELS,
   DEFAULT_LOCAL_BASE_URL,
@@ -13,6 +17,22 @@ import { normalizeChatRevisions } from "../src/lib/revisions.ts";
 
 const DATA_DIR = path.resolve(process.env.DATA_DIR?.trim() || "data");
 const DATA_FILE = path.join(DATA_DIR, "chats.json");
+
+export interface LocalStateSyncInput {
+  settings?: WorkspaceState["settings"];
+  categories?: ChatCategory[];
+  upsertChats?: ChatTree[];
+  deleteChatIds?: string[];
+  chatBaseUpdatedAt?: Record<string, string | null>;
+}
+
+export class LocalStateConflictError extends Error {
+  constructor(readonly chatId: string) {
+    super("The chat changed in another tab");
+  }
+}
+
+let stateMutationQueue = Promise.resolve();
 
 export const emptyState = (): WorkspaceState => ({
   version: 1,
@@ -110,6 +130,7 @@ export function normalizeState(state: WorkspaceState): WorkspaceState {
   };
   return {
     ...state,
+    activeChatId: null,
     categories,
     chats: (Array.isArray(state.chats) ? state.chats : []).map((chat) =>
       normalizeChatRevisions({
@@ -179,4 +200,42 @@ export async function writeState(state: WorkspaceState): Promise<void> {
   const temporaryFile = `${DATA_FILE}.${process.pid}.tmp`;
   await writeFile(temporaryFile, `${JSON.stringify(state, null, 2)}\n`, "utf8");
   await rename(temporaryFile, DATA_FILE);
+}
+
+export function syncState(input: LocalStateSyncInput): Promise<void> {
+  const mutation = stateMutationQueue
+    .catch(() => undefined)
+    .then(async () => {
+      const current = await readState();
+      const currentChats = new Map(current.chats.map((chat) => [chat.id, chat]));
+      const touchedChatIds = [
+        ...(input.upsertChats?.map((chat) => chat.id) ?? []),
+        ...(input.deleteChatIds ?? []),
+      ];
+      for (const chatId of touchedChatIds) {
+        if (!Object.prototype.hasOwnProperty.call(input.chatBaseUpdatedAt ?? {}, chatId)) {
+          continue;
+        }
+        const expected = input.chatBaseUpdatedAt?.[chatId] ?? null;
+        const actual = currentChats.get(chatId)?.updatedAt ?? null;
+        if (expected !== actual) throw new LocalStateConflictError(chatId);
+      }
+
+      for (const chat of input.upsertChats ?? []) currentChats.set(chat.id, chat);
+      for (const chatId of input.deleteChatIds ?? []) currentChats.delete(chatId);
+
+      const next = normalizeState({
+        ...current,
+        activeChatId: null,
+        settings: input.settings ?? current.settings,
+        categories: input.categories ?? current.categories,
+        chats: [...currentChats.values()],
+      });
+      await writeState(next);
+    });
+  stateMutationQueue = mutation.then(
+    () => undefined,
+    () => undefined,
+  );
+  return mutation;
 }

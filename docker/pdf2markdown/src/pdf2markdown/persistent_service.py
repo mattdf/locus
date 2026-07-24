@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Annotated, Any, Callable
 from urllib.parse import quote
 
+import fitz
 from fastapi import (
     Depends,
     FastAPI,
@@ -46,7 +47,7 @@ from .service import _safe_document_stem, _save_upload, _validate_pdf
 
 
 LOGGER = logging.getLogger("pdf2markdown.persistent")
-VERSION = "2.1.0"
+VERSION = "2.2.0"
 USER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$")
 KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 PERIOD_PATTERN = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
@@ -336,6 +337,28 @@ def _metadata_usage(metadata_path: Path, fallback_pages: int) -> tuple[int, int 
     return pages, doc_size, str(model) if model else None
 
 
+def _slice_pdf_page_range(
+    source_path: Path,
+    output_path: Path,
+    page_start: int,
+    page_end: int,
+) -> None:
+    """Copy an inclusive, one-based page range into a standalone PDF."""
+    with fitz.open(source_path) as source:
+        if not (1 <= page_start <= page_end <= source.page_count):
+            raise ValueError(
+                f"Invalid PDF page range {page_start}-{page_end} "
+                f"for a {source.page_count}-page document"
+            )
+        with fitz.open() as selected:
+            selected.insert_pdf(
+                source,
+                from_page=page_start - 1,
+                to_page=page_end - 1,
+            )
+            selected.save(output_path, garbage=4, deflate=True)
+
+
 Processor = Callable[
     [dict[str, Any], MistralKey, PersistentSettings, PersistentStore],
     str,
@@ -354,50 +377,59 @@ def process_persistent_job(
     output_root = document_root / "result"
     page_start = int(job.get("page_start") or 1)
     page_end = int(job.get("page_end") or job["page_count"])
-    selected_pages = (
-        None
-        if page_start == 1 and page_end == int(job["page_count"])
-        else f"{page_start - 1}-{page_end - 1}"
-    )
-    raw_markdown = process_pdf(
-        pdf_path=source_path,
-        output_root=output_root,
-        api_key=key.secret,
-        model=settings.model,
-        timeout=settings.timeout_seconds,
-        center_images=settings.center_images,
-        pages=selected_pages,
-    )
-    pages, doc_size, model = _metadata_usage(
-        raw_markdown.parent / "metadata.json",
-        int(job["reserved_pages"]),
-    )
-    store.record_usage(
-        job_id=job["job_id"],
-        pages_processed=pages,
-        doc_size_bytes=doc_size,
-        model=model,
-        outcome="ocr_completed",
-    )
-    try:
-        hq_markdown = upgrade_document_images(
-            pdf_path=source_path,
-            result_dir=raw_markdown.parent,
-            dpi=settings.dpi,
-            padding_points=settings.padding_points,
-            scan_padding_points=settings.scan_padding_points,
+    page_number_offset = page_start - 1
+
+    def convert(ocr_pdf_path: Path) -> str:
+        raw_markdown = process_pdf(
+            pdf_path=ocr_pdf_path,
+            output_root=output_root,
+            api_key=key.secret,
+            model=settings.model,
+            timeout=settings.timeout_seconds,
             center_images=settings.center_images,
+            page_number_offset=page_number_offset,
         )
-    except Exception:
+        pages, doc_size, model = _metadata_usage(
+            raw_markdown.parent / "metadata.json",
+            int(job["reserved_pages"]),
+        )
         store.record_usage(
             job_id=job["job_id"],
             pages_processed=pages,
             doc_size_bytes=doc_size,
             model=model,
-            outcome="ocr_consumed_conversion_failed",
+            outcome="ocr_completed",
         )
-        raise
-    return hq_markdown.relative_to(document_root).as_posix()
+        try:
+            hq_markdown = upgrade_document_images(
+                pdf_path=ocr_pdf_path,
+                result_dir=raw_markdown.parent,
+                dpi=settings.dpi,
+                padding_points=settings.padding_points,
+                scan_padding_points=settings.scan_padding_points,
+                center_images=settings.center_images,
+                page_number_offset=page_number_offset,
+            )
+        except Exception:
+            store.record_usage(
+                job_id=job["job_id"],
+                pages_processed=pages,
+                doc_size_bytes=doc_size,
+                model=model,
+                outcome="ocr_consumed_conversion_failed",
+            )
+            raise
+        return hq_markdown.relative_to(document_root).as_posix()
+
+    if page_start == 1 and page_end == int(job["page_count"]):
+        return convert(source_path)
+
+    with tempfile.TemporaryDirectory(prefix="locus-pdf-range-") as temporary_dir:
+        selected_path = Path(temporary_dir) / (
+            f"pages-{page_start:04d}-{page_end:04d}.pdf"
+        )
+        _slice_pdf_page_range(source_path, selected_path, page_start, page_end)
+        return convert(selected_path)
 
 
 class JobRunner:
