@@ -2,24 +2,16 @@
 
 FROM node:22-bookworm-slim AS node-runtime
 
-FROM debian:bookworm-slim
+# Pin the heavyweight TeX runtime so ordinary application deployments only
+# build the tiny worker layer below. Keeping package installation out of this
+# file prevents changing deployment metadata from forcing a full TeX reinstall.
+FROM texlive/texlive:latest-medium@sha256:539ca5f5cc69c5012cc5b7d9978a7bc0a0315524ce5325edde595c6765144b71
 
-RUN apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -y \
-      coreutils \
-      dvisvgm \
-      texlive-metapost \
-      texlive-latex-base \
-      texlive-fonts-recommended \
-      texlive-pictures \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY compile.sh /usr/local/bin/locus-metapost
-COPY latex.sh /usr/local/bin/locus-latex
-COPY tikz.sh /usr/local/bin/locus-tikz
+COPY --chmod=0555 compile.sh /usr/local/bin/locus-metapost
+COPY --chmod=0555 latex.sh /usr/local/bin/locus-latex
+COPY --chmod=0555 tikz.sh /usr/local/bin/locus-tikz
 COPY worker.mjs /opt/locus/worker.mjs
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
-RUN chmod 0555 /usr/local/bin/locus-metapost /usr/local/bin/locus-latex /usr/local/bin/locus-tikz
 
 USER 65534:65534
 WORKDIR /work

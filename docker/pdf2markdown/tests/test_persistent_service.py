@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import threading
 import time
 from pathlib import Path
@@ -14,6 +15,7 @@ from pdf2markdown.persistent_service import (
     PersistentSettings,
     create_app,
 )
+from pdf2markdown.mistral_ocr import make_request
 from pdf2markdown.persistent_store import PersistentStore
 
 
@@ -48,6 +50,7 @@ class FakeProcessor:
         self.lock = threading.Lock()
         self.active = 0
         self.max_active = 0
+        self.jobs: list[dict[str, Any]] = []
 
     def __call__(
         self,
@@ -57,6 +60,7 @@ class FakeProcessor:
         store: PersistentStore,
     ) -> str:
         assert key.secret == "test-mistral-key"
+        self.jobs.append(dict(job))
         with self.lock:
             self.active += 1
             self.max_active = max(self.max_active, self.active)
@@ -75,7 +79,7 @@ class FakeProcessor:
             )
             store.record_usage(
                 job_id=job["job_id"],
-                pages_processed=int(job["page_count"]),
+                pages_processed=int(job["reserved_pages"]),
                 doc_size_bytes=(root / "source.pdf").stat().st_size,
                 model=settings.model,
                 outcome="ocr_completed",
@@ -202,6 +206,82 @@ def test_raw_pdf_upload_and_raw_markdown_are_available_to_locus(tmp_path: Path) 
         assert markdown.status_code == 200
         assert "](assets-hq/figure.png)" in markdown.text
         assert "access_token=" not in markdown.text
+
+
+def test_staged_pdf_can_convert_only_a_selected_page_range(tmp_path: Path) -> None:
+    client, processor = make_test_client(tmp_path)
+    source = make_pdf(5)
+    with client:
+        inspected = client.post(
+            "/v1/imports/pdf/raw/inspect",
+            params={"filename": "long-book.pdf"},
+            headers={**USER_HEADERS, "Content-Type": "application/pdf"},
+            content=source,
+        )
+        assert inspected.status_code == 201, inspected.text
+        metadata = inspected.json()
+        assert metadata["filename"] == "long-book.pdf"
+        assert metadata["byte_size"] == len(source)
+        assert metadata["page_count"] == 5
+        assert processor.jobs == []
+
+        committed = client.post(
+            f"/v1/imports/pdf/staged/{metadata['upload_id']}",
+            params={"page_start": 2, "page_end": 4},
+            headers=USER_HEADERS,
+        )
+        assert committed.status_code == 202, committed.text
+        imported = committed.json()
+        assert imported["page_count"] == 5
+        assert imported["page_start"] == 2
+        assert imported["page_end"] == 4
+        assert imported["processed_page_count"] == 3
+        assert wait_for_job(client, imported["job_id"])["status"] == "completed"
+        assert processor.jobs[0]["page_count"] == 5
+        assert processor.jobs[0]["page_start"] == 2
+        assert processor.jobs[0]["page_end"] == 4
+        assert processor.jobs[0]["reserved_pages"] == 3
+
+        usage = client.get("/v1/admin/usage", headers=ADMIN_HEADERS).json()
+        assert usage["pages_processed"] == 3
+
+        source_response = client.get(
+            f"/v1/documents/{imported['document_id']}/source",
+            headers=USER_HEADERS,
+        )
+        assert source_response.status_code == 200
+        with fitz.open(stream=source_response.content, filetype="pdf") as document:
+            assert document.page_count == 5
+
+
+def test_staged_pdf_range_is_validated_and_can_be_retried(tmp_path: Path) -> None:
+    client, _ = make_test_client(tmp_path)
+    with client:
+        inspected = client.post(
+            "/v1/imports/pdf/raw/inspect",
+            params={"filename": "book.pdf"},
+            headers={**USER_HEADERS, "Content-Type": "application/pdf"},
+            content=make_pdf(3),
+        ).json()
+        invalid = client.post(
+            f"/v1/imports/pdf/staged/{inspected['upload_id']}",
+            params={"page_start": 3, "page_end": 4},
+            headers=USER_HEADERS,
+        )
+        assert invalid.status_code == 422
+        retried = client.post(
+            f"/v1/imports/pdf/staged/{inspected['upload_id']}",
+            params={"page_start": 3, "page_end": 3},
+            headers=USER_HEADERS,
+        )
+        assert retried.status_code == 202, retried.text
+
+
+def test_mistral_request_includes_only_the_requested_pages(tmp_path: Path) -> None:
+    pdf_path = tmp_path / "book.pdf"
+    pdf_path.write_bytes(make_pdf(4))
+    body = json.loads(make_request(pdf_path, "mistral-ocr-4-0", "1-2"))
+    assert body["pages"] == "1-2"
 
 
 def test_tenant_resources_are_not_visible_to_another_user(tmp_path: Path) -> None:

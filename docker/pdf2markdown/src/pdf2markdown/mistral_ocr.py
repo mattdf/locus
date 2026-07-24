@@ -40,19 +40,26 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def make_request(pdf_path: Path, model: str) -> bytes:
+def make_request(
+    pdf_path: Path,
+    model: str,
+    pages: str | list[int] | None = None,
+) -> bytes:
     encoded = base64.b64encode(pdf_path.read_bytes()).decode("ascii")
-    return json.dumps(
-        {
-            "model": model,
-            "document": {
-                "type": "document_url",
-                "document_url": f"data:application/pdf;base64,{encoded}",
-            },
-            "include_image_base64": True,
-            "include_blocks": True,
-            "confidence_scores_granularity": "page",
+    request: dict[str, Any] = {
+        "model": model,
+        "document": {
+            "type": "document_url",
+            "document_url": f"data:application/pdf;base64,{encoded}",
         },
+        "include_image_base64": True,
+        "include_blocks": True,
+        "confidence_scores_granularity": "page",
+    }
+    if pages is not None:
+        request["pages"] = pages
+    return json.dumps(
+        request,
         separators=(",", ":"),
     ).encode("utf-8")
 
@@ -224,12 +231,13 @@ def process_pdf(
     model: str = DEFAULT_MODEL,
     timeout: int = 600,
     center_images: bool = True,
+    pages: str | list[int] | None = None,
 ) -> Path:
     """Run Mistral OCR on a PDF and export its response to a document folder."""
     started = time.monotonic()
     response, headers = call_ocr(
         api_key=api_key,
-        body=make_request(pdf_path, model),
+        body=make_request(pdf_path, model, pages),
         timeout=timeout,
     )
     return export_result(

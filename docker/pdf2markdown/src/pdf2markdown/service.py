@@ -124,7 +124,7 @@ async def _save_upload(upload: UploadFile, destination: Path, max_bytes: int) ->
     return total
 
 
-def _validate_pdf(pdf_path: Path, max_pages: int) -> int:
+def _validate_pdf(pdf_path: Path, max_pages: int | None = None) -> int:
     with pdf_path.open("rb") as stream:
         header = stream.read(1024)
     if b"%PDF-" not in header:
@@ -138,7 +138,7 @@ def _validate_pdf(pdf_path: Path, max_pages: int) -> int:
         raise ValueError("Uploaded file is not a valid PDF") from exc
     if page_count <= 0:
         raise ValueError("PDF has no pages")
-    if page_count > max_pages:
+    if max_pages is not None and page_count > max_pages:
         raise ValueError(f"PDF has {page_count} pages; limit is {max_pages}")
     return page_count
 

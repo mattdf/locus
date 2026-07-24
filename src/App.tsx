@@ -1067,14 +1067,28 @@ function NewChatScreen({
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
   sendShortcut: WorkspaceState["settings"]["sendShortcut"];
 }) {
+  type PdfInspection = {
+    uploadId: string;
+    filename: string;
+    byteSize: number;
+    pageCount: number;
+    expiresAt: string;
+  };
+
   const [mode, setMode] = useState<"ask" | "import" | "pdf">(initialMode);
   const [content, setContent] = useState("");
   const [title, setTitle] = useState("");
   const [categoryId, setCategoryId] = useState("");
   const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [pdfInspection, setPdfInspection] = useState<PdfInspection | null>(null);
+  const [pdfInspecting, setPdfInspecting] = useState(false);
+  const [pdfScope, setPdfScope] = useState<"all" | "range">("all");
+  const [pdfPageStart, setPdfPageStart] = useState("1");
+  const [pdfPageEnd, setPdfPageEnd] = useState("1");
   const [pdfUploading, setPdfUploading] = useState(false);
   const [pdfError, setPdfError] = useState("");
   const [pdfAvailable, setPdfAvailable] = useState<boolean | null>(null);
+  const pdfInspectionSequence = useRef(0);
 
   useEffect(() => setMode(initialMode), [initialMode]);
   useEffect(() => {
@@ -1095,25 +1109,128 @@ function NewChatScreen({
       .catch(() => setPdfAvailable(false));
   }, [mode, pdfAvailable]);
 
+  const discardStagedPdf = (uploadId: string) => {
+    void fetch(`/api/pdf-imports/staged/${encodeURIComponent(uploadId)}`, {
+      method: "DELETE",
+      credentials: "same-origin",
+    }).catch(() => undefined);
+  };
+
+  const inspectPdf = async (file: File | null) => {
+    const sequence = ++pdfInspectionSequence.current;
+    if (pdfInspection) discardStagedPdf(pdfInspection.uploadId);
+    setPdfFile(file);
+    setPdfInspection(null);
+    setPdfScope("all");
+    setPdfPageStart("1");
+    setPdfPageEnd("1");
+    setPdfError("");
+    if (!file) {
+      setPdfInspecting(false);
+      return;
+    }
+
+    setPdfInspecting(true);
+    try {
+      const parameters = new URLSearchParams({ filename: file.name });
+      const response = await fetch(`/api/pdf-imports/inspect?${parameters}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/pdf" },
+        credentials: "same-origin",
+        body: file,
+      });
+      const result = (await response.json().catch(() => ({}))) as {
+        upload_id?: string;
+        filename?: string;
+        byte_size?: number;
+        page_count?: number;
+        expires_at?: string;
+        error?: string;
+      };
+      if (
+        !response.ok ||
+        !result.upload_id ||
+        typeof result.filename !== "string" ||
+        !Number.isSafeInteger(result.byte_size) ||
+        !Number.isSafeInteger(result.page_count) ||
+        result.page_count! < 1 ||
+        typeof result.expires_at !== "string"
+      ) {
+        throw new Error(result.error || "Could not inspect the PDF");
+      }
+      if (sequence !== pdfInspectionSequence.current) {
+        discardStagedPdf(result.upload_id);
+        return;
+      }
+      setPdfInspection({
+        uploadId: result.upload_id,
+        filename: result.filename,
+        byteSize: result.byte_size!,
+        pageCount: result.page_count!,
+        expiresAt: result.expires_at,
+      });
+      setPdfPageEnd(String(result.page_count));
+    } catch (error) {
+      if (sequence === pdfInspectionSequence.current) {
+        setPdfError(
+          error instanceof Error ? error.message : "Could not inspect the PDF",
+        );
+      }
+    } finally {
+      if (sequence === pdfInspectionSequence.current) setPdfInspecting(false);
+    }
+  };
+
+  const parsedPdfPageStart = Number(pdfPageStart);
+  const parsedPdfPageEnd = Number(pdfPageEnd);
+  const pdfRangeValid = Boolean(
+    pdfInspection &&
+    Number.isSafeInteger(parsedPdfPageStart) &&
+    Number.isSafeInteger(parsedPdfPageEnd) &&
+    parsedPdfPageStart >= 1 &&
+    parsedPdfPageStart <= parsedPdfPageEnd &&
+    parsedPdfPageEnd <= pdfInspection.pageCount,
+  );
+  const selectedPdfPages =
+    pdfScope === "all"
+      ? pdfInspection?.pageCount ?? 0
+      : pdfRangeValid
+        ? parsedPdfPageEnd - parsedPdfPageStart + 1
+        : 0;
+
   const submitNewChat = async () => {
     if (mode === "pdf") {
-      if (!pdfFile || pdfUploading) return;
+      if (
+        !pdfFile ||
+        !pdfInspection ||
+        pdfUploading ||
+        pdfInspecting ||
+        (pdfScope === "range" && !pdfRangeValid)
+      ) return;
       setPdfUploading(true);
       setPdfError("");
       try {
-        const parameters = new URLSearchParams({ filename: pdfFile.name });
-        if (title.trim()) parameters.set("title", title.trim());
-        const response = await fetch(`/api/pdf-imports?${parameters}`, {
+        const response = await fetch(
+          `/api/pdf-imports/staged/${encodeURIComponent(pdfInspection.uploadId)}`,
+          {
           method: "POST",
-          headers: { "Content-Type": "application/pdf" },
+          headers: { "Content-Type": "application/json" },
           credentials: "same-origin",
-          body: pdfFile,
-        });
+          body: JSON.stringify({
+            title: title.trim() || undefined,
+            pageStart: pdfScope === "range" ? parsedPdfPageStart : undefined,
+            pageEnd: pdfScope === "range" ? parsedPdfPageEnd : undefined,
+          }),
+          },
+        );
         const result = (await response.json().catch(() => ({}))) as {
           job_id?: string;
           chat_id?: string;
           document_id?: string;
           page_count?: number;
+          page_start?: number;
+          page_end?: number;
+          processed_page_count?: number;
           error?: string;
         };
         if (
@@ -1133,6 +1250,9 @@ function NewChatScreen({
             documentId: result.document_id,
             filename: pdfFile.name,
             pageCount: result.page_count!,
+            pageStart: result.page_start,
+            pageEnd: result.page_end,
+            processedPageCount: result.processed_page_count,
             status: "importing",
           },
           title.trim(),
@@ -1233,26 +1353,124 @@ function NewChatScreen({
             </select>
           </div>
           {mode === "pdf" ? (
-            <div className="pdf-import-field">
+            <div
+              className={`pdf-import-field ${
+                pdfInspection ? "pdf-import-field--inspected" : ""
+              }`}
+            >
               <input
                 id="pdf-import-file"
                 type="file"
                 accept="application/pdf,.pdf"
                 disabled={pdfUploading}
                 onChange={(event) => {
-                  setPdfFile(event.target.files?.[0] ?? null);
-                  setPdfError("");
+                  void inspectPdf(event.target.files?.[0] ?? null);
+                  event.target.value = "";
                 }}
               />
               <label htmlFor="pdf-import-file">
-                <Upload size={22} />
-                <strong>{pdfFile ? pdfFile.name : "Choose a PDF"}</strong>
-                <span>
+                {pdfInspecting
+                  ? <LoaderCircle className="spin" size={22} />
+                  : <Upload size={22} />}
+                <strong>
                   {pdfFile
-                    ? `${(pdfFile.size / (1024 * 1024)).toFixed(1)} MB`
+                    ? pdfFile.name
+                    : "Choose a PDF"}
+                </strong>
+                <span>
+                  {pdfInspecting
+                    ? "Uploading and reading document information…"
+                    : pdfInspection
+                      ? `${(pdfInspection.byteSize / (1024 * 1024)).toFixed(1)} MB · ${
+                          pdfInspection.pageCount
+                        } ${pdfInspection.pageCount === 1 ? "page" : "pages"} · Click to choose another`
+                      : pdfFile
+                        ? `${(pdfFile.size / (1024 * 1024)).toFixed(1)} MB`
                     : "The document will be converted to Markdown with its figures preserved."}
                 </span>
               </label>
+              {pdfInspection && (
+                <fieldset className="pdf-import-options">
+                  <legend>Pages to convert</legend>
+                  <label
+                    className={`pdf-import-option ${
+                      pdfScope === "all" ? "pdf-import-option--active" : ""
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="pdf-page-scope"
+                      value="all"
+                      checked={pdfScope === "all"}
+                      onChange={() => setPdfScope("all")}
+                    />
+                    <span>
+                      <strong>Entire document</strong>
+                      <small>
+                        Convert all {pdfInspection.pageCount}{" "}
+                        {pdfInspection.pageCount === 1 ? "page" : "pages"}
+                      </small>
+                    </span>
+                  </label>
+                  <label
+                    className={`pdf-import-option ${
+                      pdfScope === "range" ? "pdf-import-option--active" : ""
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="pdf-page-scope"
+                      value="range"
+                      checked={pdfScope === "range"}
+                      onChange={() => setPdfScope("range")}
+                    />
+                    <span>
+                      <strong>Page range</strong>
+                      <small>Convert only the pages you specify</small>
+                    </span>
+                  </label>
+                  {pdfScope === "range" && (
+                    <div className="pdf-page-range">
+                      <label>
+                        <span>From</span>
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min={1}
+                          max={pdfInspection.pageCount}
+                          value={pdfPageStart}
+                          onChange={(event) => setPdfPageStart(event.target.value)}
+                          aria-invalid={!pdfRangeValid}
+                        />
+                      </label>
+                      <span aria-hidden="true">–</span>
+                      <label>
+                        <span>To</span>
+                        <input
+                          type="number"
+                          inputMode="numeric"
+                          min={1}
+                          max={pdfInspection.pageCount}
+                          value={pdfPageEnd}
+                          onChange={(event) => setPdfPageEnd(event.target.value)}
+                          aria-invalid={!pdfRangeValid}
+                        />
+                      </label>
+                      <small>
+                        {pdfRangeValid
+                          ? `${selectedPdfPages} ${
+                              selectedPdfPages === 1 ? "page" : "pages"
+                            } selected`
+                          : `Enter a range between 1 and ${pdfInspection.pageCount}`}
+                      </small>
+                    </div>
+                  )}
+                  <p>
+                    Only the selected pages are sent to OCR and counted toward usage.
+                    The original PDF remains available in full.
+                  </p>
+                </fieldset>
+              )}
               {pdfAvailable === false && (
                 <p className="pdf-import-field__error" role="alert">
                   The PDF conversion service is not available.
@@ -1301,8 +1519,14 @@ function NewChatScreen({
             ) : (
               <span>
                 {pdfUploading
-                  ? "Uploading…"
-                  : "Converted with Mistral OCR"}
+                  ? "Starting conversion…"
+                  : pdfInspecting
+                    ? "Reading PDF…"
+                    : pdfInspection
+                      ? `Ready to convert ${selectedPdfPages} of ${pdfInspection.pageCount} ${
+                          pdfInspection.pageCount === 1 ? "page" : "pages"
+                        }`
+                      : "Converted with Mistral OCR"}
               </span>
             )}
             <button
@@ -1310,7 +1534,12 @@ function NewChatScreen({
               type="button"
               disabled={
                 mode === "pdf"
-                  ? !pdfFile || pdfUploading || pdfAvailable === false
+                  ? !pdfFile ||
+                    !pdfInspection ||
+                    pdfUploading ||
+                    pdfInspecting ||
+                    pdfAvailable === false ||
+                    (pdfScope === "range" && !pdfRangeValid)
                   : !content.trim() || (mode === "ask" && !model.trim())
               }
               onClick={() => void submitNewChat()}
@@ -1318,7 +1547,13 @@ function NewChatScreen({
               {mode === "import"
                 ? "Create from Markdown"
                 : mode === "pdf"
-                  ? pdfUploading ? "Uploading…" : "Import PDF"
+                  ? pdfUploading
+                    ? "Starting…"
+                    : pdfInspecting
+                      ? "Reading PDF…"
+                      : pdfScope === "range"
+                        ? "Convert selected pages"
+                        : "Convert PDF"
                   : "Start conversation"}
               <ChevronRight size={16} />
             </button>
@@ -4634,9 +4869,15 @@ export default function App({
       .replace(/[-_]+/g, " ")
       .trim();
     const title = suppliedTitle || filenameTitle || "Imported PDF";
+    const pageSelection =
+      source.pageStart &&
+      source.pageEnd &&
+      (source.pageStart !== 1 || source.pageEnd !== source.pageCount)
+        ? ` pages ${source.pageStart}–${source.pageEnd}`
+        : "";
     const sourceMessage = makeMessage(
       "source",
-      `# Importing ${title}\n\nConverting **${source.filename}** to Markdown. This job continues on the server if you refresh or close this page.`,
+      `# Importing ${title}\n\nConverting${pageSelection} from **${source.filename}** to Markdown. This job continues on the server if you refresh or close this page.`,
     );
     const root: ThreadNode = {
       id: rootId,

@@ -4127,7 +4127,12 @@ body.resizing-drawer {
   display: grid;
   min-height: 185px;
   place-items: center;
+  gap: 14px;
   padding: 20px 6px;
+}
+
+.pdf-import-field--inspected {
+  align-items: stretch;
 }
 
 .pdf-import-field > input {
@@ -4156,6 +4161,10 @@ body.resizing-drawer {
   cursor: pointer;
 }
 
+.pdf-import-field--inspected > label {
+  min-height: 98px;
+}
+
 .pdf-import-field > label:hover {
   color: var(--accent);
   background: var(--accent-soft);
@@ -4178,10 +4187,157 @@ body.resizing-drawer {
   line-height: 1.45;
 }
 
+.pdf-import-options {
+  display: grid;
+  width: min(100%, 470px);
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+}
+
+.pdf-import-options > legend {
+  grid-column: 1 / -1;
+  padding: 0 0 2px;
+  color: #4b5752;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.02em;
+}
+
+.pdf-import-option {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 11px;
+  color: #63706a;
+  background: #faf9f4;
+  border: 1px solid #ddd8cc;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.pdf-import-option--active {
+  color: var(--accent-dark);
+  background: var(--accent-soft);
+  border-color: rgba(13, 112, 101, 0.42);
+  box-shadow: inset 0 0 0 1px rgba(13, 112, 101, 0.08);
+}
+
+.pdf-import-option > input {
+  flex: 0 0 auto;
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+
+.pdf-import-option > span {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.pdf-import-option strong {
+  color: #34403c;
+  font-size: 11px;
+}
+
+.pdf-import-option small {
+  color: #7e8883;
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.pdf-page-range {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 10px 11px;
+  background: #f6f5ef;
+  border-radius: 8px;
+}
+
+.pdf-page-range > label {
+  display: grid;
+  gap: 4px;
+}
+
+.pdf-page-range > label > span {
+  color: #6d7772;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.pdf-page-range input {
+  width: 82px;
+  min-height: 34px;
+  padding: 0 9px;
+  color: #34403c;
+  background: white;
+  border: 1px solid #d6d2c7;
+  border-radius: 6px;
+  outline: 0;
+  font: inherit;
+  font-size: 11px;
+}
+
+.pdf-page-range input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(13, 112, 101, 0.12);
+}
+
+.pdf-page-range input[aria-invalid="true"] {
+  border-color: rgba(175, 62, 50, 0.55);
+}
+
+.pdf-page-range > span {
+  align-self: center;
+  margin-top: 14px;
+  color: #8c948f;
+}
+
+.pdf-page-range > small {
+  align-self: center;
+  margin: 14px 0 0 4px;
+  color: #7e8883;
+  font-size: 9px;
+}
+
+.pdf-import-options > p {
+  grid-column: 1 / -1;
+  margin: 1px 2px 0;
+  color: #7e8883;
+  font-size: 9px;
+  line-height: 1.45;
+}
+
 .pdf-import-field__error {
   margin: 4px 0 0;
   color: var(--danger);
   font-size: 10px;
+}
+
+@media (max-width: 520px) {
+  .pdf-import-options {
+    grid-template-columns: 1fr;
+  }
+
+  .pdf-import-options > legend,
+  .pdf-page-range,
+  .pdf-import-options > p {
+    grid-column: 1;
+  }
+
+  .pdf-page-range {
+    flex-wrap: wrap;
+  }
+
+  .pdf-page-range > small {
+    width: 100%;
+    margin: 2px 0 0;
+  }
 }
 
 .start-card__footer {
@@ -7839,6 +7995,40 @@ body.resizing-drawer {
 
 .app-shell[data-theme="dark"] .pdf-import-field > label strong {
   color: #dce4e0;
+}
+
+.app-shell[data-theme="dark"] .pdf-import-options > legend,
+.app-shell[data-theme="dark"] .pdf-import-option strong,
+.app-shell[data-theme="dark"] .pdf-page-range input {
+  color: #dce4e0;
+}
+
+.app-shell[data-theme="dark"] .pdf-import-option {
+  color: #a1aca6;
+  background: #171c1a;
+  border-color: #3c4541;
+}
+
+.app-shell[data-theme="dark"] .pdf-import-option--active {
+  color: #76cbbd;
+  background: var(--accent-soft);
+  border-color: #47766c;
+}
+
+.app-shell[data-theme="dark"] .pdf-import-option small,
+.app-shell[data-theme="dark"] .pdf-import-options > p,
+.app-shell[data-theme="dark"] .pdf-page-range > small,
+.app-shell[data-theme="dark"] .pdf-page-range > label > span {
+  color: #89948f;
+}
+
+.app-shell[data-theme="dark"] .pdf-page-range {
+  background: #131816;
+}
+
+.app-shell[data-theme="dark"] .pdf-page-range input {
+  background: #202724;
+  border-color: #414a46;
 }
 
 .app-shell[data-theme="dark"] .send-button:disabled {

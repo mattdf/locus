@@ -222,6 +222,9 @@ export interface PdfChatSource {
   documentId: string;
   filename: string;
   pageCount: number;
+  pageStart?: number;
+  pageEnd?: number;
+  processedPageCount?: number;
   status: "importing" | "ready" | "error";
   error?: string;
 }

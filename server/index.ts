@@ -62,9 +62,12 @@ import {
 } from "./workspaces.ts";
 import { accountUsage } from "./usage.ts";
 import {
+  commitStagedPdfImport,
+  deleteStagedPdfImport,
   getAccountPdfUsage,
   getPdfImport,
   getPdfMarkdown,
+  inspectPdfImport,
   pdfImportAvailable,
   PdfImportServiceError,
   proxyPdfDocument,
@@ -347,6 +350,103 @@ app.get("/api/pdf-imports/status", async (_request, response) => {
   response.json({ available: await pdfImportAvailable() });
 });
 
+app.post("/api/pdf-imports/inspect", async (request, response, next) => {
+  try {
+    if (request.is("application/pdf") !== "application/pdf") {
+      response.status(415).json({ error: "Upload a PDF file" });
+      return;
+    }
+    const filename =
+      typeof request.query.filename === "string"
+        ? request.query.filename.trim()
+        : "";
+    if (!filename || filename.length > 255 || /[/\\\0\r\n]/.test(filename)) {
+      response.status(400).json({ error: "Enter a valid PDF filename" });
+      return;
+    }
+    const inspected = await inspectPdfImport(
+      request,
+      owner(response),
+      filename,
+    );
+    response.status(201).json(inspected);
+  } catch (error) {
+    if (error instanceof PdfImportServiceError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+app.post("/api/pdf-imports/staged/:uploadId", async (request, response, next) => {
+  try {
+    const uploadId = request.params.uploadId;
+    if (!/^[a-f0-9]{32}$/i.test(uploadId)) {
+      response.status(400).json({ error: "Invalid staged PDF identifier" });
+      return;
+    }
+    const title =
+      typeof request.body?.title === "string"
+        ? request.body.title.trim()
+        : undefined;
+    if (title && title.length > 200) {
+      response.status(400).json({ error: "PDF title is too long" });
+      return;
+    }
+    const pageStart = request.body?.pageStart;
+    const pageEnd = request.body?.pageEnd;
+    const hasPageStart = pageStart !== undefined && pageStart !== null;
+    const hasPageEnd = pageEnd !== undefined && pageEnd !== null;
+    if (
+      hasPageStart !== hasPageEnd ||
+      (hasPageStart && !Number.isSafeInteger(pageStart)) ||
+      (hasPageEnd && !Number.isSafeInteger(pageEnd)) ||
+      (hasPageStart && pageStart < 1) ||
+      (hasPageEnd && pageEnd < 1)
+    ) {
+      response.status(400).json({
+        error: "Provide a valid first and last page, or convert the entire PDF",
+      });
+      return;
+    }
+    const imported = await commitStagedPdfImport(
+      owner(response),
+      uploadId,
+      {
+        title,
+        pageStart: hasPageStart ? pageStart : undefined,
+        pageEnd: hasPageEnd ? pageEnd : undefined,
+      },
+    );
+    response.status(202).json(imported);
+  } catch (error) {
+    if (error instanceof PdfImportServiceError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+app.delete("/api/pdf-imports/staged/:uploadId", async (request, response, next) => {
+  try {
+    const uploadId = request.params.uploadId;
+    if (!/^[a-f0-9]{32}$/i.test(uploadId)) {
+      response.status(400).json({ error: "Invalid staged PDF identifier" });
+      return;
+    }
+    await deleteStagedPdfImport(owner(response), uploadId);
+    response.status(204).end();
+  } catch (error) {
+    if (error instanceof PdfImportServiceError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
 app.post("/api/pdf-imports", async (request, response, next) => {
   try {
     if (request.is("application/pdf") !== "application/pdf") {
@@ -369,10 +469,33 @@ app.post("/api/pdf-imports", async (request, response, next) => {
       response.status(400).json({ error: "PDF title is too long" });
       return;
     }
+    const rawPageStart =
+      typeof request.query.pageStart === "string"
+        ? Number(request.query.pageStart)
+        : undefined;
+    const rawPageEnd =
+      typeof request.query.pageEnd === "string"
+        ? Number(request.query.pageEnd)
+        : undefined;
+    if (
+      (rawPageStart === undefined) !== (rawPageEnd === undefined) ||
+      (rawPageStart !== undefined &&
+        (!Number.isSafeInteger(rawPageStart) || rawPageStart < 1)) ||
+      (rawPageEnd !== undefined &&
+        (!Number.isSafeInteger(rawPageEnd) || rawPageEnd < 1))
+    ) {
+      response.status(400).json({ error: "Enter a valid PDF page range" });
+      return;
+    }
     const imported = await submitPdfImport(
       request,
       owner(response),
-      { filename, title },
+      {
+        filename,
+        title,
+        pageStart: rawPageStart,
+        pageEnd: rawPageEnd,
+      },
     );
     response.status(202).json({
       job_id: imported.job_id,
@@ -380,6 +503,9 @@ app.post("/api/pdf-imports", async (request, response, next) => {
       document_id: imported.document_id,
       status: imported.status,
       page_count: imported.page_count,
+      page_start: imported.page_start,
+      page_end: imported.page_end,
+      processed_page_count: imported.processed_page_count,
     });
   } catch (error) {
     if (error instanceof PdfImportServiceError) {

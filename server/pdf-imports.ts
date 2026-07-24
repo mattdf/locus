@@ -23,6 +23,17 @@ export interface PdfImportReservation {
   document_id: string;
   status: "queued";
   page_count: number;
+  page_start: number;
+  page_end: number;
+  processed_page_count: number;
+}
+
+export interface PdfImportInspection {
+  upload_id: string;
+  filename: string;
+  byte_size: number;
+  page_count: number;
+  expires_at: string;
 }
 
 export interface PdfImportJob {
@@ -131,7 +142,12 @@ export async function pdfImportAvailable(): Promise<boolean> {
 export async function submitPdfImport(
   request: Request,
   ownerUserId: string,
-  input: { filename: string; title?: string },
+  input: {
+    filename: string;
+    title?: string;
+    pageStart?: number;
+    pageEnd?: number;
+  },
 ): Promise<PdfImportReservation> {
   if (!SERVICE_URL || !API_TOKEN) {
     throw new PdfImportServiceError("PDF importing is not configured", 503);
@@ -145,6 +161,12 @@ export async function submitPdfImport(
   }
   const parameters = new URLSearchParams({ filename: input.filename });
   if (input.title?.trim()) parameters.set("title", input.title.trim());
+  if (input.pageStart !== undefined) {
+    parameters.set("page_start", String(input.pageStart));
+  }
+  if (input.pageEnd !== undefined) {
+    parameters.set("page_end", String(input.pageEnd));
+  }
   const init: RequestInit & { duplex: "half" } = {
     method: "POST",
     headers: {
@@ -161,6 +183,89 @@ export async function submitPdfImport(
     `${SERVICE_URL}/v1/imports/pdf/raw?${parameters}`,
     init,
   );
+}
+
+export async function inspectPdfImport(
+  request: Request,
+  ownerUserId: string,
+  filename: string,
+): Promise<PdfImportInspection> {
+  if (!SERVICE_URL || !API_TOKEN) {
+    throw new PdfImportServiceError("PDF importing is not configured", 503);
+  }
+  const contentLength = Number(request.header("Content-Length") ?? 0);
+  if (Number.isFinite(contentLength) && contentLength > MAX_UPLOAD_BYTES) {
+    throw new PdfImportServiceError(
+      `PDF exceeds the ${Math.floor(MAX_UPLOAD_BYTES / (1024 * 1024))} MB upload limit`,
+      413,
+    );
+  }
+  const parameters = new URLSearchParams({ filename });
+  const init: RequestInit & { duplex: "half" } = {
+    method: "POST",
+    headers: {
+      ...userHeaders(ownerUserId),
+      "Content-Type": "application/pdf",
+      ...(request.header("Content-Length")
+        ? { "Content-Length": request.header("Content-Length")! }
+        : {}),
+    },
+    body: request as unknown as BodyInit,
+    duplex: "half",
+  };
+  return checkedJson<PdfImportInspection>(
+    `${SERVICE_URL}/v1/imports/pdf/raw/inspect?${parameters}`,
+    init,
+  );
+}
+
+export async function commitStagedPdfImport(
+  ownerUserId: string,
+  uploadId: string,
+  input: {
+    title?: string;
+    pageStart?: number;
+    pageEnd?: number;
+  },
+): Promise<PdfImportReservation> {
+  const parameters = new URLSearchParams();
+  if (input.title?.trim()) parameters.set("title", input.title.trim());
+  if (input.pageStart !== undefined) {
+    parameters.set("page_start", String(input.pageStart));
+  }
+  if (input.pageEnd !== undefined) {
+    parameters.set("page_end", String(input.pageEnd));
+  }
+  const query = parameters.size ? `?${parameters}` : "";
+  return checkedJson<PdfImportReservation>(
+    `${SERVICE_URL}/v1/imports/pdf/staged/${encodeURIComponent(uploadId)}${query}`,
+    {
+      method: "POST",
+      headers: userHeaders(ownerUserId),
+    },
+  );
+}
+
+export async function deleteStagedPdfImport(
+  ownerUserId: string,
+  uploadId: string,
+): Promise<void> {
+  if (!SERVICE_URL || !API_TOKEN) return;
+  let response: globalThis.Response;
+  try {
+    response = await fetch(
+      `${SERVICE_URL}/v1/imports/pdf/staged/${encodeURIComponent(uploadId)}`,
+      {
+        method: "DELETE",
+        headers: userHeaders(ownerUserId),
+      },
+    );
+  } catch {
+    return;
+  }
+  if (!response.ok && response.status !== 404) {
+    throw new PdfImportServiceError(await errorDetail(response), response.status);
+  }
 }
 
 export async function getPdfImport(

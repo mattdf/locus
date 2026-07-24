@@ -7,7 +7,7 @@ import sqlite3
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator, Sequence
 
@@ -117,10 +117,24 @@ class PersistentStore:
                     source_filename TEXT NOT NULL,
                     storage_relpath TEXT NOT NULL UNIQUE,
                     page_count INTEGER NOT NULL,
+                    page_start INTEGER NOT NULL DEFAULT 1,
+                    page_end INTEGER,
                     status TEXT NOT NULL,
                     markdown_relpath TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS staged_uploads (
+                    upload_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL REFERENCES users(user_id),
+                    source_filename TEXT NOT NULL,
+                    storage_relpath TEXT NOT NULL UNIQUE,
+                    byte_size INTEGER NOT NULL,
+                    page_count INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL
                 );
 
                 CREATE TABLE IF NOT EXISTS jobs (
@@ -157,6 +171,8 @@ class PersistentStore:
                     ON jobs(user_id, created_at);
                 CREATE INDEX IF NOT EXISTS jobs_status_idx
                     ON jobs(status, created_at);
+                CREATE INDEX IF NOT EXISTS staged_uploads_expiry_idx
+                    ON staged_uploads(status, expires_at);
                 CREATE INDEX IF NOT EXISTS usage_user_period_idx
                     ON usage_events(user_id, period);
                 CREATE INDEX IF NOT EXISTS usage_key_period_idx
@@ -181,6 +197,25 @@ class PersistentStore:
                 connection.execute(
                     "ALTER TABLE usage_events "
                     "ADD COLUMN usage_estimated INTEGER NOT NULL DEFAULT 0"
+                )
+            document_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(documents)"
+                ).fetchall()
+            }
+            if "page_start" not in document_columns:
+                connection.execute(
+                    "ALTER TABLE documents "
+                    "ADD COLUMN page_start INTEGER NOT NULL DEFAULT 1"
+                )
+            if "page_end" not in document_columns:
+                connection.execute(
+                    "ALTER TABLE documents ADD COLUMN page_end INTEGER"
+                )
+                connection.execute(
+                    "UPDATE documents SET page_end = page_count "
+                    "WHERE page_end IS NULL"
                 )
             now = utc_now()
             connection.execute("BEGIN IMMEDIATE")
@@ -270,6 +305,176 @@ class PersistentStore:
         ).fetchone()
         return int(row["pages"])
 
+    def create_staged_upload(
+        self,
+        *,
+        user_id: str,
+        source_filename: str,
+        byte_size: int,
+        page_count: int,
+        ttl_hours: int = 24,
+    ) -> dict[str, Any]:
+        upload_id = uuid.uuid4().hex
+        storage_relpath = (
+            f"tenants/{tenant_storage_key(user_id)}/staged/{upload_id}"
+        )
+        now_value = datetime.now(UTC)
+        now = now_value.isoformat(timespec="seconds")
+        expires_at = (now_value + timedelta(hours=ttl_hours)).isoformat(
+            timespec="seconds"
+        )
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO users (
+                        user_id, monthly_page_cap, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?)
+                    ON CONFLICT(user_id) DO NOTHING
+                    """,
+                    (
+                        user_id,
+                        self.default_user_monthly_page_cap,
+                        now,
+                        now,
+                    ),
+                )
+                connection.execute(
+                    """
+                    INSERT INTO staged_uploads (
+                        upload_id, user_id, source_filename, storage_relpath,
+                        byte_size, page_count, status, created_at, expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'ready', ?, ?)
+                    """,
+                    (
+                        upload_id,
+                        user_id,
+                        source_filename,
+                        storage_relpath,
+                        byte_size,
+                        page_count,
+                        now,
+                        expires_at,
+                    ),
+                )
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return {
+            "upload_id": upload_id,
+            "user_id": user_id,
+            "source_filename": source_filename,
+            "storage_relpath": storage_relpath,
+            "byte_size": byte_size,
+            "page_count": page_count,
+            "status": "ready",
+            "created_at": now,
+            "expires_at": expires_at,
+        }
+
+    def claim_staged_upload(
+        self,
+        upload_id: str,
+        user_id: str,
+    ) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                changed = connection.execute(
+                    """
+                    UPDATE staged_uploads
+                    SET status = 'committing'
+                    WHERE upload_id = ? AND user_id = ? AND status = 'ready'
+                          AND expires_at > ?
+                    """,
+                    (upload_id, user_id, utc_now()),
+                ).rowcount
+                if not changed:
+                    connection.rollback()
+                    return None
+                upload = connection.execute(
+                    """
+                    SELECT *
+                    FROM staged_uploads
+                    WHERE upload_id = ? AND user_id = ?
+                    """,
+                    (upload_id, user_id),
+                ).fetchone()
+                connection.commit()
+                return _row(upload)
+            except Exception:
+                connection.rollback()
+                raise
+
+    def release_staged_upload(self, upload_id: str, user_id: str) -> None:
+        with self.connection() as connection:
+            connection.execute(
+                """
+                UPDATE staged_uploads
+                SET status = 'ready'
+                WHERE upload_id = ? AND user_id = ? AND status = 'committing'
+                """,
+                (upload_id, user_id),
+            )
+
+    def delete_staged_upload(
+        self,
+        upload_id: str,
+        user_id: str,
+        *,
+        status: str = "ready",
+    ) -> str | None:
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                row = connection.execute(
+                    """
+                    SELECT storage_relpath
+                    FROM staged_uploads
+                    WHERE upload_id = ? AND user_id = ? AND status = ?
+                    """,
+                    (upload_id, user_id, status),
+                ).fetchone()
+                if row is None:
+                    connection.rollback()
+                    return None
+                connection.execute(
+                    """
+                    DELETE FROM staged_uploads
+                    WHERE upload_id = ? AND user_id = ? AND status = ?
+                    """,
+                    (upload_id, user_id, status),
+                )
+                connection.commit()
+                return str(row["storage_relpath"])
+            except Exception:
+                connection.rollback()
+                raise
+
+    def prune_expired_staged_uploads(self) -> list[str]:
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                rows = connection.execute(
+                    """
+                    SELECT storage_relpath
+                    FROM staged_uploads
+                    WHERE expires_at <= ?
+                    """,
+                    (utc_now(),),
+                ).fetchall()
+                connection.execute(
+                    "DELETE FROM staged_uploads WHERE expires_at <= ?",
+                    (utc_now(),),
+                )
+                connection.commit()
+                return [str(row["storage_relpath"]) for row in rows]
+            except Exception:
+                connection.rollback()
+                raise
+
     def create_import(
         self,
         *,
@@ -277,6 +482,8 @@ class PersistentStore:
         title: str,
         source_filename: str,
         page_count: int,
+        page_start: int,
+        page_end: int,
         candidate_key_ids: Sequence[str],
     ) -> ImportReservation:
         if not candidate_key_ids:
@@ -290,6 +497,7 @@ class PersistentStore:
         )
         period = current_period()
         now = utc_now()
+        selected_page_count = page_end - page_start + 1
 
         with self.connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
@@ -325,7 +533,7 @@ class PersistentStore:
                 user_cap = user["monthly_page_cap"]
                 if (
                     user_cap is not None
-                    and user_used + user_reserved + page_count > int(user_cap)
+                    and user_used + user_reserved + selected_page_count > int(user_cap)
                 ):
                     raise QuotaExceededError(
                         "User monthly Mistral OCR page cap would be exceeded"
@@ -355,7 +563,7 @@ class PersistentStore:
                     )
                     total = used + reserved
                     cap = key["monthly_page_cap"]
-                    if cap is not None and total + page_count > int(cap):
+                    if cap is not None and total + selected_page_count > int(cap):
                         continue
                     load = total / int(cap) if cap else float(total)
                     available_keys.append((load, total, key_id))
@@ -379,8 +587,9 @@ class PersistentStore:
                     """
                     INSERT INTO documents (
                         document_id, user_id, chat_id, title, source_filename,
-                        storage_relpath, page_count, status, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'importing', ?, ?)
+                        storage_relpath, page_count, page_start, page_end,
+                        status, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'importing', ?, ?)
                     """,
                     (
                         document_id,
@@ -390,6 +599,8 @@ class PersistentStore:
                         source_filename,
                         storage_relpath,
                         page_count,
+                        page_start,
+                        page_end,
                         now,
                         now,
                     ),
@@ -407,7 +618,7 @@ class PersistentStore:
                         chat_id,
                         document_id,
                         api_key_id,
-                        page_count,
+                        selected_page_count,
                         now,
                     ),
                 )
@@ -442,7 +653,7 @@ class PersistentStore:
                 job = connection.execute(
                     """
                     SELECT j.*, d.storage_relpath, d.source_filename,
-                           d.page_count, d.title
+                           d.page_count, d.page_start, d.page_end, d.title
                     FROM jobs AS j
                     JOIN documents AS d ON d.document_id = j.document_id
                     WHERE j.job_id = ?
@@ -687,7 +898,7 @@ class PersistentStore:
                 connection.execute(
                     """
                     SELECT j.*, d.storage_relpath, d.source_filename,
-                           d.page_count, d.title
+                           d.page_count, d.page_start, d.page_end, d.title
                     FROM jobs AS j
                     JOIN documents AS d ON d.document_id = j.document_id
                     WHERE j.job_id = ?

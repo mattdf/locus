@@ -46,7 +46,7 @@ from .service import _safe_document_stem, _save_upload, _validate_pdf
 
 
 LOGGER = logging.getLogger("pdf2markdown.persistent")
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 USER_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$")
 KEY_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 PERIOD_PATTERN = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
@@ -156,6 +156,7 @@ class PersistentSettings:
     max_pages: int = 1000
     max_concurrent_jobs: int = 4
     max_queued_jobs: int = 100
+    staged_upload_ttl_hours: int = 24
     signed_url_ttl_seconds: int = 3600
     default_user_monthly_page_cap: int | None = None
     default_key_monthly_page_cap: int | None = None
@@ -199,6 +200,10 @@ class PersistentSettings:
                 4,
             ),
             max_queued_jobs=_positive_int("PDF2MARKDOWN_MAX_QUEUED_JOBS", 100),
+            staged_upload_ttl_hours=_positive_int(
+                "PDF2MARKDOWN_STAGED_UPLOAD_TTL_HOURS",
+                24,
+            ),
             signed_url_ttl_seconds=_positive_int(
                 "PDF2MARKDOWN_SIGNED_URL_TTL_SECONDS",
                 3600,
@@ -347,6 +352,13 @@ def process_persistent_job(
     document_root = settings.data_root / job["storage_relpath"]
     source_path = document_root / "source.pdf"
     output_root = document_root / "result"
+    page_start = int(job.get("page_start") or 1)
+    page_end = int(job.get("page_end") or job["page_count"])
+    selected_pages = (
+        None
+        if page_start == 1 and page_end == int(job["page_count"])
+        else f"{page_start - 1}-{page_end - 1}"
+    )
     raw_markdown = process_pdf(
         pdf_path=source_path,
         output_root=output_root,
@@ -354,10 +366,11 @@ def process_persistent_job(
         model=settings.model,
         timeout=settings.timeout_seconds,
         center_images=settings.center_images,
+        pages=selected_pages,
     )
     pages, doc_size, model = _metadata_usage(
         raw_markdown.parent / "metadata.json",
-        int(job["page_count"]),
+        int(job["reserved_pages"]),
     )
     store.record_usage(
         job_id=job["job_id"],
@@ -516,6 +529,11 @@ def create_app(
                 for key in resolved_keys.values()
             ]
         )
+        for storage_relpath in store.prune_expired_staged_uploads():
+            shutil.rmtree(
+                resolved_settings.data_root / storage_relpath,
+                ignore_errors=True,
+            )
         runner = JobRunner(
             settings=resolved_settings,
             store=store,
@@ -676,6 +694,11 @@ def create_app(
                     "source": {
                         "filename": document["source_filename"],
                         "page_count": document["page_count"],
+                        "page_start": document.get("page_start") or 1,
+                        "page_end": (
+                            document.get("page_end")
+                            or document["page_count"]
+                        ),
                         "url": signed_url(
                             request,
                             user_id=user_id,
@@ -719,6 +742,8 @@ def create_app(
         source_filename: str,
         title: str | None,
         user_id: str,
+        page_start: int | None = None,
+        page_end: int | None = None,
     ) -> JSONResponse:
         reservation = None
         scheduled = False
@@ -726,10 +751,35 @@ def create_app(
             try:
                 page_count = _validate_pdf(
                     temporary_pdf,
-                    resolved_settings.max_pages,
                 )
             except ValueError as exc:
                 raise HTTPException(status_code=422, detail=str(exc)) from exc
+            selected_page_start = page_start or 1
+            selected_page_end = page_end or page_count
+            if not (
+                1
+                <= selected_page_start
+                <= selected_page_end
+                <= page_count
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Page range must be between 1 and {page_count}, "
+                        "with the first page no later than the last"
+                    ),
+                )
+            selected_page_count = (
+                selected_page_end - selected_page_start + 1
+            )
+            if selected_page_count > resolved_settings.max_pages:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        f"Selected range has {selected_page_count} pages; "
+                        f"limit is {resolved_settings.max_pages}"
+                    ),
+                )
             chat_title = (
                 (title or "").strip()
                 or _safe_document_stem(source_filename).replace("-", " ")
@@ -741,6 +791,8 @@ def create_app(
                     title=chat_title,
                     source_filename=source_filename,
                     page_count=page_count,
+                    page_start=selected_page_start,
+                    page_end=selected_page_end,
                     candidate_key_ids=list(resolved_keys),
                 )
             except QuotaExceededError as exc:
@@ -772,6 +824,9 @@ def create_app(
                 "document_id": reservation.document_id,
                 "status": "queued",
                 "page_count": page_count,
+                "page_start": selected_page_start,
+                "page_end": selected_page_end,
+                "processed_page_count": selected_page_count,
                 "poll_url": (
                     f"{str(request.base_url).rstrip('/')}/v1/imports/"
                     f"{reservation.job_id}"
@@ -790,12 +845,217 @@ def create_app(
                 )
             raise
 
+    def remove_expired_staged_uploads() -> None:
+        for storage_relpath in store.prune_expired_staged_uploads():
+            shutil.rmtree(
+                resolved_settings.data_root / storage_relpath,
+                ignore_errors=True,
+            )
+
+    def stage_import(
+        *,
+        temporary_pdf: Path,
+        source_filename: str,
+        user_id: str,
+    ) -> dict[str, Any]:
+        try:
+            page_count = _validate_pdf(temporary_pdf)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        remove_expired_staged_uploads()
+        staged = store.create_staged_upload(
+            user_id=user_id,
+            source_filename=source_filename,
+            byte_size=temporary_pdf.stat().st_size,
+            page_count=page_count,
+            ttl_hours=resolved_settings.staged_upload_ttl_hours,
+        )
+        staged_root = resolved_settings.data_root / staged["storage_relpath"]
+        staged_source = staged_root / "source.pdf"
+        try:
+            staged_root.mkdir(parents=True, exist_ok=False)
+            try:
+                os.replace(temporary_pdf, staged_source)
+            except OSError as exc:
+                if exc.errno != errno.EXDEV:
+                    raise
+                shutil.copyfile(temporary_pdf, staged_source)
+                temporary_pdf.unlink()
+        except Exception:
+            store.delete_staged_upload(
+                staged["upload_id"],
+                user_id,
+            )
+            shutil.rmtree(staged_root, ignore_errors=True)
+            raise
+        return {
+            "upload_id": staged["upload_id"],
+            "filename": source_filename,
+            "byte_size": staged["byte_size"],
+            "page_count": staged["page_count"],
+            "expires_at": staged["expires_at"],
+        }
+
+    @application.post(
+        "/v1/imports/pdf/raw/inspect",
+        status_code=201,
+        tags=["imports"],
+    )
+    async def inspect_raw_pdf(
+        request: Request,
+        user_id: str = Depends(require_user),
+        filename: Annotated[
+            str,
+            Query(min_length=1, max_length=255),
+        ] = "document.pdf",
+    ) -> dict[str, Any]:
+        """Stage one streamed PDF and return metadata without starting OCR."""
+        if not resolved_keys:
+            raise HTTPException(
+                status_code=503,
+                detail="No Mistral API key is configured",
+            )
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > resolved_settings.max_upload_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(
+                            "PDF exceeds the "
+                            f"{resolved_settings.max_upload_bytes // (1024 * 1024)} MB upload limit"
+                        ),
+                    )
+            except ValueError as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid Content-Length",
+                ) from exc
+        if (
+            request.headers.get("content-type", "")
+            .split(";", 1)[0]
+            .strip()
+            .lower()
+            != "application/pdf"
+        ):
+            raise HTTPException(
+                status_code=415,
+                detail="Content-Type must be application/pdf",
+            )
+
+        resolved_settings.work_root.mkdir(parents=True, exist_ok=True)
+        temp_dir = Path(
+            tempfile.mkdtemp(
+                prefix="inspect-",
+                dir=resolved_settings.work_root,
+            )
+        )
+        temporary_pdf = temp_dir / "source.pdf"
+        total = 0
+        try:
+            with temporary_pdf.open("wb") as stream:
+                async for chunk in request.stream():
+                    total += len(chunk)
+                    if total > resolved_settings.max_upload_bytes:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=(
+                                "PDF exceeds the "
+                                f"{resolved_settings.max_upload_bytes // (1024 * 1024)} MB upload limit"
+                            ),
+                        )
+                    stream.write(chunk)
+            if total == 0:
+                raise HTTPException(
+                    status_code=422,
+                    detail="Uploaded PDF is empty",
+                )
+            return stage_import(
+                temporary_pdf=temporary_pdf,
+                source_filename=Path(filename).name or "document.pdf",
+                user_id=user_id,
+            )
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    @application.post(
+        "/v1/imports/pdf/staged/{upload_id}",
+        status_code=202,
+        tags=["imports"],
+    )
+    def commit_staged_pdf(
+        request: Request,
+        upload_id: str,
+        user_id: str = Depends(require_user),
+        title: Annotated[str | None, Query(max_length=200)] = None,
+        page_start: Annotated[int | None, Query(ge=1)] = None,
+        page_end: Annotated[int | None, Query(ge=1)] = None,
+    ) -> JSONResponse:
+        staged = store.claim_staged_upload(upload_id, user_id)
+        if staged is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Staged PDF was not found or has expired",
+            )
+        staged_root = resolved_settings.data_root / staged["storage_relpath"]
+        staged_source = staged_root / "source.pdf"
+        try:
+            response = commit_import(
+                request,
+                temporary_pdf=staged_source,
+                source_filename=staged["source_filename"],
+                title=title,
+                user_id=user_id,
+                page_start=page_start,
+                page_end=page_end,
+            )
+        except Exception:
+            if staged_source.is_file():
+                store.release_staged_upload(upload_id, user_id)
+            else:
+                store.delete_staged_upload(
+                    upload_id,
+                    user_id,
+                    status="committing",
+                )
+                shutil.rmtree(staged_root, ignore_errors=True)
+            raise
+        store.delete_staged_upload(
+            upload_id,
+            user_id,
+            status="committing",
+        )
+        shutil.rmtree(staged_root, ignore_errors=True)
+        return response
+
+    @application.delete(
+        "/v1/imports/pdf/staged/{upload_id}",
+        status_code=204,
+        tags=["imports"],
+    )
+    def delete_staged_pdf(
+        upload_id: str,
+        user_id: str = Depends(require_user),
+    ) -> None:
+        storage_relpath = store.delete_staged_upload(upload_id, user_id)
+        if storage_relpath is None:
+            raise HTTPException(
+                status_code=404,
+                detail="Staged PDF was not found",
+            )
+        shutil.rmtree(
+            resolved_settings.data_root / storage_relpath,
+            ignore_errors=True,
+        )
+
     @application.post("/v1/imports/pdf", status_code=202, tags=["imports"])
     async def import_pdf(
         request: Request,
         file: Annotated[UploadFile, File(description="PDF document to import")],
         user_id: str = Depends(require_user),
         title: Annotated[str | None, Form(max_length=200)] = None,
+        page_start: Annotated[int | None, Form(ge=1)] = None,
+        page_end: Annotated[int | None, Form(ge=1)] = None,
     ) -> JSONResponse:
         if not resolved_keys:
             raise HTTPException(status_code=503, detail="No Mistral API key is configured")
@@ -817,6 +1077,8 @@ def create_app(
                 source_filename=source_filename,
                 title=title,
                 user_id=user_id,
+                page_start=page_start,
+                page_end=page_end,
             )
         finally:
             await file.close()
@@ -828,6 +1090,8 @@ def create_app(
         user_id: str = Depends(require_user),
         filename: Annotated[str, Query(min_length=1, max_length=255)] = "document.pdf",
         title: Annotated[str | None, Query(max_length=200)] = None,
+        page_start: Annotated[int | None, Query(ge=1)] = None,
+        page_end: Annotated[int | None, Query(ge=1)] = None,
     ) -> JSONResponse:
         """Accept a streaming PDF body from the trusted Locus application."""
         if not resolved_keys:
@@ -875,6 +1139,8 @@ def create_app(
                 source_filename=Path(filename).name or "document.pdf",
                 title=title,
                 user_id=user_id,
+                page_start=page_start,
+                page_end=page_end,
             )
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)

@@ -173,6 +173,18 @@ function isChat(value: unknown): value is ChatTree {
         typeof value.source.filename === "string" &&
         Number.isSafeInteger(value.source.pageCount) &&
         (
+          value.source.pageStart === undefined ||
+          Number.isSafeInteger(value.source.pageStart)
+        ) &&
+        (
+          value.source.pageEnd === undefined ||
+          Number.isSafeInteger(value.source.pageEnd)
+        ) &&
+        (
+          value.source.processedPageCount === undefined ||
+          Number.isSafeInteger(value.source.processedPageCount)
+        ) &&
+        (
           value.source.status === "importing" ||
           value.source.status === "ready" ||
           value.source.status === "error"
