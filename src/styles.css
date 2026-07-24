@@ -1523,6 +1523,7 @@ a:focus-visible {
 .message__meta {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 9px;
   color: #89918c;
@@ -1544,6 +1545,9 @@ a:focus-visible {
 }
 
 .message__controls {
+  max-width: 100%;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 5px;
   margin-left: auto;
 }
@@ -1568,13 +1572,14 @@ a:focus-visible {
   cursor: pointer;
 }
 
-.copy-response-button,
-.print-response-button,
-.regenerate-response-button,
-.source-pdf-button {
+.message-action-button {
   display: inline-flex;
+  width: auto;
+  height: auto;
   min-height: 23px;
+  flex: 0 0 auto;
   align-items: center;
+  justify-content: center;
   gap: 4px;
   padding: 0 7px;
   color: #6d7873;
@@ -1586,6 +1591,16 @@ a:focus-visible {
   font-weight: 800;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.message-action-button > span {
+  display: inline-block;
+  white-space: nowrap;
+}
+
+.message-action-button > svg {
+  flex: 0 0 auto;
 }
 
 .source-pdf-button {

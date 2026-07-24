@@ -884,6 +884,11 @@ app.post("/api/respond", async (request, response, next) => {
 const dist = path.resolve("dist");
 if (existsSync(dist)) {
   const applicationDocument = readFileSync(path.join(dist, "index.html"), "utf8");
+  app.get("/service-worker.js", (_request, response) => {
+    response.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    response.setHeader("Service-Worker-Allowed", "/");
+    response.sendFile(path.join(dist, "service-worker.js"));
+  });
   app.use(express.static(dist, { index: false, maxAge: isHosted ? "1h" : 0 }));
   const sendApplication = (_request: express.Request, response: express.Response) => {
     response.setHeader("Cache-Control", "no-cache");

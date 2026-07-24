@@ -764,14 +764,14 @@ export function ThreadView({
                       chat.source?.kind === "pdf" &&
                       chat.source.status === "ready" && (
                         <a
-                          className="source-pdf-button"
+                          className="source-pdf-button message-action-button"
                           href={`/api/pdf-documents/${encodeURIComponent(chat.source.documentId)}/source`}
                           target="_blank"
                           rel="noreferrer"
                           title={chat.source.filename}
                         >
-                          <ExternalLink size={11} />
                           <span>View original PDF</span>
+                          <ExternalLink size={11} />
                         </a>
                       )}
                     {node.id === chat.rootId &&
@@ -783,7 +783,7 @@ export function ThreadView({
                       )}
                     {!readOnly && (
                       <button
-                        className="edit-message-button"
+                        className="edit-message-button message-action-button"
                         type="button"
                         aria-label="Edit imported Markdown source"
                         disabled={
@@ -796,13 +796,13 @@ export function ThreadView({
                         }
                         onClick={() => onEditSource(message.id)}
                       >
-                        <Pencil size={11} />
                         <span>Edit source</span>
+                        <Pencil size={11} />
                       </button>
                     )}
                     {message.content && (
                       <button
-                        className={`copy-response-button ${messageCopyStatus ? `copy-response-button--${messageCopyStatus}` : ""}`}
+                        className={`copy-response-button message-action-button ${messageCopyStatus ? `copy-response-button--${messageCopyStatus}` : ""}`}
                         type="button"
                         aria-label={
                           messageCopyStatus
@@ -813,11 +813,6 @@ export function ThreadView({
                         }
                         onClick={() => void copyResponse(message.id, message.content)}
                       >
-                        {messageCopyStatus === "copied" ? (
-                          <Check size={11} />
-                        ) : (
-                          <Copy size={11} />
-                        )}
                         <span>
                           {messageCopyStatus
                             ? messageCopyStatus === "copied"
@@ -825,17 +820,22 @@ export function ThreadView({
                               : "Failed"
                             : "Copy"}
                         </span>
+                        {messageCopyStatus === "copied" ? (
+                          <Check size={11} />
+                        ) : (
+                          <Copy size={11} />
+                        )}
                       </button>
                     )}
                     {message.content && (
                       <button
-                        className="print-response-button"
+                        className="print-response-button message-action-button"
                         type="button"
                         aria-label="Print imported source"
                         onClick={() => printResponse(message.id)}
                       >
-                        <Printer size={11} />
                         <span>Print</span>
+                        <Printer size={11} />
                       </button>
                     )}
                   </span>
@@ -868,20 +868,20 @@ export function ThreadView({
                     )}
                     {!readOnly && message.content && (
                       <button
-                        className="edit-message-button"
+                        className="edit-message-button message-action-button"
                         type="button"
                         aria-label="Edit response Markdown"
                         title="Edit response Markdown"
                         disabled={waiting}
                         onClick={() => onEditAssistant(message.id)}
                       >
-                        <Pencil size={11} />
                         <span>Edit</span>
+                        <Pencil size={11} />
                       </button>
                     )}
                     {!message.error && message.content && (
                       <button
-                        className={`copy-response-button ${messageCopyStatus ? `copy-response-button--${messageCopyStatus}` : ""}`}
+                        className={`copy-response-button message-action-button ${messageCopyStatus ? `copy-response-button--${messageCopyStatus}` : ""}`}
                         type="button"
                         aria-label={
                           messageCopyStatus
@@ -892,11 +892,6 @@ export function ThreadView({
                         }
                         onClick={() => void copyResponse(message.id, message.content)}
                       >
-                        {messageCopyStatus === "copied" ? (
-                          <Check size={11} />
-                        ) : (
-                          <Copy size={11} />
-                        )}
                         <span>
                           {messageCopyStatus
                             ? messageCopyStatus === "copied"
@@ -904,17 +899,22 @@ export function ThreadView({
                               : "Failed"
                             : "Copy"}
                         </span>
+                        {messageCopyStatus === "copied" ? (
+                          <Check size={11} />
+                        ) : (
+                          <Copy size={11} />
+                        )}
                       </button>
                     )}
                     {message.content && (
                       <button
-                        className="print-response-button"
+                        className="print-response-button message-action-button"
                         type="button"
                         aria-label="Print response"
                         onClick={() => printResponse(message.id)}
                       >
-                        <Printer size={11} />
                         <span>Print</span>
+                        <Printer size={11} />
                       </button>
                     )}
                     {!readOnly && <span
@@ -922,15 +922,15 @@ export function ThreadView({
                       data-message-id={message.id}
                     >
                       <button
-                        className="regenerate-response-button"
+                        className="regenerate-response-button message-action-button"
                         type="button"
                         aria-label="Regenerate response"
                         title={`Regenerate with ${model}`}
                         disabled={waiting}
                         onClick={() => onRegenerateResponse(message.id)}
                       >
-                        <RotateCcw size={11} />
                         <span>Regenerate</span>
+                        <RotateCcw size={11} />
                       </button>
                       <button
                         className="regenerate-model-button"

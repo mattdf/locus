@@ -6,6 +6,20 @@ import { AuthGate } from "./components/AuthGate";
 import { SharedChatView } from "./components/SharedChatView";
 import "./styles.css";
 
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker
+      .register("/service-worker.js", {
+        scope: "/",
+        updateViaCache: "none",
+      })
+      .then((registration) => registration.update())
+      .catch((error: unknown) => {
+        console.warn("Locus service worker registration failed", error);
+      });
+  });
+}
+
 const sharedToken = window.location.pathname.match(/^\/share\/([A-Za-z0-9_-]{43})\/?$/)?.[1];
 
 createRoot(document.getElementById("root")!).render(
