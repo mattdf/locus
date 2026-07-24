@@ -95,4 +95,46 @@ assert.notEqual(
   "The fixture must retain the source/rendered block-count mismatch that caused the regression",
 );
 
+const legacyPdfSource = String.raw`<hr>
+
+<p id="page-1" align="center"><strong>Page 1</strong></p>
+
+# First page
+
+Opening paragraph.
+
+<hr>
+
+<p id="page-2" align="center"><strong>Page 2</strong></p>
+
+# Second page
+
+The exact paragraph that must remain selectable after the page boundary.
+
+$$\operatorname{Tagged}(x) = x^2 \tag{7}$$`;
+const renderedPdf = normalizeMathDelimiters(legacyPdfSource, true);
+assert.match(renderedPdf, /^---\n\n\*\*Page 1\*\*/);
+assert.match(renderedPdf, /\n---\n\n\*\*Page 2\*\*/);
+assert.match(
+  renderedPdf,
+  /\$\$\n\\operatorname\{Tagged\}\(x\) = x\^2 \\tag\{7\}\n\$\$/,
+);
+const pdfTarget =
+  "The exact paragraph that must remain selectable after the page boundary.";
+const pdfRenderedBlocks = markdownBlockRanges(renderedPdf);
+const pdfTargetBlockIndex = pdfRenderedBlocks.findIndex((range) =>
+  renderedPdf.slice(range.start, range.end).includes(pdfTarget),
+);
+assert.notEqual(pdfTargetBlockIndex, -1);
+const pdfTargetSection = containingOriginalMarkdownSection(
+  legacyPdfSource,
+  renderedPdf,
+  pdfTargetBlockIndex,
+);
+assert.equal(
+  pdfTargetSection.content,
+  pdfTarget,
+  "Legacy PDF page markers must not shift selected source sections",
+);
+
 console.log("Source edit selection mapping invariants passed");

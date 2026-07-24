@@ -35,9 +35,37 @@ function looksLikeBareInlineMath(value: string): boolean {
   if (!expression || expression.includes("$")) return false;
   if (/\\[A-Za-z]+/.test(expression)) return true;
   if (/[_^=<>∑∏∫∞≤≥±×÷]/.test(expression)) return true;
-  if (/^[A-Za-zΑ-Ωα-ω]$/.test(expression)) return true;
-  if (/^-?\d+(?:\.\d+)?$/.test(expression)) return true;
   return /^[A-Za-z](?:\s*,\s*[A-Za-z])+$/.test(expression);
+}
+
+function normalizeLegacyPdfMarkup(markdown: string): string {
+  return markdown
+    .replace(
+      /<hr\s*\/?>\s*\n+\s*<p\b[^>]*\bid=["']page-(\d+)["'][^>]*>\s*<strong>\s*Page\s+\1\s*<\/strong>\s*<\/p>/gi,
+      (_match, pageNumber: string) => `---\n\n**Page ${pageNumber}**`,
+    )
+    .replace(
+      /<p\b[^>]*\balign=["']center["'][^>]*>\s*<img\b([^>]*)\/?>\s*<\/p>/gi,
+      (_match, attributes: string) => {
+        const source = attributes.match(/\bsrc=["']([^"']+)["']/i)?.[1];
+        if (!source) return _match;
+        const alt = attributes.match(/\balt=["']([^"']*)["']/i)?.[1] ?? "";
+        return `![${alt}](${source})`;
+      },
+    );
+}
+
+function normalizeDisplayMathFences(markdown: string): string {
+  return markdown
+    .split(/(```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]*`)/g)
+    .map((part) => {
+      if (part.startsWith("`") || part.startsWith("~~~")) return part;
+      return part.replace(
+        /\$\$[ \t]*\n?([\s\S]*?)\n?[ \t]*\$\$/g,
+        (_match, equation: string) => `$$\n${equation.trim()}\n$$`,
+      );
+    })
+    .join("");
 }
 
 function normalizeCopiedInlineMath(markdown: string): string {
@@ -59,23 +87,27 @@ export function normalizeMathDelimiters(
   recoverCopiedChatGptMath = false,
 ): string {
   if (!recoverCopiedChatGptMath) {
-    return markdown
+    return normalizeDisplayMathFences(
+      markdown
       .replace(/\\\[([\s\S]*?)\\\]/g, (_match, equation: string) =>
         `$$\n${equation.trim()}\n$$`,
       )
-      .replace(/\\\((.*?)\\\)/g, (_match, equation: string) => `$${equation}$`);
+      .replace(/\\\((.*?)\\\)/g, (_match, equation: string) => `$${equation}$`),
+    );
   }
 
-  const withDisplayMath = markdown.replace(
+  const withDisplayMath = normalizeLegacyPdfMarkup(markdown).replace(
     /(^|\n)[ \t]*\\?\[[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\\?\][ \t]*(?=\r?\n|$)/g,
     (_match, leading: string, equation: string) =>
       `${leading}$$\n${cleanCopiedDisplayMath(equation)}\n$$`,
   );
 
-  return withDisplayMath
-    .split(/(\$\$[\s\S]*?\$\$)/g)
-    .map((part) => (part.startsWith("$$") ? part : normalizeCopiedInlineMath(part)))
-    .join("");
+  return normalizeDisplayMathFences(
+    withDisplayMath
+      .split(/(\$\$[\s\S]*?\$\$)/g)
+      .map((part) => (part.startsWith("$$") ? part : normalizeCopiedInlineMath(part)))
+      .join(""),
+  );
 }
 
 export function markdownBlockquote(source: string): string {
