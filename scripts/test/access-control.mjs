@@ -93,10 +93,16 @@ assert(waitlist.status === 201, `Could not join waitlist: ${JSON.stringify(await
 const createKey = await request("/api/admin/access/managed-credentials", {
   method: "POST",
   cookie: adminCookie,
-  body: JSON.stringify({ label: "Test managed key", provider: "openai", apiKey: managedApiKey }),
+  body: JSON.stringify({
+    label: "Test managed key",
+    provider: "openai",
+    apiKey: managedApiKey,
+    monthlyLimitUsd: 5,
+  }),
 });
 const createdKey = await json(createKey);
 assert(createKey.status === 201 && createdKey.credential?.id, `Could not create managed key: ${JSON.stringify(createdKey)}`);
+assert(createdKey.credential.monthlyLimitUsd === 5, "Managed key monthly limit was not persisted");
 assert(!JSON.stringify(createdKey).includes(managedApiKey), "Managed key creation response exposed plaintext");
 
 const createInvite = await request("/api/admin/access/invites", {
@@ -106,10 +112,12 @@ const createInvite = await request("/api/admin/access/invites", {
     email: invitee.email,
     expiresInDays: 7,
     managedCredentialId: createdKey.credential.id,
+    accountMonthlyLimitUsd: 1,
   }),
 });
 const createdInvite = await json(createInvite);
 assert(createInvite.status === 201 && createdInvite.url, `Could not create invite: ${JSON.stringify(createdInvite)}`);
+assert(createdInvite.invite?.accountMonthlyLimitUsd === 1, "Invite account budget was not persisted");
 const inviteToken = new URL(createdInvite.url).searchParams.get("invite");
 assert(inviteToken?.length === 43, "Invite URL did not contain a strong capability token");
 
@@ -145,6 +153,29 @@ try {
   assert(stored.rows[0].emailVerified === true, "Invited account was not marked email-verified");
   assert(!stored.rows[0].ciphertext.includes(managedApiKey), "Managed credential was stored as plaintext");
   assert(!stored.rows[0].tokenHash.includes(inviteToken), "Raw invite token was stored in the database");
+  await pool.query(
+    `insert into "locus_generation_jobs"
+       ("ownerUserId", "id", "provider", "model", "purpose", "status",
+        "managedCredentialId", "finishedAt")
+     values ($1, 'tracked-managed-generation', 'openai', 'gpt-5.6-sol', 'chat',
+             'completed', $2, current_timestamp)`,
+    [stored.rows[0].ownerUserId, createdKey.credential.id],
+  );
+  await pool.query(
+    `insert into "locus_usage_events"
+       ("ownerUserId", "generationId", "provider", "model", "inputTokens",
+        "cachedInputTokens", "outputTokens", "reasoningTokens", "totalTokens",
+        "totalCostUsd", "managedCredentialId", "credentialKind", "credentialRef",
+        "credentialLabel")
+     values ($1, 'tracked-managed-generation', 'openai', 'gpt-5.6-sol',
+             1000, 100, 500, 200, 1500, 0.25, $2, 'managed', $3, $4)`,
+    [
+      stored.rows[0].ownerUserId,
+      createdKey.credential.id,
+      `managed:${createdKey.credential.id}`,
+      createdKey.credential.label,
+    ],
+  );
 } finally {
   await pool.end();
 }
@@ -153,6 +184,114 @@ const inviteeCookie = await signIn(invitee);
 const providers = await json(await request("/api/providers", { cookie: inviteeCookie }));
 assert(providers.openai?.configured && providers.openai?.source === "managed", "Invitee did not receive managed provider access");
 assert(!JSON.stringify(providers).includes(managedApiKey), "Provider status exposed the managed key");
+
+const usageAccess = await json(await request("/api/admin/access", { cookie: adminCookie }));
+const trackedCredential = usageAccess.managedCredentials?.find(
+  (credential) => credential.id === createdKey.credential.id,
+);
+assert(trackedCredential?.monthlyCostUsd === 0.25, "Managed-key monthly cost was not aggregated");
+assert(trackedCredential?.monthlyTokens === 1500, "Managed-key token use was not aggregated");
+assert(trackedCredential?.lifetimeCostUsd === 0.25, "Managed-key lifetime cost was not aggregated");
+
+const usersBeforeLimits = await json(await request("/api/admin/users", { cookie: adminCookie }));
+const trackedInvitee = usersBeforeLimits.users?.find((user) => user.email === invitee.email);
+assert(trackedInvitee?.managedMonthlyCostUsd === 0.25, "Per-account managed cost was not aggregated");
+assert(trackedInvitee?.managedMonthlyTokens === 1500, "Per-account managed tokens were not aggregated");
+assert(trackedInvitee?.managedCredentialCount === 1, "Managed-key assignment was not summarized");
+assert(trackedInvitee?.managedMonthlyLimitUsd === 1, "Invite account budget was not applied");
+assert(trackedInvitee?.monthlyCostUsd === 0.25, "All-key account cost was not aggregated");
+assert(trackedInvitee?.monthlyTokens === 1500, "All-key account tokens were not aggregated");
+
+const inviteeUsageResponse = await request("/api/usage", { cookie: inviteeCookie });
+const inviteeUsage = await json(inviteeUsageResponse);
+assert(inviteeUsageResponse.ok, `Invitee could not read private usage: ${JSON.stringify(inviteeUsage)}`);
+assert(inviteeUsage.lifetime?.costUsd === 0.25, "Private lifetime cost total is incorrect");
+assert(inviteeUsage.months?.[0]?.costUsd === 0.25, "Private monthly cost total is incorrect");
+assert(
+  inviteeUsage.credentials?.[0]?.credentialLabel === createdKey.credential.label &&
+    inviteeUsage.credentials?.[0]?.credentialKind === "managed",
+  "Private per-key usage breakdown is incorrect",
+);
+assert(
+  !JSON.stringify(inviteeUsage).includes(managedApiKey),
+  "Private usage response exposed a managed API key",
+);
+
+const setAccountLimit = await request(
+  `/api/admin/users/${encodeURIComponent(trackedInvitee.id)}`,
+  {
+    method: "PATCH",
+    cookie: adminCookie,
+    body: JSON.stringify({ managedMonthlyLimitUsd: 0.25 }),
+  },
+);
+assert(setAccountLimit.ok, `Could not set the account budget: ${JSON.stringify(await json(setAccountLimit))}`);
+const blockedByAccount = await request("/api/respond", {
+  method: "POST",
+  cookie: inviteeCookie,
+  body: JSON.stringify({
+    requestId: "account-budget-blocked-0001",
+    provider: "openai",
+    model: "gpt-5.6-sol",
+    reasoningEffort: "max",
+    maxOutputTokens: 1000,
+    context: [],
+    message: "This must be rejected before making an upstream request.",
+  }),
+});
+const blockedByAccountBody = await json(blockedByAccount);
+assert(
+  blockedByAccount.status === 402 &&
+    blockedByAccountBody.code === "ACCOUNT_MONTHLY_LIMIT_REACHED",
+  `Account budget was not enforced: ${JSON.stringify(blockedByAccountBody)}`,
+);
+
+const clearAccountLimit = await request(
+  `/api/admin/users/${encodeURIComponent(trackedInvitee.id)}`,
+  {
+    method: "PATCH",
+    cookie: adminCookie,
+    body: JSON.stringify({ managedMonthlyLimitUsd: null }),
+  },
+);
+assert(clearAccountLimit.ok, "Could not clear the account budget");
+const setKeyLimit = await request(
+  `/api/admin/access/managed-credentials/${encodeURIComponent(createdKey.credential.id)}`,
+  {
+    method: "PATCH",
+    cookie: adminCookie,
+    body: JSON.stringify({ monthlyLimitUsd: 0.25 }),
+  },
+);
+assert(setKeyLimit.ok, `Could not set the managed-key budget: ${JSON.stringify(await json(setKeyLimit))}`);
+const blockedByKey = await request("/api/respond", {
+  method: "POST",
+  cookie: inviteeCookie,
+  body: JSON.stringify({
+    requestId: "key-budget-blocked-000001",
+    provider: "openai",
+    model: "gpt-5.6-sol",
+    reasoningEffort: "max",
+    maxOutputTokens: 1000,
+    context: [],
+    message: "This must also be rejected before making an upstream request.",
+  }),
+});
+const blockedByKeyBody = await json(blockedByKey);
+assert(
+  blockedByKey.status === 402 &&
+    blockedByKeyBody.code === "KEY_MONTHLY_LIMIT_REACHED",
+  `Managed-key budget was not enforced: ${JSON.stringify(blockedByKeyBody)}`,
+);
+const restoreKeyLimit = await request(
+  `/api/admin/access/managed-credentials/${encodeURIComponent(createdKey.credential.id)}`,
+  {
+    method: "PATCH",
+    cookie: adminCookie,
+    body: JSON.stringify({ monthlyLimitUsd: 5 }),
+  },
+);
+assert(restoreKeyLimit.ok, "Could not restore the managed-key budget");
 
 const customKey = "hosted-custom-key-never-exposed";
 const createCustom = await request("/api/provider-connections", {
@@ -209,4 +348,4 @@ const suspendedSignIn = await request("/api/auth/sign-in/email", {
 });
 assert(!suspendedSignIn.ok, "Suspended account could create a new session");
 
-console.log("Access-control integration checks passed: waitlist, verification-free invites, managed keys, revocation, non-disclosure, and suspension");
+console.log("Access-control integration checks passed: waitlist, verification-free invites, managed-key cost tracking and budgets, revocation, non-disclosure, and suspension");

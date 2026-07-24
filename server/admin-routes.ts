@@ -13,37 +13,111 @@ type ManagedUserRow = {
   disabled: boolean;
   createdAt: Date;
   activeSessions: number;
+  managedCredentialCount: number;
+  managedMonthlyLimitUsd: number | null;
+  managedMonthlyCostUsd: number;
+  managedLifetimeCostUsd: number;
+  managedMonthlyTokens: number;
+  managedUnpricedEvents: number;
+  monthlyCostUsd: number;
+  lifetimeCostUsd: number;
+  monthlyTokens: number;
+  unpricedEvents: number;
 };
 
-async function managedUser(userId: string): Promise<ManagedUserRow | null> {
+async function managedUsers(userId?: string): Promise<ManagedUserRow[]> {
   const result = await query<ManagedUserRow>(
     `select u."id", u."email", u."name", u."role",
             coalesce(u."banned", false) as "disabled", u."createdAt",
-            count(s."id")::int as "activeSessions"
-     from "user" u
-     left join "session" s on s."userId" = u."id" and s."expiresAt" > current_timestamp
-     where u."id" = $1
-     group by u."id"`,
-    [userId],
+            coalesce(s."activeSessions", 0)::int as "activeSessions",
+            coalesce(a."managedCredentialCount", 0)::int as "managedCredentialCount",
+            l."monthlyLimitUsd"::double precision as "managedMonthlyLimitUsd",
+            coalesce(m."monthlyCostUsd", 0)::double precision as "managedMonthlyCostUsd",
+            coalesce(m."lifetimeCostUsd", 0)::double precision as "managedLifetimeCostUsd",
+            coalesce(m."monthlyTokens", 0)::double precision as "managedMonthlyTokens",
+            coalesce(m."unpricedEvents", 0)::int as "managedUnpricedEvents",
+            coalesce(all_usage."monthlyCostUsd", 0)::double precision as "monthlyCostUsd",
+            coalesce(all_usage."lifetimeCostUsd", 0)::double precision as "lifetimeCostUsd",
+            coalesce(all_usage."monthlyTokens", 0)::double precision as "monthlyTokens",
+            coalesce(all_usage."unpricedEvents", 0)::int as "unpricedEvents"
+       from "user" u
+       left join lateral (
+         select count(*)::int as "activeSessions"
+           from "session"
+          where "userId" = u."id" and "expiresAt" > current_timestamp
+       ) s on true
+       left join lateral (
+         select count(*)::int as "managedCredentialCount"
+           from "locus_user_managed_credentials" a
+           join "locus_managed_credentials" c
+             on c."id" = a."managedCredentialId" and c."revokedAt" is null
+          where a."ownerUserId" = u."id"
+       ) a on true
+       left join "locus_managed_account_limits" l on l."ownerUserId" = u."id"
+       left join lateral (
+         select
+           sum("totalCostUsd") filter (
+             where "createdAt" >=
+               (date_trunc('month', current_timestamp at time zone 'UTC') at time zone 'UTC')
+           ) as "monthlyCostUsd",
+           sum("totalCostUsd") as "lifetimeCostUsd",
+           sum("totalTokens") filter (
+             where "createdAt" >=
+               (date_trunc('month', current_timestamp at time zone 'UTC') at time zone 'UTC')
+           ) as "monthlyTokens",
+           count(*) filter (
+             where "totalCostUsd" is null and "totalTokens" is not null
+               and "createdAt" >=
+                 (date_trunc('month', current_timestamp at time zone 'UTC') at time zone 'UTC')
+           )::int as "unpricedEvents"
+           from "locus_usage_events"
+          where "ownerUserId" = u."id" and "managedCredentialId" is not null
+       ) m on true
+       left join lateral (
+         select
+           sum("totalCostUsd") filter (
+             where "createdAt" >=
+               (date_trunc('month', current_timestamp at time zone 'UTC') at time zone 'UTC')
+           ) as "monthlyCostUsd",
+           sum("totalCostUsd") as "lifetimeCostUsd",
+           sum("totalTokens") filter (
+             where "createdAt" >=
+               (date_trunc('month', current_timestamp at time zone 'UTC') at time zone 'UTC')
+           ) as "monthlyTokens",
+           count(*) filter (
+             where "totalCostUsd" is null and "totalTokens" is not null
+               and "createdAt" >=
+                 (date_trunc('month', current_timestamp at time zone 'UTC') at time zone 'UTC')
+           )::int as "unpricedEvents"
+           from "locus_usage_events"
+          where "ownerUserId" = u."id"
+       ) all_usage on true
+      ${userId ? `where u."id" = $1` : ""}
+      order by u."createdAt" asc`,
+    userId ? [userId] : [],
   );
-  return result.rows[0] ?? null;
+  return result.rows;
+}
+
+async function managedUser(userId: string): Promise<ManagedUserRow | null> {
+  return (await managedUsers(userId))[0] ?? null;
+}
+
+function validMonthlyLimit(value: unknown): value is number | null {
+  return value === null || (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= 10_000_000
+  );
 }
 
 export const adminRouter = express.Router();
 
 adminRouter.get("/users", async (_request, response) => {
   if (!requireAdmin(response)) return;
-  const users = await query<ManagedUserRow>(
-    `select u."id", u."email", u."name", u."role",
-            coalesce(u."banned", false) as "disabled", u."createdAt",
-            count(s."id")::int as "activeSessions"
-     from "user" u
-     left join "session" s on s."userId" = u."id" and s."expiresAt" > current_timestamp
-     group by u."id"
-     order by u."createdAt" asc`,
-  );
   response.setHeader("Cache-Control", "no-store");
-  response.json({ users: users.rows });
+  response.json({ users: await managedUsers() });
 });
 
 adminRouter.post("/users", async (request, response) => {
@@ -95,7 +169,20 @@ adminRouter.patch("/users/:userId", async (request, response) => {
 
   const hasDisabled = typeof request.body?.disabled === "boolean";
   const hasRole = request.body?.role === "admin" || request.body?.role === "user";
-  if (!hasDisabled && !hasRole) {
+  const hasManagedMonthlyLimit = Object.prototype.hasOwnProperty.call(
+    request.body ?? {},
+    "managedMonthlyLimitUsd",
+  );
+  if (
+    hasManagedMonthlyLimit &&
+    !validMonthlyLimit(request.body?.managedMonthlyLimitUsd)
+  ) {
+    response.status(400).json({
+      error: "The monthly managed-API limit must be null or between $0 and $10,000,000",
+    });
+    return;
+  }
+  if (!hasDisabled && !hasRole && !hasManagedMonthlyLimit) {
     response.status(400).json({ error: "Specify an account status or role" });
     return;
   }
@@ -129,6 +216,18 @@ adminRouter.patch("/users/:userId", async (request, response) => {
       await query(`delete from "session" where "userId" = $1`, [target.id]);
       abortOwnerGenerations(target.id);
     }
+  }
+  if (hasManagedMonthlyLimit) {
+    await query(
+      `insert into "locus_managed_account_limits"
+         ("ownerUserId", "monthlyLimitUsd", "updatedByUserId", "updatedAt")
+       values ($1, $2, $3, current_timestamp)
+       on conflict ("ownerUserId") do update set
+         "monthlyLimitUsd" = excluded."monthlyLimitUsd",
+         "updatedByUserId" = excluded."updatedByUserId",
+         "updatedAt" = current_timestamp`,
+      [target.id, request.body.managedMonthlyLimitUsd, administrator.id],
+    );
   }
 
   const user = await managedUser(target.id);

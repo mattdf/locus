@@ -52,6 +52,7 @@ import type {
 import { Composer } from "./components/Composer";
 import { AdminAccountsModal } from "./components/AdminAccountsModal";
 import { AccountSettingsModal } from "./components/AccountSettingsModal";
+import { UsageSettingsModal } from "./components/UsageSettingsModal";
 import {
   ShareCreatedModal,
   SharedChatsModal,
@@ -1244,6 +1245,7 @@ export default function App({
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
   const [providersOpen, setProvidersOpen] = useState(false);
   const [adminAccountsOpen, setAdminAccountsOpen] = useState(false);
   const [sharedChatsOpen, setSharedChatsOpen] = useState(false);
@@ -6138,6 +6140,7 @@ export default function App({
                     <button
                       className="custom-instructions-button account-summary"
                       type="button"
+                      aria-label={`Open account settings for ${runtime.user.name}`}
                       onClick={() => {
                         setSettingsOpen(false);
                         setAccountSettingsOpen(true);
@@ -6145,8 +6148,29 @@ export default function App({
                     >
                       <UserRound size={15} />
                       <span>
-                        <small>{runtime.user.email}</small>
                         <strong>{runtime.user.name}</strong>
+                        <small>{runtime.user.email}</small>
+                        <em className="account-summary__hint">
+                          Change name, email, or password
+                        </em>
+                      </span>
+                      <div className="account-summary__action">
+                        <span>Manage</span>
+                        <ChevronRight size={13} />
+                      </div>
+                    </button>
+                    <button
+                      className="custom-instructions-button"
+                      type="button"
+                      onClick={() => {
+                        setSettingsOpen(false);
+                        setUsageOpen(true);
+                      }}
+                    >
+                      <ChartNoAxesCombined size={15} />
+                      <span>
+                        <small>Model usage</small>
+                        <strong>Spending and tokens</strong>
                       </span>
                       <ChevronRight size={13} />
                     </button>
@@ -6415,6 +6439,10 @@ export default function App({
       {adminAccountsOpen && isAdministrator && runtime.user && (
         <AdminAccountsModal
           currentUserId={runtime.user.id}
+          onBack={() => {
+            setAdminAccountsOpen(false);
+            setSettingsOpen(true);
+          }}
           onClose={() => setAdminAccountsOpen(false)}
         />
       )}
@@ -6423,12 +6451,32 @@ export default function App({
         <AccountSettingsModal
           user={runtime.user}
           onRefresh={onRefreshRuntime}
+          onBack={() => {
+            setAccountSettingsOpen(false);
+            setSettingsOpen(true);
+          }}
           onClose={() => setAccountSettingsOpen(false)}
         />
       )}
 
+      {usageOpen && runtime.mode === "hosted" && runtime.user && (
+        <UsageSettingsModal
+          onBack={() => {
+            setUsageOpen(false);
+            setSettingsOpen(true);
+          }}
+          onClose={() => setUsageOpen(false)}
+        />
+      )}
+
       {sharedChatsOpen && runtime.mode === "hosted" && (
-        <SharedChatsModal onClose={() => setSharedChatsOpen(false)} />
+        <SharedChatsModal
+          onBack={() => {
+            setSharedChatsOpen(false);
+            setSettingsOpen(true);
+          }}
+          onClose={() => setSharedChatsOpen(false)}
+        />
       )}
 
       {shareResult && runtime.mode === "hosted" && (
@@ -6554,6 +6602,18 @@ export default function App({
             aria-labelledby="json-import-title"
           >
             <header>
+              <button
+                className="settings-back-button"
+                type="button"
+                aria-label="Back to settings"
+                title="Back to settings"
+                onClick={() => {
+                  resetJsonImport();
+                  setSettingsOpen(true);
+                }}
+              >
+                <ChevronLeft size={17} />
+              </button>
               <div>
                 <span>Data transfer</span>
                 <h2 id="json-import-title">Import chats from JSON</h2>
@@ -6666,6 +6726,10 @@ export default function App({
               settings: update(current.settings),
             }))
           }
+          onBack={() => {
+            setProvidersOpen(false);
+            setSettingsOpen(true);
+          }}
           onClose={() => setProvidersOpen(false)}
         />
       )}
@@ -6685,6 +6749,18 @@ export default function App({
             aria-labelledby="custom-instructions-title"
           >
             <header>
+              <button
+                className="settings-back-button"
+                type="button"
+                aria-label="Back to settings"
+                title="Back to settings"
+                onClick={() => {
+                  setCustomInstructionsOpen(false);
+                  setSettingsOpen(true);
+                }}
+              >
+                <ChevronLeft size={17} />
+              </button>
               <div>
                 <span>Behavior</span>
                 <h2 id="custom-instructions-title">Custom instructions</h2>

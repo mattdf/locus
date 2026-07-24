@@ -1,4 +1,6 @@
 import {
+  ChevronLeft,
+  DollarSign,
   KeyRound,
   Link2,
   LoaderCircle,
@@ -23,6 +25,16 @@ interface ManagedUser {
   disabled: boolean;
   createdAt: string;
   activeSessions: number;
+  managedCredentialCount: number;
+  managedMonthlyLimitUsd: number | null;
+  managedMonthlyCostUsd: number;
+  managedLifetimeCostUsd: number;
+  managedMonthlyTokens: number;
+  managedUnpricedEvents: number;
+  monthlyCostUsd: number;
+  lifetimeCostUsd: number;
+  monthlyTokens: number;
+  unpricedEvents: number;
 }
 
 interface UsersResponse {
@@ -37,11 +49,21 @@ function accountRole(user: ManagedUser): "admin" | "user" {
   return user.role?.split(",").includes("admin") ? "admin" : "user";
 }
 
+function formatUsd(value: number): string {
+  return `$${value.toFixed(value > 0 && value < 0.01 ? 4 : 2)}`;
+}
+
+function formatTokens(value: number): string {
+  return Math.round(value).toLocaleString();
+}
+
 export function AdminAccountsModal({
   currentUserId,
+  onBack,
   onClose,
 }: {
   currentUserId: string;
+  onBack: () => void;
   onClose: () => void;
 }) {
   const [users, setUsers] = useState<ManagedUser[]>([]);
@@ -54,6 +76,8 @@ export function AdminAccountsModal({
   const [role, setRole] = useState<"admin" | "user">("user");
   const [passwordTarget, setPasswordTarget] = useState<ManagedUser | null>(null);
   const [replacementPassword, setReplacementPassword] = useState("");
+  const [limitTarget, setLimitTarget] = useState<ManagedUser | null>(null);
+  const [monthlyLimitDraft, setMonthlyLimitDraft] = useState("");
   const [activeTab, setActiveTab] = useState<"accounts" | "access">("accounts");
 
   const loadUsers = useCallback(async () => {
@@ -97,8 +121,12 @@ export function AdminAccountsModal({
 
   const updateAccount = async (
     user: ManagedUser,
-    changes: { disabled?: boolean; role?: "admin" | "user" },
-  ) => {
+    changes: {
+      disabled?: boolean;
+      role?: "admin" | "user";
+      managedMonthlyLimitUsd?: number | null;
+    },
+  ): Promise<boolean> => {
     setBusy(user.id);
     setError("");
     try {
@@ -109,10 +137,31 @@ export function AdminAccountsModal({
       setUsers((current) =>
         current.map((candidate) => candidate.id === user.id ? result.user : candidate),
       );
+      return true;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not update account");
+      return false;
     } finally {
       setBusy(null);
+    }
+  };
+
+  const saveAccountLimit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!limitTarget) return;
+    const monthlyLimitUsd = monthlyLimitDraft.trim() === ""
+      ? null
+      : Number(monthlyLimitDraft);
+    if (
+      monthlyLimitUsd !== null &&
+      (!Number.isFinite(monthlyLimitUsd) || monthlyLimitUsd < 0 || monthlyLimitUsd > 10_000_000)
+    ) {
+      setError("Enter a monthly limit between $0 and $10,000,000, or leave it blank for unlimited.");
+      return;
+    }
+    if (await updateAccount(limitTarget, { managedMonthlyLimitUsd: monthlyLimitUsd })) {
+      setLimitTarget(null);
+      setMonthlyLimitDraft("");
     }
   };
 
@@ -154,6 +203,10 @@ export function AdminAccountsModal({
         setPasswordTarget(null);
         setReplacementPassword("");
       }
+      if (limitTarget?.id === user.id) {
+        setLimitTarget(null);
+        setMonthlyLimitDraft("");
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not delete account");
     } finally {
@@ -176,6 +229,15 @@ export function AdminAccountsModal({
         aria-labelledby="account-management-title"
       >
         <header>
+          <button
+            className="settings-back-button"
+            type="button"
+            aria-label="Back to settings"
+            title="Back to settings"
+            onClick={onBack}
+          >
+            <ChevronLeft size={17} />
+          </button>
           <div>
             <span>Administration</span>
             <h2 id="account-management-title">Administration</h2>
@@ -277,6 +339,19 @@ export function AdminAccountsModal({
                       </div>
                       <div className="admin-account-row__status">
                         <span>{user.disabled ? "Suspended" : `${user.activeSessions} active ${user.activeSessions === 1 ? "session" : "sessions"}`}</span>
+                        {(user.monthlyCostUsd > 0 ||
+                          user.lifetimeCostUsd > 0 ||
+                          user.monthlyTokens > 0 ||
+                          user.unpricedEvents > 0) && (
+                          <small className="admin-managed-usage">
+                            API spend · {formatUsd(user.monthlyCostUsd)} this month
+                            {" · "}{formatTokens(user.monthlyTokens)} tokens
+                            {user.unpricedEvents > 0
+                              ? ` · ${user.unpricedEvents} unpriced`
+                              : ""}
+                            {" · "}{formatUsd(user.lifetimeCostUsd)} tracked total
+                          </small>
+                        )}
                         <small>Created {new Date(user.createdAt).toLocaleDateString()}</small>
                       </div>
                       <div className="admin-account-row__actions">
@@ -293,6 +368,26 @@ export function AdminAccountsModal({
                             <option value="admin">Admin</option>
                           </select>
                         </label>
+                        {(user.managedCredentialCount > 0 ||
+                          user.managedLifetimeCostUsd > 0 ||
+                          user.managedMonthlyLimitUsd !== null) && (
+                          <button
+                            type="button"
+                            disabled={userBusy || busy !== null}
+                            onClick={() => {
+                              setLimitTarget(user);
+                              setMonthlyLimitDraft(
+                                user.managedMonthlyLimitUsd === null
+                                  ? ""
+                                  : String(user.managedMonthlyLimitUsd),
+                              );
+                              setPasswordTarget(null);
+                              setReplacementPassword("");
+                            }}
+                          >
+                            <DollarSign size={12} /> Budget
+                          </button>
+                        )}
                         {!ownAccount && (
                           <>
                             <button
@@ -309,6 +404,8 @@ export function AdminAccountsModal({
                               onClick={() => {
                                 setPasswordTarget(user);
                                 setReplacementPassword("");
+                                setLimitTarget(null);
+                                setMonthlyLimitDraft("");
                               }}
                             >
                               <KeyRound size={12} /> Password
@@ -331,6 +428,51 @@ export function AdminAccountsModal({
               </div>
             )}
           </section>
+
+          {limitTarget && (
+            <form className="admin-budget-editor" onSubmit={saveAccountLimit}>
+              <div>
+                <DollarSign size={14} />
+                <span>
+                  <strong>Managed API account budget</strong>
+                  <small>
+                    {limitTarget.email} has used {formatUsd(limitTarget.managedMonthlyCostUsd)}
+                    {" "}and {formatTokens(limitTarget.managedMonthlyTokens)} tokens this UTC month.
+                    The limit applies only to administrator-managed keys.
+                  </small>
+                </span>
+              </div>
+              <label>
+                <span>Monthly limit (USD)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={10_000_000}
+                  step="0.01"
+                  inputMode="decimal"
+                  aria-label={`Monthly managed API limit for ${limitTarget.email}`}
+                  placeholder="Unlimited"
+                  value={monthlyLimitDraft}
+                  onChange={(event) => setMonthlyLimitDraft(event.target.value)}
+                  autoFocus
+                />
+              </label>
+              <footer>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLimitTarget(null);
+                    setMonthlyLimitDraft("");
+                  }}
+                >
+                  Cancel
+                </button>
+                <button className="primary-button" type="submit" disabled={busy !== null}>
+                  Save budget
+                </button>
+              </footer>
+            </form>
+          )}
 
           {passwordTarget && (
             <form className="admin-password-reset" onSubmit={resetPassword}>

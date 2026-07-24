@@ -3,7 +3,8 @@ import type { GenerationMetrics } from "../src/types.ts";
 import { streamResponse, type RespondInput, type TokenUsage } from "./openai.ts";
 import { calculateGenerationCost } from "./pricing.ts";
 import { isHosted } from "./config.ts";
-import { query } from "./db.ts";
+import { query, transaction } from "./db.ts";
+import { releaseManagedGeneration } from "./managed-usage.ts";
 
 type GenerationStatus = "running" | "completed" | "stopped" | "failed";
 
@@ -23,6 +24,10 @@ export interface GenerationJob {
   startedAt: number;
   provider: RespondInput["provider"];
   providerLabel?: string;
+  managedCredentialId?: string;
+  credentialKind: string;
+  credentialRef: string;
+  credentialLabel: string;
   model: string;
   generation?: GenerationMetrics;
   error?: string;
@@ -48,10 +53,21 @@ function persistStarted(job: GenerationJob, input: RespondInput): Promise<void> 
   if (!isHosted) return Promise.resolve();
   return query(
     `insert into "locus_generation_jobs"
-       ("ownerUserId", "id", "provider", "model", "purpose", "status")
-     values ($1, $2, $3, $4, $5, 'running')
+       ("ownerUserId", "id", "provider", "model", "purpose", "status",
+        "managedCredentialId", "credentialKind", "credentialRef", "credentialLabel")
+     values ($1, $2, $3, $4, $5, 'running', $6, $7, $8, $9)
      on conflict ("ownerUserId", "id") do nothing`,
-    [job.ownerUserId, job.id, job.provider, job.model, input.purpose ?? "chat"],
+    [
+      job.ownerUserId,
+      job.id,
+      job.provider,
+      job.model,
+      input.purpose ?? "chat",
+      job.managedCredentialId ?? null,
+      job.credentialKind,
+      job.credentialRef,
+      job.credentialLabel,
+    ],
   ).then(() => undefined).catch(() => undefined);
 }
 
@@ -73,39 +89,64 @@ function persistCheckpoint(job: GenerationJob): void {
 function persistFinished(job: GenerationJob): void {
   if (!isHosted || !job.generation) return;
   const metrics = job.generation;
-  void job.persistenceReady.then(() => query(
-      `update "locus_generation_jobs"
-       set "status" = $3, "partialContent" = $4, "metrics" = $5::jsonb,
-           "errorCode" = $6, "updatedAt" = current_timestamp, "finishedAt" = current_timestamp
-       where "ownerUserId" = $1 and "id" = $2`,
-      [
-        job.ownerUserId,
-        job.id,
-        job.status,
-        job.content,
-        JSON.stringify(metrics),
-        job.status === "failed" ? "upstream_error" : null,
-      ],
-    )).then(() =>
-    query(
-      `insert into "locus_usage_events"
-         ("ownerUserId", "generationId", "provider", "model", "inputTokens",
-          "cachedInputTokens", "outputTokens", "reasoningTokens", "totalTokens", "totalCostUsd")
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-      [
-        job.ownerUserId,
-        job.id,
-        metrics.provider,
-        metrics.model,
-        metrics.inputTokens,
-        metrics.cachedInputTokens,
-        metrics.outputTokens,
-        metrics.reasoningTokens,
-        metrics.totalTokens,
-        metrics.totalCostUsd,
-      ],
-    ),
-  ).catch(() => undefined);
+  void job.persistenceReady
+    .then(() => transaction(async (client) => {
+      await client.query(
+        `update "locus_generation_jobs"
+         set "status" = $3, "partialContent" = $4, "metrics" = $5::jsonb,
+             "errorCode" = $6, "updatedAt" = current_timestamp, "finishedAt" = current_timestamp
+         where "ownerUserId" = $1 and "id" = $2`,
+        [
+          job.ownerUserId,
+          job.id,
+          job.status,
+          job.content,
+          JSON.stringify(metrics),
+          job.status === "failed" ? "upstream_error" : null,
+        ],
+      );
+      await client.query(
+        `insert into "locus_usage_events"
+           ("ownerUserId", "generationId", "provider", "model", "inputTokens",
+            "cachedInputTokens", "outputTokens", "reasoningTokens", "totalTokens",
+            "totalCostUsd", "managedCredentialId", "credentialKind", "credentialRef",
+            "credentialLabel")
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+        [
+          job.ownerUserId,
+          job.id,
+          metrics.provider,
+          metrics.model,
+          metrics.inputTokens,
+          metrics.cachedInputTokens,
+          metrics.outputTokens,
+          metrics.reasoningTokens,
+          metrics.totalTokens,
+          metrics.totalCostUsd,
+          job.managedCredentialId ?? null,
+          job.credentialKind,
+          job.credentialRef,
+          job.credentialLabel,
+        ],
+      );
+      if (job.managedCredentialId) {
+        await client.query(
+          `delete from "locus_managed_usage_reservations"
+            where "ownerUserId" = $1 and "generationId" = $2`,
+          [job.ownerUserId, job.id],
+        );
+      }
+    }))
+    .catch((error) => {
+      console.error(
+        `[usage] Could not persist generation ${job.id}: ${
+          error instanceof Error ? error.message : "unknown error"
+        }`,
+      );
+      if (job.managedCredentialId) {
+        void releaseManagedGeneration(job.ownerUserId, job.id).catch(() => undefined);
+      }
+    });
 }
 
 function writeEvent(response: Response, event: GenerationEvent): void {
@@ -203,7 +244,17 @@ export function getGeneration(ownerUserId: string, id: string): GenerationJob | 
   return generations.get(generationKey(ownerUserId, id));
 }
 
-export function createGeneration(ownerUserId: string, id: string, input: RespondInput): GenerationJob {
+export function createGeneration(
+  ownerUserId: string,
+  id: string,
+  input: RespondInput,
+  attribution?: {
+    managedCredentialId?: string;
+    credentialKind: string;
+    credentialRef: string;
+    credentialLabel: string;
+  },
+): GenerationJob {
   const key = generationKey(ownerUserId, id);
   const existing = generations.get(key);
   if (existing) return existing;
@@ -225,6 +276,10 @@ export function createGeneration(ownerUserId: string, id: string, input: Respond
     startedAt: Date.now(),
     provider: input.provider,
     providerLabel: input.providerLabel,
+    managedCredentialId: attribution?.managedCredentialId,
+    credentialKind: attribution?.credentialKind ?? "provider",
+    credentialRef: attribution?.credentialRef ?? `provider:${input.provider}`,
+    credentialLabel: attribution?.credentialLabel ?? input.providerLabel ?? input.provider,
     model: input.model,
     subscribers: new Set(),
     lastCheckpointAt: Date.now(),

@@ -1,6 +1,7 @@
 import {
   AtSign,
   CheckCircle2,
+  ChevronLeft,
   KeyRound,
   LoaderCircle,
   ShieldCheck,
@@ -37,10 +38,12 @@ async function accountRequest(pathname: string, body: Record<string, unknown>) {
 export function AccountSettingsModal({
   user,
   onRefresh,
+  onBack,
   onClose,
 }: {
   user: RuntimeUser;
   onRefresh: () => Promise<void>;
+  onBack: () => void;
   onClose: () => void;
 }) {
   const [name, setName] = useState(user.name);
@@ -167,6 +170,15 @@ export function AccountSettingsModal({
         aria-labelledby="account-settings-title"
       >
         <header>
+          <button
+            className="settings-back-button"
+            type="button"
+            aria-label="Back to settings"
+            title="Back to settings"
+            onClick={onBack}
+          >
+            <ChevronLeft size={17} />
+          </button>
           <div>
             <span>Private account</span>
             <h2 id="account-settings-title">Account settings</h2>

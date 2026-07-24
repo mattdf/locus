@@ -17,6 +17,17 @@ import {
 function hostedProvider(provider: ProviderId): provider is BuiltInProviderId {
   return (BUILT_IN_PROVIDER_IDS as readonly string[]).includes(provider);
 }
+
+function providerName(provider: BuiltInProviderId): string {
+  return {
+    openai: "OpenAI",
+    openrouter: "OpenRouter",
+    anthropic: "Claude",
+    kimi: "Kimi",
+    glm: "GLM",
+    minimax: "MiniMax",
+  }[provider];
+}
 function keyAt(version: number): Buffer {
   const encoded = credentialEncryptionKeys[version];
   if (!encoded) throw new Error(`Credential encryption key version ${version} is unavailable`);
@@ -83,17 +94,28 @@ export async function saveCredential(
   const secret = raw.trim();
   if (secret.length < 10 || secret.length > 5_000) throw new Error("Enter a valid API key");
   const encrypted = encryptCredential(ownerUserId, provider, secret);
+  const credentialId = randomUUID();
   await query(
     `insert into "locus_provider_credentials"
-       ("ownerUserId", "provider", "ciphertext", "nonce", "authTag", "keyVersion", "updatedAt")
-     values ($1, $2, $3, $4, $5, $6, current_timestamp)
+       ("ownerUserId", "provider", "ciphertext", "nonce", "authTag", "keyVersion",
+        "credentialId", "updatedAt")
+     values ($1, $2, $3, $4, $5, $6, $7, current_timestamp)
      on conflict ("ownerUserId", "provider") do update set
        "ciphertext" = excluded."ciphertext",
        "nonce" = excluded."nonce",
        "authTag" = excluded."authTag",
        "keyVersion" = excluded."keyVersion",
+       "credentialId" = excluded."credentialId",
        "updatedAt" = current_timestamp`,
-    [ownerUserId, provider, encrypted.ciphertext, encrypted.nonce, encrypted.authTag, encrypted.keyVersion],
+    [
+      ownerUserId,
+      provider,
+      encrypted.ciphertext,
+      encrypted.nonce,
+      encrypted.authTag,
+      encrypted.keyVersion,
+      credentialId,
+    ],
   );
   return { configured: true, required: true, source: "saved" };
 }
@@ -116,35 +138,81 @@ export async function resolveCredential(
   ownerUserId: string,
   provider: BuiltInProviderId,
 ): Promise<string | null> {
-  if (!isHosted) return readProviderApiKey(provider);
+  return (await resolveCredentialDetails(ownerUserId, provider))?.apiKey ?? null;
+}
+
+export interface ResolvedCredential {
+  apiKey: string;
+  source: "saved" | "managed";
+  managedCredentialId?: string;
+  credentialKind: "personal" | "managed";
+  credentialRef: string;
+  credentialLabel: string;
+}
+
+export async function resolveCredentialDetails(
+  ownerUserId: string,
+  provider: BuiltInProviderId,
+): Promise<ResolvedCredential | null> {
+  if (!isHosted) {
+    const apiKey = await readProviderApiKey(provider);
+    return apiKey
+      ? {
+          apiKey,
+          source: "saved",
+          credentialKind: "personal",
+          credentialRef: `local:${provider}`,
+          credentialLabel: `${providerName(provider)} key`,
+        }
+      : null;
+  }
   const result = await query<{
+    credentialId: string;
     ciphertext: Buffer;
     nonce: Buffer;
     authTag: Buffer;
     keyVersion: number;
   }>(
-    `select "ciphertext", "nonce", "authTag", "keyVersion"
+    `select "credentialId", "ciphertext", "nonce", "authTag", "keyVersion"
      from "locus_provider_credentials" where "ownerUserId" = $1 and "provider" = $2`,
     [ownerUserId, provider],
   );
   const row = result.rows[0];
-  if (row) return decryptCredential(ownerUserId, provider, row);
+  if (row) {
+    return {
+      apiKey: decryptCredential(ownerUserId, provider, row),
+      source: "saved",
+      credentialKind: "personal",
+      credentialRef: `personal:${row.credentialId}`,
+      credentialLabel: `${providerName(provider)} personal key`,
+    };
+  }
 
   const managed = await query<{
     id: string;
+    label: string;
     ciphertext: Buffer;
     nonce: Buffer;
     authTag: Buffer;
     keyVersion: number;
   }>(
-    `select c."id", c."ciphertext", c."nonce", c."authTag", c."keyVersion"
+    `select c."id", c."label", c."ciphertext", c."nonce", c."authTag", c."keyVersion"
        from "locus_user_managed_credentials" a
        join "locus_managed_credentials" c on c."id" = a."managedCredentialId"
       where a."ownerUserId" = $1 and a."provider" = $2 and c."revokedAt" is null`,
     [ownerUserId, provider],
   );
   const managedRow = managed.rows[0];
-  return managedRow ? decryptCredential(`managed:${managedRow.id}`, provider, managedRow) : null;
+  return managedRow
+    ? {
+        apiKey: decryptCredential(`managed:${managedRow.id}`, provider, managedRow),
+        source: "managed",
+        managedCredentialId: managedRow.id,
+        credentialKind: "managed",
+        credentialRef: `managed:${managedRow.id}`,
+        credentialLabel: managedRow.label,
+      }
+    : null;
 }
 
 export interface ManagedCredentialSummary {
@@ -155,20 +223,55 @@ export interface ManagedCredentialSummary {
   revokedAt: Date | null;
   assignedUsers: number;
   pendingInvites: number;
+  monthlyLimitUsd: number | null;
+  monthlyCostUsd: number;
+  lifetimeCostUsd: number;
+  monthlyTokens: number;
+  unpricedEvents: number;
 }
 
 export async function listManagedCredentials(): Promise<ManagedCredentialSummary[]> {
   const result = await query<ManagedCredentialSummary>(
     `select c."id", c."provider", c."label", c."createdAt", c."revokedAt",
-            count(distinct a."ownerUserId")::int as "assignedUsers",
-            count(distinct i."id") filter (
-              where i."usedAt" is null and i."revokedAt" is null
-                and (i."expiresAt" is null or i."expiresAt" > current_timestamp)
-            )::int as "pendingInvites"
+            c."monthlyLimitUsd"::double precision as "monthlyLimitUsd",
+            coalesce(a."assignedUsers", 0)::int as "assignedUsers",
+            coalesce(i."pendingInvites", 0)::int as "pendingInvites",
+            coalesce(u."monthlyCostUsd", 0)::double precision as "monthlyCostUsd",
+            coalesce(u."lifetimeCostUsd", 0)::double precision as "lifetimeCostUsd",
+            coalesce(u."monthlyTokens", 0)::double precision as "monthlyTokens",
+            coalesce(u."unpricedEvents", 0)::int as "unpricedEvents"
        from "locus_managed_credentials" c
-       left join "locus_user_managed_credentials" a on a."managedCredentialId" = c."id"
-       left join "locus_invites" i on i."managedCredentialId" = c."id"
-      group by c."id"
+       left join lateral (
+         select count(distinct "ownerUserId")::int as "assignedUsers"
+           from "locus_user_managed_credentials"
+          where "managedCredentialId" = c."id"
+       ) a on true
+       left join lateral (
+         select count(*)::int as "pendingInvites"
+           from "locus_invites"
+          where "managedCredentialId" = c."id"
+            and "usedAt" is null and "revokedAt" is null
+            and ("expiresAt" is null or "expiresAt" > current_timestamp)
+       ) i on true
+       left join lateral (
+         select
+           sum("totalCostUsd") filter (
+             where "createdAt" >=
+               (date_trunc('month', current_timestamp at time zone 'UTC') at time zone 'UTC')
+           ) as "monthlyCostUsd",
+           sum("totalCostUsd") as "lifetimeCostUsd",
+           sum("totalTokens") filter (
+             where "createdAt" >=
+               (date_trunc('month', current_timestamp at time zone 'UTC') at time zone 'UTC')
+           ) as "monthlyTokens",
+           count(*) filter (
+             where "totalCostUsd" is null and "totalTokens" is not null
+               and "createdAt" >=
+                 (date_trunc('month', current_timestamp at time zone 'UTC') at time zone 'UTC')
+           )::int as "unpricedEvents"
+           from "locus_usage_events"
+          where "managedCredentialId" = c."id"
+       ) u on true
       order by c."createdAt" desc`,
   );
   return result.rows;
@@ -178,19 +281,28 @@ export async function createManagedCredential(input: {
   provider: BuiltInProviderId;
   label: string;
   apiKey: string;
+  monthlyLimitUsd?: number | null;
   administratorUserId: string;
 }): Promise<ManagedCredentialSummary> {
   if (!hostedProvider(input.provider)) throw new Error("Choose a built-in provider");
   const label = input.label.trim();
   const secret = input.apiKey.trim();
+  const monthlyLimitUsd = input.monthlyLimitUsd ?? null;
   if (!label || label.length > 120) throw new Error("Enter a key label of at most 120 characters");
   if (secret.length < 10 || secret.length > 5_000) throw new Error("Enter a valid API key");
+  if (
+    monthlyLimitUsd !== null &&
+    (!Number.isFinite(monthlyLimitUsd) || monthlyLimitUsd < 0 || monthlyLimitUsd > 10_000_000)
+  ) {
+    throw new Error("The monthly managed-key limit must be between $0 and $10,000,000");
+  }
   const id = randomUUID();
   const encrypted = encryptCredential(`managed:${id}`, input.provider, secret);
   await query(
     `insert into "locus_managed_credentials"
-       ("id", "provider", "label", "ciphertext", "nonce", "authTag", "keyVersion", "createdByUserId")
-     values ($1, $2, $3, $4, $5, $6, $7, $8)`,
+       ("id", "provider", "label", "ciphertext", "nonce", "authTag", "keyVersion",
+        "monthlyLimitUsd", "createdByUserId")
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [
       id,
       input.provider,
@@ -199,12 +311,33 @@ export async function createManagedCredential(input: {
       encrypted.nonce,
       encrypted.authTag,
       encrypted.keyVersion,
+      monthlyLimitUsd,
       input.administratorUserId,
     ],
   );
   const created = (await listManagedCredentials()).find((credential) => credential.id === id);
   if (!created) throw new Error("The managed key was created but could not be loaded");
   return created;
+}
+
+export async function updateManagedCredentialLimit(
+  id: string,
+  monthlyLimitUsd: number | null,
+): Promise<ManagedCredentialSummary | null> {
+  if (
+    monthlyLimitUsd !== null &&
+    (!Number.isFinite(monthlyLimitUsd) || monthlyLimitUsd < 0 || monthlyLimitUsd > 10_000_000)
+  ) {
+    throw new Error("The monthly managed-key limit must be between $0 and $10,000,000");
+  }
+  const result = await query(
+    `update "locus_managed_credentials"
+        set "monthlyLimitUsd" = $2
+      where "id" = $1 and "revokedAt" is null`,
+    [id, monthlyLimitUsd],
+  );
+  if (!result.rowCount) return null;
+  return (await listManagedCredentials()).find((credential) => credential.id === id) ?? null;
 }
 
 export async function revokeManagedCredential(

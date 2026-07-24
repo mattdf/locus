@@ -9,7 +9,7 @@ import {
   credentialStatuses,
   decryptCredential,
   encryptCredential,
-  resolveCredential,
+  resolveCredentialDetails,
 } from "./credentials.ts";
 import {
   BUILT_IN_PROVIDER_IDS,
@@ -42,6 +42,11 @@ export interface ResolvedProviderConnection {
   label: string;
   baseUrl?: string;
   apiKey?: string;
+  credentialSource?: "saved" | "managed";
+  managedCredentialId?: string;
+  credentialKind?: string;
+  credentialRef?: string;
+  credentialLabel?: string;
 }
 
 function validCustomId(id: string): boolean {
@@ -183,11 +188,23 @@ export async function createCustomProvider(input: {
     return customSummary({ id, label, baseUrl }, Boolean(apiKey));
   }
   const encrypted = apiKey ? encryptCredential(input.ownerUserId, `custom:${id}`, apiKey) : null;
+  const credentialId = apiKey ? randomUUID() : null;
   await query(
     `insert into "locus_custom_providers"
-       ("ownerUserId", "id", "label", "baseUrl", "ciphertext", "nonce", "authTag", "keyVersion")
-     values ($1, $2, $3, $4, $5, $6, $7, $8)`,
-    [input.ownerUserId, id, label, baseUrl, encrypted?.ciphertext ?? null, encrypted?.nonce ?? null, encrypted?.authTag ?? null, encrypted?.keyVersion ?? null],
+       ("ownerUserId", "id", "label", "baseUrl", "ciphertext", "nonce", "authTag",
+        "keyVersion", "credentialId")
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+    [
+      input.ownerUserId,
+      id,
+      label,
+      baseUrl,
+      encrypted?.ciphertext ?? null,
+      encrypted?.nonce ?? null,
+      encrypted?.authTag ?? null,
+      encrypted?.keyVersion ?? null,
+      credentialId,
+    ],
   );
   return customSummary({ id, label, baseUrl }, Boolean(apiKey));
 }
@@ -214,10 +231,12 @@ export async function updateCustomProvider(input: {
     return customSummary(provider, Boolean(await readLocalCustomKey(input.id)));
   }
   let encrypted: ReturnType<typeof encryptCredential> | null | undefined;
+  let credentialId: string | null | undefined;
   if (input.apiKey !== undefined) {
     const secret = input.apiKey?.trim() || null;
     if (secret && secret.length > 5_000) throw new Error("The API key is too long");
     encrypted = secret ? encryptCredential(input.ownerUserId, `custom:${input.id}`, secret) : null;
+    credentialId = secret ? randomUUID() : null;
   }
   const result = await query<{ ciphertext: Buffer | null }>(
     `update "locus_custom_providers" set "label" = $3, "baseUrl" = $4,
@@ -225,9 +244,21 @@ export async function updateCustomProvider(input: {
        "nonce" = case when $5::boolean then $7 else "nonce" end,
        "authTag" = case when $5::boolean then $8 else "authTag" end,
        "keyVersion" = case when $5::boolean then $9 else "keyVersion" end,
+       "credentialId" = case when $5::boolean then $10 else "credentialId" end,
        "updatedAt" = current_timestamp
      where "ownerUserId" = $1 and "id" = $2 returning "ciphertext"`,
-    [input.ownerUserId, input.id, label, baseUrl, input.apiKey !== undefined, encrypted?.ciphertext ?? null, encrypted?.nonce ?? null, encrypted?.authTag ?? null, encrypted?.keyVersion ?? null],
+    [
+      input.ownerUserId,
+      input.id,
+      label,
+      baseUrl,
+      input.apiKey !== undefined,
+      encrypted?.ciphertext ?? null,
+      encrypted?.nonce ?? null,
+      encrypted?.authTag ?? null,
+      encrypted?.keyVersion ?? null,
+      credentialId ?? null,
+    ],
   );
   return result.rows[0] ? customSummary({ id: input.id, label, baseUrl }, Boolean(result.rows[0].ciphertext)) : null;
 }
@@ -249,9 +280,28 @@ export async function deleteCustomProvider(ownerUserId: string, id: string): Pro
 export async function resolveProviderConnection(ownerUserId: string, id: string): Promise<ResolvedProviderConnection | null> {
   if ((BUILT_IN_PROVIDER_IDS as readonly string[]).includes(id)) {
     const provider = id as BuiltInProviderId;
-    const apiKey = isHosted ? await resolveCredential(ownerUserId, provider) : await readProviderApiKey(provider);
+    const credential = isHosted
+      ? await resolveCredentialDetails(ownerUserId, provider)
+      : null;
+    const apiKey = isHosted ? credential?.apiKey : await readProviderApiKey(provider);
     const option = PROVIDER_OPTIONS.find((candidate) => candidate.id === provider)!;
-    return { id, kind: provider, label: option.label, ...(apiKey ? { apiKey } : {}) };
+    return {
+      id,
+      kind: provider,
+      label: option.label,
+      ...(apiKey ? { apiKey } : {}),
+      ...(credential
+        ? {
+            credentialSource: credential.source,
+            credentialKind: credential.credentialKind,
+            credentialRef: credential.credentialRef,
+            credentialLabel: credential.credentialLabel,
+            ...(credential.managedCredentialId
+              ? { managedCredentialId: credential.managedCredentialId }
+              : {}),
+          }
+        : {}),
+    };
   }
   if (!validCustomId(id)) return null;
   if (!isHosted) {
@@ -259,8 +309,15 @@ export async function resolveProviderConnection(ownerUserId: string, id: string)
     if (!provider) return null;
     return { id, kind: "custom", label: provider.label, baseUrl: normalizeProviderBaseUrl(provider.baseUrl), apiKey: (await readLocalCustomKey(id)) ?? undefined };
   }
-  const result = await query<LocalCustomProvider & StoredCredential & { ciphertext: Buffer | null; nonce: Buffer | null; authTag: Buffer | null; keyVersion: number | null }>(
-    `select "id", "label", "baseUrl", "ciphertext", "nonce", "authTag", "keyVersion"
+  const result = await query<LocalCustomProvider & StoredCredential & {
+    ciphertext: Buffer | null;
+    nonce: Buffer | null;
+    authTag: Buffer | null;
+    keyVersion: number | null;
+    credentialId: string | null;
+  }>(
+    `select "id", "label", "baseUrl", "ciphertext", "nonce", "authTag",
+            "keyVersion", "credentialId"
        from "locus_custom_providers" where "ownerUserId" = $1 and "id" = $2`,
     [ownerUserId, id],
   );
@@ -270,5 +327,18 @@ export async function resolveProviderConnection(ownerUserId: string, id: string)
   const apiKey = provider.ciphertext && provider.nonce && provider.authTag && provider.keyVersion !== null
     ? decryptCredential(ownerUserId, `custom:${id}`, provider as StoredCredential)
     : undefined;
-  return { id, kind: "custom", label: provider.label, baseUrl, apiKey };
+  return {
+    id,
+    kind: "custom",
+    label: provider.label,
+    baseUrl,
+    apiKey,
+    credentialKind: provider.credentialId ? "custom" : "custom-endpoint",
+    credentialRef: provider.credentialId
+      ? `custom:${provider.credentialId}`
+      : `custom-endpoint:${provider.id}`,
+    credentialLabel: provider.credentialId
+      ? `${provider.label} key`
+      : `${provider.label} endpoint`,
+  };
 }

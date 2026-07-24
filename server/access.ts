@@ -41,6 +41,7 @@ export interface InviteSummary {
   managedCredentialLabel: string | null;
   managedProvider: string | null;
   managedCredentialRevokedAt: Date | null;
+  accountMonthlyLimitUsd: number | null;
 }
 
 export interface WaitlistEntry {
@@ -175,6 +176,7 @@ export async function listInvites(): Promise<InviteSummary[]> {
   const result = await query<InviteSummary>(
     `select i."id", i."email", i."createdAt", i."expiresAt", i."revokedAt", i."usedAt",
             u."email" as "usedByEmail", i."managedCredentialId",
+            i."accountMonthlyLimitUsd"::double precision as "accountMonthlyLimitUsd",
             c."label" as "managedCredentialLabel", c."provider" as "managedProvider",
             c."revokedAt" as "managedCredentialRevokedAt"
        from "locus_invites" i
@@ -190,6 +192,7 @@ export async function createInvite(input: {
   email?: string;
   expiresInDays?: number | null;
   managedCredentialId?: string | null;
+  accountMonthlyLimitUsd?: number | null;
 }): Promise<{ invite: InviteSummary; url: string }> {
   const id = randomUUID();
   const token = randomBytes(32).toString("base64url");
@@ -202,6 +205,23 @@ export async function createInvite(input: {
     throw new AccessError(400, "INVALID_EXPIRY", "Invite expiry must be between 1 and 365 days");
   }
   const managedCredentialId = input.managedCredentialId?.trim() || null;
+  const accountMonthlyLimitUsd = managedCredentialId
+    ? input.accountMonthlyLimitUsd ?? null
+    : null;
+  if (
+    accountMonthlyLimitUsd !== null &&
+    (
+      !Number.isFinite(accountMonthlyLimitUsd) ||
+      accountMonthlyLimitUsd < 0 ||
+      accountMonthlyLimitUsd > 10_000_000
+    )
+  ) {
+    throw new AccessError(
+      400,
+      "INVALID_ACCOUNT_LIMIT",
+      "The invited account limit must be between $0 and $10,000,000",
+    );
+  }
   if (managedCredentialId) {
     const credential = await query<{ active: boolean }>(
       `select ("revokedAt" is null) as "active" from "locus_managed_credentials" where "id" = $1`,
@@ -214,10 +234,19 @@ export async function createInvite(input: {
   await transaction(async (client) => {
     await client.query(
       `insert into "locus_invites"
-         ("id", "tokenHash", "email", "managedCredentialId", "createdByUserId", "expiresAt")
-       values ($1, $2, $3, $4, $5,
-         case when $6::integer is null then null else current_timestamp + make_interval(days => $6) end)`,
-      [id, inviteHash(token), email, managedCredentialId, input.administratorUserId, expiresInDays],
+         ("id", "tokenHash", "email", "managedCredentialId", "accountMonthlyLimitUsd",
+          "createdByUserId", "expiresAt")
+       values ($1, $2, $3, $4, $5, $6,
+         case when $7::integer is null then null else current_timestamp + make_interval(days => $7) end)`,
+      [
+        id,
+        inviteHash(token),
+        email,
+        managedCredentialId,
+        accountMonthlyLimitUsd,
+        input.administratorUserId,
+        expiresInDays,
+      ],
     );
     if (email) {
       await client.query(
@@ -271,8 +300,11 @@ async function lockedInvite(client: PoolClient, token: string) {
     managedCredentialId: string | null;
     managedProvider: string | null;
     managedCredentialRevokedAt: Date | null;
+    accountMonthlyLimitUsd: number | null;
   }>(
-    `select i."id", i."email", i."expiresAt", i."revokedAt", i."usedAt", i."managedCredentialId",
+    `select i."id", i."email", i."expiresAt", i."revokedAt", i."usedAt",
+            i."managedCredentialId",
+            i."accountMonthlyLimitUsd"::double precision as "accountMonthlyLimitUsd",
             c."provider" as "managedProvider", c."revokedAt" as "managedCredentialRevokedAt"
        from "locus_invites" i
        left join "locus_managed_credentials" c on c."id" = i."managedCredentialId"
@@ -324,6 +356,19 @@ export async function registerAccount(input: {
                "createdAt" = current_timestamp`,
             [created.id, invite.managedProvider, invite.managedCredentialId, invite.id],
           );
+          if (invite.accountMonthlyLimitUsd !== null) {
+            await client.query(
+              `insert into "locus_managed_account_limits"
+                 ("ownerUserId", "monthlyLimitUsd", "updatedByUserId", "updatedAt")
+               select $1, $2, "createdByUserId", current_timestamp
+                 from "locus_invites" where "id" = $3
+               on conflict ("ownerUserId") do update set
+                 "monthlyLimitUsd" = excluded."monthlyLimitUsd",
+                 "updatedByUserId" = excluded."updatedByUserId",
+                 "updatedAt" = current_timestamp`,
+              [created.id, invite.accountMonthlyLimitUsd, invite.id],
+            );
+          }
         }
         await client.query(
           `update "locus_waitlist_entries"

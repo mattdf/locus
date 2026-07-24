@@ -1,5 +1,6 @@
 import {
   Check,
+  ChevronLeft,
   Copy,
   ExternalLink,
   Link2,
@@ -103,7 +104,13 @@ export function ShareCreatedModal({
   );
 }
 
-export function SharedChatsModal({ onClose }: { onClose: () => void }) {
+export function SharedChatsModal({
+  onBack,
+  onClose,
+}: {
+  onBack: () => void;
+  onClose: () => void;
+}) {
   const [shares, setShares] = useState<SharedChatSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -158,6 +165,15 @@ export function SharedChatsModal({ onClose }: { onClose: () => void }) {
         aria-labelledby="shared-chats-title"
       >
         <header>
+          <button
+            className="settings-back-button"
+            type="button"
+            aria-label="Back to settings"
+            title="Back to settings"
+            onClick={onBack}
+          >
+            <ChevronLeft size={17} />
+          </button>
           <div>
             <span>Public snapshots</span>
             <h2 id="shared-chats-title">Shared chats</h2>
@@ -222,4 +238,3 @@ export function SharedChatsModal({ onClose }: { onClose: () => void }) {
     </div>
   );
 }
-

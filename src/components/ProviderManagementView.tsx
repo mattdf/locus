@@ -1,5 +1,6 @@
 import {
   Check,
+  ChevronLeft,
   ChevronRight,
   KeyRound,
   LoaderCircle,
@@ -69,6 +70,7 @@ export function ProviderManagementView({
   settings,
   onConnectionsChange,
   updateSettings,
+  onBack,
   onClose,
 }: {
   mode: "local" | "hosted";
@@ -76,6 +78,7 @@ export function ProviderManagementView({
   settings: Settings;
   onConnectionsChange: (connections: ProviderConnectionSummary[]) => void;
   updateSettings: (update: (settings: Settings) => Settings) => void;
+  onBack: () => void;
   onClose: () => void;
 }) {
   const [catalogs, setCatalogs] = useState<Record<string, ProviderModelOption[]>>({});
@@ -296,6 +299,7 @@ export function ProviderManagementView({
     <div className="settings-modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
       <section className="settings-modal settings-modal--providers" role="dialog" aria-modal="true" aria-labelledby="provider-settings-title">
         <header>
+          <button className="settings-back-button" type="button" aria-label="Back to settings" title="Back to settings" onClick={onBack}><ChevronLeft size={17} /></button>
           <div><span>Model access</span><h2 id="provider-settings-title">Providers</h2></div>
           <button className="icon-button" type="button" aria-label="Close providers" onClick={onClose}><X size={17} /></button>
         </header>

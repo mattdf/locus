@@ -168,7 +168,27 @@ body {
 .loading-screen--error { gap: 8px; text-align: center; }
 .loading-screen--error button { margin-top: 8px; padding: 7px 14px; cursor: pointer; }
 
-.account-summary { cursor: pointer; }
+.account-summary {
+  min-height: 72px !important;
+  cursor: pointer;
+}
+
+.account-summary__hint {
+  margin-top: 4px;
+  color: var(--accent);
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.account-summary__action {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--accent);
+  font-size: 8px;
+  font-weight: 800;
+}
 
 button,
 input,
@@ -4500,6 +4520,26 @@ body.resizing-drawer {
   gap: 16px;
 }
 
+.settings-back-button {
+  display: grid;
+  width: 31px;
+  height: 31px;
+  flex: 0 0 auto;
+  padding: 0;
+  place-items: center;
+  color: #68736d;
+  background: transparent;
+  border: 1px solid #d9d6cd;
+  border-radius: 7px;
+  cursor: pointer;
+}
+
+.settings-back-button:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: rgba(13, 112, 101, 0.3);
+}
+
 .settings-modal > header .icon-button {
   margin-left: auto;
 }
@@ -4564,6 +4604,272 @@ body.resizing-drawer {
   width: min(650px, 100%);
   max-height: calc(100vh - 48px);
   flex-direction: column;
+}
+
+.settings-modal--usage {
+  display: flex;
+  width: min(760px, 100%);
+  max-height: calc(100vh - 48px);
+  flex-direction: column;
+}
+
+.usage-view {
+  min-height: 0;
+  padding-right: 3px;
+  margin-top: 15px;
+  overflow-y: auto;
+}
+
+.usage-view__summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.usage-view__summary > div {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 66px;
+  padding: 11px 13px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid rgba(13, 112, 101, .13);
+  border-radius: 8px;
+}
+
+.usage-view__summary span,
+.usage-view__section > header span,
+.usage-view__credential-name span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.usage-view__summary small,
+.usage-view__section > header small,
+.usage-view__credential-name small,
+.usage-view__credential-metrics small,
+.usage-view__month-total small {
+  color: #7f8984;
+  font-size: 8px;
+}
+
+.usage-view__summary strong {
+  color: var(--ink);
+  font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-view__error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 10px;
+  margin-bottom: 9px;
+  color: var(--danger);
+  background: #f6e9e6;
+  border: 1px solid #e7cbc6;
+  border-radius: 7px;
+  font-size: 9px;
+}
+
+.usage-view__error button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 7px;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.usage-view__section {
+  padding: 13px;
+  margin-top: 10px;
+  background: rgba(255, 255, 255, .38);
+  border: 1px solid #ddd9cf;
+  border-radius: 8px;
+}
+
+.usage-view__section > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--accent);
+}
+
+.usage-view__section > header > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.usage-view__section > header strong {
+  color: var(--ink);
+  font-size: 10px;
+}
+
+.usage-view__section > header input[type="month"] {
+  min-height: 30px;
+  padding: 4px 7px;
+  color: var(--ink);
+  background: white;
+  border: 1px solid #d8d5cc;
+  border-radius: 6px;
+  outline: 0;
+  font-size: 9px;
+}
+
+.usage-view__month-total {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  gap: 7px;
+  margin-top: 11px;
+}
+
+.usage-view__month-total > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 10px;
+  background: rgba(13, 112, 101, .04);
+  border-radius: 6px;
+}
+
+.usage-view__month-total strong {
+  color: var(--ink);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-view__months {
+  display: flex;
+  gap: 6px;
+  padding-top: 10px;
+  margin-top: 10px;
+  overflow-x: auto;
+  border-top: 1px solid #e3dfd6;
+}
+
+.usage-view__months button {
+  display: flex;
+  min-width: 112px;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 3px;
+  padding: 7px 9px;
+  color: #68736d;
+  text-align: left;
+  background: white;
+  border: 1px solid #ddd9cf;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 8px;
+}
+
+.usage-view__months button strong {
+  color: var(--ink);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-view__months button:hover,
+.usage-view__months button[data-active] {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: rgba(13, 112, 101, .3);
+}
+
+.usage-view__credentials {
+  margin-top: 10px;
+  border-top: 1px solid #e3dfd6;
+}
+
+.usage-view__credentials article {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(250px, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 10px 2px;
+  border-bottom: 1px solid #e3dfd6;
+}
+
+.usage-view__credential-name {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.usage-view__credential-name i {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 6px;
+}
+
+.usage-view__credential-name strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-view__credential-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+}
+
+.usage-view__credential-metrics > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.usage-view__credential-metrics strong {
+  color: var(--ink);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-view__credentials article > p {
+  grid-column: 1 / -1;
+  margin: -3px 0 0 35px;
+  color: #9a6a3c;
+  font-size: 8px;
+  line-height: 1.45;
+}
+
+.usage-view__empty {
+  display: grid;
+  min-height: 78px;
+  margin-top: 10px;
+  place-items: center;
+  color: #87908c;
+  border-top: 1px solid #e3dfd6;
+  font-size: 9px;
+}
+
+.usage-view__note {
+  margin: 10px 2px 0;
+  color: #8a928e;
+  font-size: 8px;
+  line-height: 1.5;
 }
 
 .account-settings {
@@ -5373,8 +5679,12 @@ body.resizing-drawer {
   margin-top: 11px;
 }
 
-.admin-access__fields--key { grid-template-columns: 1fr 125px minmax(200px, 1.4fr) auto; }
-.admin-access__fields--invite { grid-template-columns: minmax(190px, 1.2fr) 105px minmax(170px, 1fr) auto; }
+.admin-access__fields--key {
+  grid-template-columns: minmax(120px, .8fr) 115px minmax(180px, 1.25fr) minmax(145px, .85fr) auto;
+}
+.admin-access__fields--invite {
+  grid-template-columns: minmax(170px, 1.1fr) 95px minmax(150px, 1fr) minmax(145px, .8fr) auto;
+}
 
 .admin-access__fields input,
 .admin-access__fields select,
@@ -5450,7 +5760,8 @@ body.resizing-drawer {
 
 .admin-account-create,
 .admin-account-list,
-.admin-password-reset {
+.admin-password-reset,
+.admin-budget-editor {
   padding: 13px;
   background: rgba(255, 255, 255, 0.34);
   border: 1px solid #ddd9cf;
@@ -5460,6 +5771,7 @@ body.resizing-drawer {
 .admin-account-create > header > div,
 .admin-account-list > header > div,
 .admin-password-reset > div,
+.admin-budget-editor > div,
 .admin-account-row__identity {
   display: flex;
   min-width: 0;
@@ -5470,6 +5782,7 @@ body.resizing-drawer {
 .admin-account-create > header span,
 .admin-account-list > header span,
 .admin-password-reset > div > span,
+.admin-budget-editor > div > span,
 .admin-account-row__identity > span {
   display: flex;
   min-width: 0;
@@ -5479,14 +5792,16 @@ body.resizing-drawer {
 
 .admin-account-create > header strong,
 .admin-account-list > header strong,
-.admin-password-reset strong {
+.admin-password-reset strong,
+.admin-budget-editor strong {
   color: #394640;
   font-size: 10px;
 }
 
 .admin-account-create > header small,
 .admin-account-list > header small,
-.admin-password-reset small {
+.admin-password-reset small,
+.admin-budget-editor small {
   color: #88918c;
   font-size: 8px;
 }
@@ -5513,6 +5828,7 @@ body.resizing-drawer {
 .admin-account-create__fields input,
 .admin-account-create__fields select,
 .admin-password-reset input,
+.admin-budget-editor input,
 .admin-account-row__actions select {
   width: 100%;
   min-height: 34px;
@@ -5528,6 +5844,7 @@ body.resizing-drawer {
 .admin-account-create__fields input:focus,
 .admin-account-create__fields select:focus,
 .admin-password-reset input:focus,
+.admin-budget-editor input:focus,
 .admin-account-row__actions select:focus {
   border-color: rgba(13, 112, 101, 0.55);
   box-shadow: 0 0 0 3px rgba(13, 112, 101, 0.08);
@@ -5680,6 +5997,62 @@ body.resizing-drawer {
   border-color: rgba(13, 112, 101, 0.3);
 }
 
+.admin-budget-editor {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(170px, .65fr) auto;
+  align-items: end;
+  gap: 10px;
+  margin-top: 10px;
+  border-color: rgba(13, 112, 101, 0.3);
+}
+
+.admin-budget-editor > label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.admin-budget-editor > label > span {
+  color: #78817d;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.admin-budget-editor > footer {
+  display: flex;
+  gap: 5px;
+}
+
+.admin-budget-editor > footer button:not(.primary-button) {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  padding: 0 9px;
+  color: #59655f;
+  background: white;
+  border: 1px solid #d8d5cc;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.admin-budget-editor .primary-button {
+  min-height: 34px;
+  margin: 0;
+  white-space: nowrap;
+}
+
+.admin-budget-editor--key {
+  margin-top: 9px;
+  background: rgba(13, 112, 101, .035);
+}
+
+.admin-managed-usage {
+  color: var(--accent) !important;
+}
+
 .admin-password-reset footer {
   display: flex;
   gap: 5px;
@@ -5713,13 +6086,26 @@ body.resizing-drawer {
 @media (max-width: 760px) {
   .admin-account-create__fields,
   .admin-account-row,
-  .admin-password-reset {
+  .admin-password-reset,
+  .admin-budget-editor {
     grid-template-columns: 1fr;
   }
 
   .admin-account-row__actions {
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+
+  .usage-view__credentials article {
+    grid-template-columns: 1fr;
+  }
+
+  .usage-view__credentials article > p {
+    margin-left: 0;
+  }
+
+  .usage-view__summary {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -7413,6 +7799,23 @@ body.resizing-drawer {
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48);
 }
 
+.app-shell[data-theme="dark"] .settings-back-button {
+  color: #aeb8b3;
+  background: #151a18;
+  border-color: #3a433f;
+}
+
+.app-shell[data-theme="dark"] .settings-back-button:hover {
+  color: var(--ink);
+  background: #25302c;
+  border-color: #486259;
+}
+
+.app-shell[data-theme="dark"] .account-summary__hint,
+.app-shell[data-theme="dark"] .account-summary__action {
+  color: #75c7b4;
+}
+
 .app-shell[data-theme="dark"] .account-settings__section {
   background: rgba(255, 255, 255, 0.025);
   border-color: #3a433f;
@@ -7446,9 +7849,65 @@ body.resizing-drawer {
   border-color: rgba(85, 179, 164, .2);
 }
 
+.app-shell[data-theme="dark"] .usage-view__summary > div {
+  background: #203a35;
+  border-color: #31584d;
+}
+
+.app-shell[data-theme="dark"] .usage-view__summary small,
+.app-shell[data-theme="dark"] .usage-view__section > header small,
+.app-shell[data-theme="dark"] .usage-view__credential-name small,
+.app-shell[data-theme="dark"] .usage-view__credential-metrics small,
+.app-shell[data-theme="dark"] .usage-view__month-total small,
+.app-shell[data-theme="dark"] .usage-view__note {
+  color: #7e8883;
+}
+
+.app-shell[data-theme="dark"] .usage-view__error {
+  color: #efb5aa;
+  background: #352321;
+  border-color: #573631;
+}
+
+.app-shell[data-theme="dark"] .usage-view__section {
+  background: rgba(255, 255, 255, .025);
+  border-color: #3a433f;
+}
+
+.app-shell[data-theme="dark"] .usage-view__section > header input[type="month"],
+.app-shell[data-theme="dark"] .usage-view__months button {
+  color: #c7d0cb;
+  background: #151a18;
+  border-color: #3a433f;
+  color-scheme: dark;
+}
+
+.app-shell[data-theme="dark"] .usage-view__month-total > span {
+  background: rgba(85, 179, 164, .055);
+}
+
+.app-shell[data-theme="dark"] .usage-view__months,
+.app-shell[data-theme="dark"] .usage-view__credentials,
+.app-shell[data-theme="dark"] .usage-view__credentials article,
+.app-shell[data-theme="dark"] .usage-view__empty {
+  border-color: #303835;
+}
+
+.app-shell[data-theme="dark"] .usage-view__months button:hover,
+.app-shell[data-theme="dark"] .usage-view__months button[data-active] {
+  color: #75c7b4;
+  background: #203a35;
+  border-color: #31584d;
+}
+
+.app-shell[data-theme="dark"] .usage-view__credential-name i {
+  background: #203a35;
+}
+
 .app-shell[data-theme="dark"] .admin-account-create,
 .app-shell[data-theme="dark"] .admin-account-list,
 .app-shell[data-theme="dark"] .admin-password-reset,
+.app-shell[data-theme="dark"] .admin-budget-editor,
 .app-shell[data-theme="dark"] .admin-access__section {
   background: rgba(255, 255, 255, 0.025);
   border-color: #3a433f;
@@ -7457,6 +7916,7 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .admin-account-create > header strong,
 .app-shell[data-theme="dark"] .admin-account-list > header strong,
 .app-shell[data-theme="dark"] .admin-password-reset strong,
+.app-shell[data-theme="dark"] .admin-budget-editor strong,
 .app-shell[data-theme="dark"] .admin-account-row__identity strong {
   color: #d5ddd9;
 }
@@ -7464,6 +7924,7 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .admin-account-create > header small,
 .app-shell[data-theme="dark"] .admin-account-list > header small,
 .app-shell[data-theme="dark"] .admin-password-reset small,
+.app-shell[data-theme="dark"] .admin-budget-editor small,
 .app-shell[data-theme="dark"] .admin-account-row__identity small,
 .app-shell[data-theme="dark"] .admin-account-row__status small {
   color: #7e8883;
@@ -7480,9 +7941,11 @@ body.resizing-drawer {
 .app-shell[data-theme="dark"] .admin-account-create__fields input,
 .app-shell[data-theme="dark"] .admin-account-create__fields select,
 .app-shell[data-theme="dark"] .admin-password-reset input,
+.app-shell[data-theme="dark"] .admin-budget-editor input,
 .app-shell[data-theme="dark"] .admin-account-row__actions select,
 .app-shell[data-theme="dark"] .admin-account-row__actions button,
 .app-shell[data-theme="dark"] .admin-password-reset footer button:not(.primary-button),
+.app-shell[data-theme="dark"] .admin-budget-editor footer button:not(.primary-button),
 .app-shell[data-theme="dark"] .admin-account-list > header > button {
   color: #c7d0cb;
   background: #151a18;

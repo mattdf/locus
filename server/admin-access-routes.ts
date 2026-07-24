@@ -13,10 +13,24 @@ import {
   createManagedCredential,
   listManagedCredentials,
   revokeManagedCredential,
+  updateManagedCredentialLimit,
 } from "./credentials.ts";
 import { abortOwnerGenerations } from "./generations.ts";
 
 export const adminAccessRouter = express.Router();
+
+function managedKeyLimit(value: unknown): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    value > 10_000_000
+  ) {
+    throw new Error("The monthly managed-key limit must be between $0 and $10,000,000");
+  }
+  return value;
+}
 
 adminAccessRouter.get("/", async (_request, response, next) => {
   try {
@@ -58,12 +72,49 @@ adminAccessRouter.post("/managed-credentials", async (request, response, next) =
       provider: request.body?.provider,
       label: typeof request.body?.label === "string" ? request.body.label : "",
       apiKey: typeof request.body?.apiKey === "string" ? request.body.apiKey : "",
+      monthlyLimitUsd: managedKeyLimit(request.body?.monthlyLimitUsd),
       administratorUserId: administrator.id,
     });
     console.log(`[admin] ${administrator.email} created managed ${credential.provider} key ${credential.id}`);
     response.status(201).json({ credential });
   } catch (error) {
-    if (error instanceof Error && /managed keys|key label|valid API key/i.test(error.message)) {
+    if (
+      error instanceof Error &&
+      /managed keys|key label|valid API key|monthly managed-key limit/i.test(error.message)
+    ) {
+      response.status(400).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+adminAccessRouter.patch("/managed-credentials/:credentialId", async (request, response, next) => {
+  try {
+    const administrator = requireAdmin(response);
+    if (!administrator) return;
+    if (!validIdentifier(request.params.credentialId)) {
+      response.status(400).json({ error: "Invalid key identifier" });
+      return;
+    }
+    if (!Object.prototype.hasOwnProperty.call(request.body ?? {}, "monthlyLimitUsd")) {
+      response.status(400).json({ error: "Specify a monthly managed-key limit" });
+      return;
+    }
+    const credential = await updateManagedCredentialLimit(
+      request.params.credentialId,
+      managedKeyLimit(request.body.monthlyLimitUsd),
+    );
+    if (!credential) {
+      response.status(404).json({ error: "Active managed key not found" });
+      return;
+    }
+    console.log(
+      `[admin] ${administrator.email} updated the monthly limit for managed key ${credential.id}`,
+    );
+    response.json({ credential });
+  } catch (error) {
+    if (error instanceof Error && /monthly managed-key limit/i.test(error.message)) {
       response.status(400).json({ error: error.message });
       return;
     }
@@ -108,6 +159,7 @@ adminAccessRouter.post("/invites", async (request, response, next) => {
       managedCredentialId: typeof request.body?.managedCredentialId === "string"
         ? request.body.managedCredentialId
         : null,
+      accountMonthlyLimitUsd: managedKeyLimit(request.body?.accountMonthlyLimitUsd),
     });
     console.log(`[admin] ${administrator.email} created invite ${result.invite.id}`);
     response.status(201).json(result);

@@ -27,6 +27,12 @@ import {
   abortOwnerGenerations,
 } from "./generations.ts";
 import {
+  authorizeManagedGeneration,
+  clearManagedUsageReservations,
+  ManagedUsageLimitError,
+  releaseManagedGeneration,
+} from "./managed-usage.ts";
+import {
   clearCredential,
   credentialStatuses,
   resolveCredential,
@@ -54,6 +60,7 @@ import {
   WorkspaceConflictError,
   type WorkspaceSyncInput,
 } from "./workspaces.ts";
+import { accountUsage } from "./usage.ts";
 import { isBuiltInProviderId } from "../src/lib/providers.ts";
 import type {
   ContextNode,
@@ -300,6 +307,24 @@ function owner(response: express.Response): string {
 app.use("/api/admin", adminRouter);
 app.use("/api/admin/access", adminAccessRouter);
 app.use("/api/shares", sharesRouter);
+
+app.get("/api/usage", async (request, response, next) => {
+  try {
+    if (!isHosted) {
+      response.status(404).json({ error: "Account usage is available in hosted mode" });
+      return;
+    }
+    const month = typeof request.query.month === "string" ? request.query.month : undefined;
+    response.setHeader("Cache-Control", "no-store");
+    response.json(await accountUsage(owner(response), month));
+  } catch (error) {
+    if (error instanceof Error && /valid month/i.test(error.message)) {
+      response.status(400).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
 
 app.get("/api/metapost/status", async (_request, response) => {
   response.json({ available: await metapostImageAvailable() });
@@ -636,6 +661,11 @@ app.post("/api/respond", async (request, response, next) => {
     }
 
     const ownerUserId = owner(response);
+    const existingJob = getGeneration(ownerUserId, body.requestId);
+    if (existingJob) {
+      attachGenerationStream(response, existingJob);
+      return;
+    }
     const connection = await resolveProviderConnection(ownerUserId, provider);
     if (!connection) {
       response.status(400).json({ error: "The selected provider no longer exists" });
@@ -645,35 +675,69 @@ app.post("/api/respond", async (request, response, next) => {
       response.status(400).json({ error: `Add an API key for ${connection.label} in Providers` });
       return;
     }
-    const job = createGeneration(ownerUserId, body.requestId, {
-      provider: connection.kind,
-      providerLabel: connection.label,
-      baseUrl: connection.baseUrl,
-      model,
-      context: body.context,
-      message: body.message,
-      reasoningEffort,
-      maxOutputTokens,
-      customInstructions: body.customInstructions ?? "",
-      anchor: body.anchor,
-      purpose:
-        body.purpose === "visualization"
-          ? "visualization"
-          : body.purpose === "definition"
-            ? "definition"
-            : body.purpose === "rewrite"
-              ? "rewrite"
-              : "chat",
-      visualizationEngine:
-        body.purpose === "visualization" && body.visualizationEngine === "tikz"
-          ? "tikz"
-          : "metapost",
-      apiKey: connection.apiKey,
-    });
+    if (connection.managedCredentialId) {
+      await authorizeManagedGeneration({
+        ownerUserId,
+        generationId: body.requestId,
+        managedCredentialId: connection.managedCredentialId,
+        provider: connection.kind,
+        model,
+      });
+    }
+    let job: ReturnType<typeof createGeneration>;
+    try {
+      job = createGeneration(
+        ownerUserId,
+        body.requestId,
+        {
+          provider: connection.kind,
+          providerLabel: connection.label,
+          baseUrl: connection.baseUrl,
+          model,
+          context: body.context,
+          message: body.message,
+          reasoningEffort,
+          maxOutputTokens,
+          customInstructions: body.customInstructions ?? "",
+          anchor: body.anchor,
+          purpose:
+            body.purpose === "visualization"
+              ? "visualization"
+              : body.purpose === "definition"
+                ? "definition"
+                : body.purpose === "rewrite"
+                  ? "rewrite"
+                  : "chat",
+          visualizationEngine:
+            body.purpose === "visualization" && body.visualizationEngine === "tikz"
+              ? "tikz"
+              : "metapost",
+          apiKey: connection.apiKey,
+        },
+        {
+          ...(connection.managedCredentialId
+            ? { managedCredentialId: connection.managedCredentialId }
+            : {}),
+          credentialKind: connection.credentialKind ?? "provider",
+          credentialRef:
+            connection.credentialRef ?? `provider:${connection.id}`,
+          credentialLabel: connection.credentialLabel ?? connection.label,
+        },
+      );
+    } catch (error) {
+      if (connection.managedCredentialId) {
+        await releaseManagedGeneration(ownerUserId, body.requestId).catch(() => undefined);
+      }
+      throw error;
+    }
     attachGenerationStream(response, job);
   } catch (error) {
     if (error instanceof GenerationLimitError) {
       response.status(429).json({ error: error.message });
+      return;
+    }
+    if (error instanceof ManagedUsageLimitError) {
+      response.status(error.status).json({ error: error.message, code: error.code });
       return;
     }
     next(error);
@@ -724,6 +788,7 @@ app.use((
 async function start(): Promise<void> {
   if (isHosted) {
     await assertMigrationsCurrent();
+    await clearManagedUsageReservations();
     await query(
       `update "locus_generation_jobs"
        set "status" = 'failed', "errorCode" = 'server_restart',

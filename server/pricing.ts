@@ -33,6 +33,12 @@ const STANDARD_PRICES: Record<string, ModelPrice> = {
   },
 };
 
+export function hasGenerationPricing(provider: string, model: string): boolean {
+  return provider === "openrouter" || (
+    provider === "openai" && Object.prototype.hasOwnProperty.call(STANDARD_PRICES, model)
+  );
+}
+
 export interface GenerationCost {
   inputCostUsd: number;
   outputCostUsd: number;

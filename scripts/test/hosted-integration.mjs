@@ -43,8 +43,10 @@ function responseCookie(response) {
 }
 
 async function signIn(account) {
+  const testIp = account.email === alice.email ? "203.0.113.11" : "203.0.113.12";
   const response = await request("/api/auth/sign-in/email", {
     method: "POST",
+    headers: { "X-Real-IP": testIp },
     body: JSON.stringify({ email: account.email, password: account.password, rememberMe: true }),
   });
   assert(response.ok, `Sign-in failed for ${account.email}: ${JSON.stringify(await json(response))}`);
@@ -279,13 +281,15 @@ if (process.env.DATABASE_URL) {
   const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
   try {
     const credentials = await pool.query(
-      `select "ownerUserId", "provider", encode("ciphertext", 'escape') as "ciphertext"
+      `select "ownerUserId", "provider", "credentialId",
+              encode("ciphertext", 'escape') as "ciphertext"
        from "locus_provider_credentials"`,
     );
     assert(credentials.rowCount === 1, "Unexpected credential row count");
     assert(!credentials.rows[0].ciphertext.includes(dummyKey), "Provider credential was stored as plaintext");
     const customCredentials = await pool.query(
-      `select encode("ciphertext", 'escape') as "ciphertext" from "locus_custom_providers"
+      `select "credentialId", encode("ciphertext", 'escape') as "ciphertext"
+         from "locus_custom_providers"
         where "ownerUserId" = $1 and "id" = $2`,
       [aliceId, customProvider.provider.id],
     );
@@ -298,10 +302,78 @@ if (process.env.DATABASE_URL) {
     );
     const counts = Object.fromEntries(owners.rows.map((row) => [row.email, row.chats]));
     assert(counts[alice.email] === 1 && counts[bob.email] === 0, "Database ownership isolation failed");
+
+    const personalRef = `personal:${credentials.rows[0].credentialId}`;
+    const customRef = `custom:${customCredentials.rows[0].credentialId}`;
+    await pool.query(
+      `insert into "locus_generation_jobs"
+         ("ownerUserId", "id", "provider", "model", "purpose", "status",
+          "credentialKind", "credentialRef", "credentialLabel", "createdAt")
+       values
+         ($1, 'usage-personal-current', 'openai', 'gpt-5.6-sol', 'chat', 'completed',
+          'personal', $2, 'OpenAI personal key', current_timestamp),
+         ($1, 'usage-custom-current', 'custom', 'custom-test', 'chat', 'completed',
+          'custom', $3, 'Hosted compatible test key', current_timestamp),
+         ($1, 'usage-custom-unpriced', 'custom', 'custom-test', 'chat', 'completed',
+          'custom', $3, 'Hosted compatible test key', current_timestamp),
+         ($1, 'usage-personal-previous', 'openai', 'gpt-5.6-sol', 'chat', 'completed',
+          'personal', $2, 'OpenAI personal key', current_timestamp - interval '1 month')`,
+      [aliceId, personalRef, customRef],
+    );
+    await pool.query(
+      `insert into "locus_usage_events"
+         ("ownerUserId", "generationId", "provider", "model", "inputTokens",
+          "cachedInputTokens", "outputTokens", "reasoningTokens", "totalTokens",
+          "totalCostUsd", "credentialKind", "credentialRef", "credentialLabel", "createdAt")
+       values
+         ($1, 'usage-personal-current', 'openai', 'gpt-5.6-sol',
+          1000, 100, 500, 200, 1500, 0.40, 'personal', $2,
+          'OpenAI personal key', current_timestamp),
+         ($1, 'usage-custom-current', 'custom', 'custom-test',
+          300, 0, 200, 0, 500, 0.10, 'custom', $3,
+          'Hosted compatible test key', current_timestamp),
+         ($1, 'usage-custom-unpriced', 'custom', 'custom-test',
+          200, 0, 100, 0, 300, null, 'custom', $3,
+          'Hosted compatible test key', current_timestamp),
+         ($1, 'usage-personal-previous', 'openai', 'gpt-5.6-sol',
+          400, 0, 100, 0, 500, 0.20, 'personal', $2,
+          'OpenAI personal key', current_timestamp - interval '1 month')`,
+      [aliceId, personalRef, customRef],
+    );
   } finally {
     await pool.end();
   }
 }
+
+const aliceUsageResponse = await request("/api/usage", { cookie: aliceCookie });
+const aliceUsage = await json(aliceUsageResponse);
+assert(aliceUsageResponse.ok, `Alice could not read private usage: ${JSON.stringify(aliceUsage)}`);
+assert(aliceUsage.lifetime?.costUsd === 0.7, "Lifetime spending did not include all key types");
+assert(aliceUsage.lifetime?.tokens === 2800, "Lifetime tokens did not include all key types");
+assert(aliceUsage.months?.length === 2, "Usage was not segmented into calendar months");
+assert(aliceUsage.months?.[0]?.costUsd === 0.5, "Current-month spending is incorrect");
+assert(aliceUsage.credentials?.length === 2, "Current-month usage was not grouped by key");
+assert(
+  aliceUsage.credentials.some(
+    (credential) =>
+      credential.credentialKind === "custom" &&
+      credential.costUsd === 0.1 &&
+      credential.unpricedEvents === 1,
+  ),
+  "Custom-provider spending or unpriced usage was not grouped correctly",
+);
+assert(
+  !JSON.stringify(aliceUsage).includes(dummyKey) &&
+    !JSON.stringify(aliceUsage).includes(customKey),
+  "Private usage response exposed an API key",
+);
+const bobUsageResponse = await request("/api/usage", { cookie: bobCookie });
+const bobUsage = await json(bobUsageResponse);
+assert(bobUsageResponse.ok, `Bob could not read private usage: ${JSON.stringify(bobUsage)}`);
+assert(
+  bobUsage.lifetime?.costUsd === 0 && bobUsage.credentials?.length === 0,
+  "Usage endpoint crossed account ownership boundaries",
+);
 
 const metapost = await request("/api/metapost/compile", {
   method: "POST",

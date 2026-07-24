@@ -2,6 +2,7 @@ import {
   Ban,
   Check,
   Clipboard,
+  DollarSign,
   KeyRound,
   Link2,
   LoaderCircle,
@@ -29,6 +30,11 @@ interface ManagedCredential {
   revokedAt: string | null;
   assignedUsers: number;
   pendingInvites: number;
+  monthlyLimitUsd: number | null;
+  monthlyCostUsd: number;
+  lifetimeCostUsd: number;
+  monthlyTokens: number;
+  unpricedEvents: number;
 }
 
 interface InviteSummary {
@@ -43,6 +49,7 @@ interface InviteSummary {
   managedCredentialLabel: string | null;
   managedProvider: string | null;
   managedCredentialRevokedAt: string | null;
+  accountMonthlyLimitUsd: number | null;
 }
 
 interface WaitlistEntry {
@@ -67,6 +74,14 @@ function inviteStatus(invite: InviteSummary): string {
   return "Active";
 }
 
+function formatUsd(value: number): string {
+  return `$${value.toFixed(value > 0 && value < 0.01 ? 4 : 2)}`;
+}
+
+function formatTokens(value: number): string {
+  return Math.round(value).toLocaleString();
+}
+
 export function AdminAccessPanel() {
   const [data, setData] = useState<AccessResponse | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -74,9 +89,13 @@ export function AdminAccessPanel() {
   const [keyLabel, setKeyLabel] = useState("");
   const [keyProvider, setKeyProvider] = useState<Exclude<ProviderKind, "custom">>("openai");
   const [apiKey, setApiKey] = useState("");
+  const [keyMonthlyLimit, setKeyMonthlyLimit] = useState("");
+  const [keyLimitTarget, setKeyLimitTarget] = useState<ManagedCredential | null>(null);
+  const [keyLimitDraft, setKeyLimitDraft] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteExpiry, setInviteExpiry] = useState("7");
   const [inviteCredentialId, setInviteCredentialId] = useState("");
+  const [inviteAccountLimit, setInviteAccountLimit] = useState("");
   const [createdInviteUrl, setCreatedInviteUrl] = useState("");
   const [copied, setCopied] = useState(false);
 
@@ -114,6 +133,14 @@ export function AdminAccessPanel() {
   const createKey = async (event: FormEvent) => {
     event.preventDefault();
     if (!keyLabel.trim() || !apiKey.trim()) return;
+    const monthlyLimitUsd = keyMonthlyLimit.trim() === "" ? null : Number(keyMonthlyLimit);
+    if (
+      monthlyLimitUsd !== null &&
+      (!Number.isFinite(monthlyLimitUsd) || monthlyLimitUsd < 0 || monthlyLimitUsd > 10_000_000)
+    ) {
+      setError("Enter a monthly key limit between $0 and $10,000,000, or leave it blank for unlimited.");
+      return;
+    }
     setBusy("create-key");
     setError("");
     try {
@@ -121,7 +148,12 @@ export function AdminAccessPanel() {
         "/api/admin/access/managed-credentials",
         {
           method: "POST",
-          body: JSON.stringify({ label: keyLabel.trim(), provider: keyProvider, apiKey }),
+          body: JSON.stringify({
+            label: keyLabel.trim(),
+            provider: keyProvider,
+            apiKey,
+            monthlyLimitUsd,
+          }),
         },
       );
       setData((current) => current
@@ -129,8 +161,45 @@ export function AdminAccessPanel() {
         : current);
       setKeyLabel("");
       setApiKey("");
+      setKeyMonthlyLimit("");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not save the managed key");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const saveKeyLimit = async () => {
+    if (!keyLimitTarget) return;
+    const monthlyLimitUsd = keyLimitDraft.trim() === "" ? null : Number(keyLimitDraft);
+    if (
+      monthlyLimitUsd !== null &&
+      (!Number.isFinite(monthlyLimitUsd) || monthlyLimitUsd < 0 || monthlyLimitUsd > 10_000_000)
+    ) {
+      setError("Enter a monthly key limit between $0 and $10,000,000, or leave it blank for unlimited.");
+      return;
+    }
+    setBusy(`key-limit:${keyLimitTarget.id}`);
+    setError("");
+    try {
+      const result = await adminRequest<{ credential: ManagedCredential }>(
+        `/api/admin/access/managed-credentials/${encodeURIComponent(keyLimitTarget.id)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ monthlyLimitUsd }),
+        },
+      );
+      setData((current) => current
+        ? {
+            ...current,
+            managedCredentials: current.managedCredentials.map((credential) =>
+              credential.id === result.credential.id ? result.credential : credential),
+          }
+        : current);
+      setKeyLimitTarget(null);
+      setKeyLimitDraft("");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Could not update the key budget");
     } finally {
       setBusy(null);
     }
@@ -154,6 +223,20 @@ export function AdminAccessPanel() {
 
   const createInvite = async (event: FormEvent) => {
     event.preventDefault();
+    const accountMonthlyLimitUsd = inviteCredentialId && inviteAccountLimit.trim() !== ""
+      ? Number(inviteAccountLimit)
+      : null;
+    if (
+      accountMonthlyLimitUsd !== null &&
+      (
+        !Number.isFinite(accountMonthlyLimitUsd) ||
+        accountMonthlyLimitUsd < 0 ||
+        accountMonthlyLimitUsd > 10_000_000
+      )
+    ) {
+      setError("Enter an invited-account limit between $0 and $10,000,000, or leave it blank for unlimited.");
+      return;
+    }
     setBusy("create-invite");
     setError("");
     setCreatedInviteUrl("");
@@ -164,6 +247,7 @@ export function AdminAccessPanel() {
           email: inviteEmail.trim() || undefined,
           expiresInDays: inviteExpiry === "never" ? null : Number(inviteExpiry),
           managedCredentialId: inviteCredentialId || null,
+          accountMonthlyLimitUsd,
         }),
       });
       setData((current) => current
@@ -171,6 +255,7 @@ export function AdminAccessPanel() {
         : current);
       setCreatedInviteUrl(result.url);
       setInviteEmail("");
+      setInviteAccountLimit("");
       setCopied(false);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not create the invite");
@@ -247,7 +332,13 @@ export function AdminAccessPanel() {
 
       <form className="admin-access__section admin-access__form" onSubmit={createKey}>
         <header><span><KeyRound size={15} /><strong>Managed API keys</strong></span></header>
-        <p>Keys remain encrypted on the server. Users see only availability metadata and can never retrieve the key.</p>
+        <p>
+          Keys remain encrypted on the server and are never returned to users. USD budgets reset
+          at the start of each UTC month and block new managed-key calls once reached. Costs are
+          provider-reported where available and estimated for supported OpenAI models; unpriced
+          calls are flagged explicitly and finite budgets fail closed when cost cannot be verified.
+          The response that crosses a limit is allowed to finish, then later calls are blocked.
+        </p>
         <div className="admin-access__fields admin-access__fields--key">
           <input placeholder="Key label" maxLength={120} value={keyLabel} onChange={(event) => setKeyLabel(event.target.value)} />
           <select value={keyProvider} onChange={(event) => setKeyProvider(event.target.value as Exclude<ProviderKind, "custom">)}>
@@ -259,6 +350,17 @@ export function AdminAccessPanel() {
             <option value="minimax">MiniMax</option>
           </select>
           <input type="password" placeholder="API key" autoComplete="off" spellCheck={false} value={apiKey} onChange={(event) => setApiKey(event.target.value)} />
+          <input
+            type="number"
+            min={0}
+            max={10_000_000}
+            step="0.01"
+            inputMode="decimal"
+            placeholder="Monthly USD · unlimited"
+            aria-label="Monthly managed-key limit in USD"
+            value={keyMonthlyLimit}
+            onChange={(event) => setKeyMonthlyLimit(event.target.value)}
+          />
           <button className="primary-button" type="submit" disabled={busy !== null || !keyLabel.trim() || !apiKey.trim()}>
             {busy === "create-key" ? <LoaderCircle className="auth-screen__spinner" size={13} /> : <Plus size={13} />} Save key
           </button>
@@ -266,14 +368,93 @@ export function AdminAccessPanel() {
         <div className="admin-access__rows">
           {data.managedCredentials.length === 0 ? <small>No managed keys.</small> : data.managedCredentials.map((credential) => (
             <article key={credential.id} data-disabled={credential.revokedAt ? true : undefined}>
-              <span><strong>{credential.label}</strong><small>{credential.provider} · {credential.assignedUsers} users · {credential.pendingInvites} pending invites</small></span>
+              <span>
+                <strong>{credential.label}</strong>
+                <small>{credential.provider} · {credential.assignedUsers} users · {credential.pendingInvites} pending invites</small>
+                <small>
+                  {formatUsd(credential.monthlyCostUsd)}
+                  {credential.monthlyLimitUsd === null
+                    ? " this month"
+                    : ` of ${formatUsd(credential.monthlyLimitUsd)} this month`}
+                  {" · "}{formatTokens(credential.monthlyTokens)} tokens
+                  {credential.unpricedEvents > 0
+                    ? ` · ${credential.unpricedEvents} unpriced`
+                    : ""}
+                  {" · "}{formatUsd(credential.lifetimeCostUsd)} tracked lifetime
+                </small>
+              </span>
               <span>{credential.revokedAt ? "Revoked" : new Date(credential.createdAt).toLocaleDateString()}</span>
               {!credential.revokedAt && (
-                <button type="button" disabled={busy !== null} onClick={() => void revokeKey(credential)}><Ban size={12} /> Revoke</button>
+                <div>
+                  <button
+                    type="button"
+                    disabled={busy !== null}
+                    onClick={() => {
+                      setKeyLimitTarget(credential);
+                      setKeyLimitDraft(
+                        credential.monthlyLimitUsd === null
+                          ? ""
+                          : String(credential.monthlyLimitUsd),
+                      );
+                    }}
+                  >
+                    <DollarSign size={12} /> Budget
+                  </button>
+                  <button type="button" disabled={busy !== null} onClick={() => void revokeKey(credential)}><Ban size={12} /> Revoke</button>
+                </div>
               )}
             </article>
           ))}
         </div>
+        {keyLimitTarget && (
+          <div className="admin-budget-editor admin-budget-editor--key">
+            <div>
+              <DollarSign size={14} />
+              <span>
+                <strong>Managed key budget</strong>
+                <small>
+                  {keyLimitTarget.label} has used {formatUsd(keyLimitTarget.monthlyCostUsd)}
+                  {" "}and {formatTokens(keyLimitTarget.monthlyTokens)} tokens this UTC month.
+                </small>
+              </span>
+            </div>
+            <label>
+              <span>Monthly limit (USD)</span>
+              <input
+                type="number"
+                min={0}
+                max={10_000_000}
+                step="0.01"
+                inputMode="decimal"
+                aria-label={`Monthly limit for ${keyLimitTarget.label}`}
+                placeholder="Unlimited"
+                value={keyLimitDraft}
+                onChange={(event) => setKeyLimitDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void saveKeyLimit();
+                  }
+                }}
+                autoFocus
+              />
+            </label>
+            <footer>
+              <button
+                type="button"
+                onClick={() => {
+                  setKeyLimitTarget(null);
+                  setKeyLimitDraft("");
+                }}
+              >
+                Cancel
+              </button>
+              <button className="primary-button" type="button" disabled={busy !== null} onClick={() => void saveKeyLimit()}>
+                Save budget
+              </button>
+            </footer>
+          </div>
+        )}
       </form>
 
       <form className="admin-access__section admin-access__form" onSubmit={createInvite}>
@@ -288,6 +469,18 @@ export function AdminAccessPanel() {
             <option value="">Require BYOK</option>
             {activeCredentials.map((credential) => <option key={credential.id} value={credential.id}>{credential.label} · {credential.provider}</option>)}
           </select>
+          <input
+            type="number"
+            min={0}
+            max={10_000_000}
+            step="0.01"
+            inputMode="decimal"
+            placeholder="Account USD · unlimited"
+            aria-label="Invited account monthly managed API limit in USD"
+            disabled={!inviteCredentialId}
+            value={inviteAccountLimit}
+            onChange={(event) => setInviteAccountLimit(event.target.value)}
+          />
           <button className="primary-button" type="submit" disabled={busy !== null}>
             {busy === "create-invite" ? <LoaderCircle className="auth-screen__spinner" size={13} /> : <UserPlus size={13} />} Create invite
           </button>
@@ -313,6 +506,9 @@ export function AdminAccessPanel() {
                     {invite.managedCredentialLabel
                       ? `${invite.managedCredentialLabel} · ${invite.managedProvider}${invite.managedCredentialRevokedAt ? " · key revoked" : ""}`
                       : "BYOK"}
+                    {invite.accountMonthlyLimitUsd !== null
+                      ? ` · account cap ${formatUsd(invite.accountMonthlyLimitUsd)}/month`
+                      : ""}
                     {invite.expiresAt ? ` · expires ${new Date(invite.expiresAt).toLocaleDateString()}` : " · no expiry"}
                   </small>
                 </span>
