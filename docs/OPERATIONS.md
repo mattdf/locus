@@ -64,7 +64,7 @@ Before an update:
 1. Take and verify a database backup.
 2. Keep the current credential key ring available.
 3. Build and test `compose.hosted.yaml` in an isolated project.
-4. Deploy. The app starts only after migrations complete and MetaPost is healthy.
+4. Deploy. The app starts only after migrations complete and the internal workers are healthy.
 
 ## Monitoring and retention
 

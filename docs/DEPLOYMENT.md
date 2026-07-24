@@ -35,6 +35,17 @@ The reverse proxy should route the configured HTTPS host to `app:8787`, preserve
 `X-Forwarded-Proto` and `X-Forwarded-Host`, and overwrite `X-Real-IP` with the connecting client
 address. Do not expose `app:8787` directly while trusting a client-supplied IP header.
 
+Keep the Compose stack on its single default network. Managed reverse proxies commonly attach to
+that network automatically; adding a second custom network to `app` can make a proxy select an
+unreachable container address after deployment. Internal services remain private because they
+publish no ports and have no proxy routing labels.
+
+The application and migration services deliberately share one image, so the Node image is built
+once per deployment. Dockerfiles install dependencies before copying application source, allowing
+normal source-only updates to reuse npm, pip, operating-system, and TeX layers. Preserve the
+builder's cache between deployments and use a no-cache/force rebuild only when diagnosing a stale
+or corrupted layer.
+
 ## Accounts
 
 Hosted mode starts with public email/password signup enabled. Administrators can switch the site

@@ -8,6 +8,7 @@ LABEL org.opencontainers.image.title="PDF to Markdown Service" \
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PYTHONPATH=/app/src \
     PDF2MARKDOWN_WORK_ROOT=/tmp/pdf2markdown \
     PDF2MARKDOWN_DATA_ROOT=/data/pdf2markdown
 
@@ -19,11 +20,16 @@ RUN groupadd --system --gid 10001 pdf2markdown \
     && chown -R pdf2markdown:pdf2markdown /data
 
 COPY pyproject.toml README.md ./
-COPY src ./src
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m pip install ".[service]" \
-    && python -c "from pdf2markdown.persistent_service import app; assert app"
+    mkdir -p src/pdf2markdown \
+    && touch src/pdf2markdown/__init__.py \
+    && python -m pip install ".[service]" \
+    && rm -rf src
+
+COPY src ./src
+
+RUN python -c "from pdf2markdown.persistent_service import app; assert app"
 
 USER pdf2markdown
 

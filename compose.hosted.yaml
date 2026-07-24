@@ -10,13 +10,14 @@ services:
       - locus_postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U locus -d locus"]
-      interval: 5s
+      interval: 3s
       timeout: 3s
       retries: 20
     security_opt:
       - no-new-privileges:true
 
   metapost:
+    image: ${LOCUS_IMAGE_PREFIX:-locus-chat}-metapost:1
     build:
       context: ./docker/metapost
     restart: unless-stopped
@@ -34,15 +35,14 @@ services:
     pids_limit: 96
     mem_limit: 512m
     cpus: 1.0
-    networks:
-      - visualization
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
-      interval: 10s
+      interval: 5s
       timeout: 3s
-      retries: 10
+      retries: 12
 
   pdf2markdown:
+    image: ${LOCUS_IMAGE_PREFIX:-locus-chat}-pdf2markdown:1
     build:
       context: ./docker/pdf2markdown
     restart: unless-stopped
@@ -76,14 +76,14 @@ services:
     cpus: 4.0
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 20s
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
 
   migrate:
-    build:
-      context: .
+    image: ${LOCUS_IMAGE_PREFIX:-locus-chat}-app:latest
+    pull_policy: never
     command: ["node", "build/server/migrate-cli.mjs"]
     environment:
       NODE_ENV: production
@@ -101,6 +101,7 @@ services:
     restart: "no"
 
   app:
+    image: ${LOCUS_IMAGE_PREFIX:-locus-chat}-app:latest
     build:
       context: .
     restart: unless-stopped
@@ -138,20 +139,13 @@ services:
     cpus: 2.0
     expose:
       - "8787"
-    networks:
-      - default
-      - visualization
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/api/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
-      interval: 15s
+      interval: 5s
       timeout: 5s
-      retries: 10
-      start_period: 20s
+      retries: 12
+      start_period: 5s
 
 volumes:
   locus_postgres_data:
   locus_pdf2markdown_data:
-
-networks:
-  visualization:
-    internal: true
