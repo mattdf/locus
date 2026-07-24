@@ -1,6 +1,8 @@
 import {
   ArrowDown,
   ArrowUp,
+  Activity,
+  Archive,
   BookOpen,
   BookOpenText,
   ChartNoAxesCombined,
@@ -19,6 +21,7 @@ import {
   Link2,
   LoaderCircle,
   LogOut,
+  Map as MapIcon,
   Menu,
   Maximize2,
   Minimize2,
@@ -43,7 +46,7 @@ import {
   UserRound,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -64,6 +67,18 @@ import { ThreadView } from "./components/ThreadView";
 import { useAnchoredPopover } from "./components/useAnchoredPopover";
 import { ProviderManagementView } from "./components/ProviderManagementView";
 import { SaveFailureModal } from "./components/SaveFailureModal";
+import {
+  StudyToolsPanel,
+  type StudyToolsNavigation,
+  type StudyToolsTab,
+} from "./components/StudyToolsPanel";
+import { PromptProfilesModal } from "./components/PromptProfilesModal";
+import {
+  RecoveryCenterModal,
+  RecoveryFoundModal,
+  WorkspaceConflictModal,
+} from "./components/RecoveryModals";
+import { StudyExportModal } from "./components/StudyExportModal";
 import {
   SourceRewriteModal,
   type SourceRewriteMode,
@@ -93,6 +108,22 @@ import {
   type SourceRange,
 } from "./lib/sourceEditing";
 import { generationDetails } from "./lib/generation";
+import {
+  annotationIntegrity,
+  searchWorkspace,
+  workspaceJobs,
+  type AnnotationIntegrityItem,
+  type WorkspaceJob,
+} from "./lib/study";
+import {
+  archiveRecoverySnapshot,
+  clearRecoveryDraft,
+  deleteRecoverySnapshot,
+  listRecoverySnapshots,
+  readRecoveryDraft,
+  writeRecoveryDraft,
+  type RecoveryRecord,
+} from "./lib/recovery";
 import {
   annotationSnapshots,
   applyAnnotationSnapshots,
@@ -135,9 +166,11 @@ import type {
   ProviderConnectionSummary,
   ProviderKind,
   ProviderModelOption,
+  PromptProfilePurpose,
   PdfChatSource,
   ReasoningEffort,
   SelectionDraft,
+  SelectionAction,
   SourceEditUndo,
   ThreadNode,
   VisualizationContextScope,
@@ -154,6 +187,14 @@ import {
 import type { RuntimeInfo } from "./runtime";
 
 const UNCATEGORIZED_CATEGORY_ID = "__uncategorized__";
+const SELECTION_ACTION_OPTIONS = [
+  { id: "define", label: "Define" },
+  { id: "visualize", label: "Visualize" },
+  { id: "rewrite", label: "Rewrite" },
+  { id: "elaborate", label: "Elaborate" },
+  { id: "elaborate-inline", label: "Elaborate inline" },
+  { id: "quote", label: "Quote" },
+] as const;
 
 const DEFAULT_STATE: WorkspaceState = {
   version: 1,
@@ -183,6 +224,9 @@ const DEFAULT_STATE: WorkspaceState = {
     theme: "light",
     textScale: 100,
     sendShortcut: "enter",
+    mobileSelectionActions: ["define", "elaborate", "rewrite"],
+    promptProfiles: [],
+    promptProfileAssignments: {},
   },
 };
 
@@ -197,6 +241,37 @@ function saveFailureMessage(error: unknown): string {
   }
   if (error instanceof Error && error.message.trim()) return error.message;
   return "The workspace could not be saved for an unknown reason.";
+}
+
+function providerForPromptPurpose(
+  settings: WorkspaceState["settings"],
+  purpose: PromptProfilePurpose,
+): string {
+  if (purpose === "definition") return settings.definitionProvider;
+  if (purpose === "visualization") return settings.visualizationProvider;
+  if (purpose === "rewrite") return settings.rewriteProvider;
+  return settings.provider;
+}
+
+function instructionsForPurpose(
+  settings: WorkspaceState["settings"],
+  purpose: PromptProfilePurpose,
+): string {
+  const provider = providerForPromptPurpose(settings, purpose);
+  const profileId = settings.promptProfileAssignments[purpose]?.[provider];
+  const profile = settings.promptProfiles.find((candidate) => candidate.id === profileId);
+  return [
+    settings.customInstructions.trim(),
+    profile?.instructions.trim()
+      ? `<active_prompt_profile name="${profile.name.replace(/"/g, "&quot;")}">\n${profile.instructions.trim()}\n</active_prompt_profile>`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function workspaceContentSignature(workspace: WorkspaceState): string {
+  return JSON.stringify({ ...workspace, activeChatId: null });
 }
 
 interface GenerationResult {
@@ -227,6 +302,8 @@ class GenerationStreamError extends Error {
     super(message);
   }
 }
+
+class WorkspaceSaveConflictError extends Error {}
 
 interface PendingGeneration {
   kind: "message" | "definition" | "visualization" | "inline-elaboration";
@@ -260,6 +337,13 @@ interface HostedWorkspaceSync {
   upsertChats?: ChatTree[];
   deleteChatIds?: string[];
   chatBaseUpdatedAt?: Record<string, string | null>;
+}
+
+interface WorkspaceConflictState {
+  chatId: string;
+  localChat: ChatTree;
+  remoteState: WorkspaceState;
+  remoteRevision: number;
 }
 
 type SourceAnnotationKind = AssistantAnnotationKind;
@@ -792,6 +876,7 @@ function SelectionToolbar({
   onQuote,
   onRewrite,
   onDismiss,
+  mobileActions,
 }: {
   selection: SelectionDraft;
   onDefine: () => void;
@@ -801,10 +886,19 @@ function SelectionToolbar({
   onQuote: () => void;
   onRewrite?: () => void;
   onDismiss: () => void;
+  mobileActions: SelectionAction[];
 }) {
   const [rect, setRect] = useState(selection.rect);
   const [elaborateMenuOpen, setElaborateMenuOpen] = useState(false);
   const inlineElaborationSelection = selection.surface === "inline-elaboration";
+  const actionStyle = (action: SelectionAction) =>
+    ({
+      "--mobile-action-order": mobileActions.indexOf(action) >= 0
+        ? mobileActions.indexOf(action)
+        : mobileActions.length + SELECTION_ACTION_OPTIONS.findIndex(
+            (candidate) => candidate.id === action,
+          ),
+    }) as CSSProperties;
 
   useEffect(() => setRect(selection.rect), [selection]);
 
@@ -870,24 +964,44 @@ function SelectionToolbar({
       <span className="selection-toolbar__quote">
         “<InlineMath source={selection.quote} />”
       </span>
-      <button className="selection-define-button" type="button" onClick={onDefine}>
+      <button
+        className="selection-define-button"
+        type="button"
+        style={actionStyle("define")}
+        onClick={onDefine}
+      >
         <BookOpen size={14} /> Define
       </button>
       {inlineElaborationSelection && onRewrite && (
-        <button className="selection-rewrite-button" type="button" onClick={onRewrite}>
+        <button
+          className="selection-rewrite-button"
+          type="button"
+          style={actionStyle("rewrite")}
+          onClick={onRewrite}
+        >
           <Pencil size={14} /> Rewrite
         </button>
       )}
       {!inlineElaborationSelection && <>
-        <button className="selection-visualize-button" type="button" onClick={onVisualize}>
+        <button
+          className="selection-visualize-button"
+          type="button"
+          style={actionStyle("visualize")}
+          onClick={onVisualize}
+        >
           <ChartNoAxesCombined size={14} /> Visualize
         </button>
         {onRewrite && (
-          <button className="selection-rewrite-button" type="button" onClick={onRewrite}>
+          <button
+            className="selection-rewrite-button"
+            type="button"
+            style={actionStyle("rewrite")}
+            onClick={onRewrite}
+          >
             <Pencil size={14} /> Rewrite
           </button>
         )}
-        <div className="selection-elaborate-split">
+        <div className="selection-elaborate-split" style={actionStyle("elaborate")}>
           <button type="button" onClick={onElaborate}>
             <CornerUpRight size={14} /> Elaborate
           </button>
@@ -909,7 +1023,20 @@ function SelectionToolbar({
             </div>
           )}
         </div>
-        <button className="selection-quote-button" type="button" onClick={onQuote}>
+        <button
+          className="selection-inline-mobile-button"
+          type="button"
+          style={actionStyle("elaborate-inline")}
+          onClick={onElaborateInline}
+        >
+          <Sparkles size={14} /> Inline
+        </button>
+        <button
+          className="selection-quote-button"
+          type="button"
+          style={actionStyle("quote")}
+          onClick={onQuote}
+        >
           <Quote size={14} /> Quote
         </button>
       </>}
@@ -1616,6 +1743,7 @@ export default function App({
   const [newMode, setNewMode] = useState<"ask" | "import">("ask");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [studyToolsOpen, setStudyToolsOpen] = useState<StudyToolsTab | null>(null);
   const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [usageOpen, setUsageOpen] = useState(false);
   const [providersOpen, setProvidersOpen] = useState(false);
@@ -1628,6 +1756,15 @@ export default function App({
   const [saveFailure, setSaveFailure] = useState<string | null>(null);
   const [saveAttempt, setSaveAttempt] = useState(0);
   const [customInstructionsOpen, setCustomInstructionsOpen] = useState(false);
+  const [promptProfilesOpen, setPromptProfilesOpen] = useState(false);
+  const [recoveryCenterOpen, setRecoveryCenterOpen] = useState(false);
+  const [recoveryRecords, setRecoveryRecords] = useState<RecoveryRecord[]>([]);
+  const [recoveryFound, setRecoveryFound] = useState<RecoveryRecord | null>(null);
+  const [workspaceConflict, setWorkspaceConflict] =
+    useState<WorkspaceConflictState | null>(null);
+  const [studyExportOpen, setStudyExportOpen] = useState(false);
+  const [jobCompletionNotice, setJobCompletionNotice] =
+    useState<WorkspaceJob | null>(null);
   const [customInstructionsDraft, setCustomInstructionsDraft] = useState("");
   const [providerConnections, setProviderConnections] = useState<ProviderConnectionSummary[]>([]);
   const [providerModels, setProviderModels] = useState<ProviderModelOption[]>([]);
@@ -1663,6 +1800,13 @@ export default function App({
   const lastSavedWorkspaceRef = useRef<WorkspaceState | null>(null);
   const hostedRevisionRef = useRef(0);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const saveRetryTimerRef = useRef<number | null>(null);
+  const saveRetryCountRef = useRef(0);
+  const recoveryDraftTimerRef = useRef<number | null>(null);
+  const lastRecoveryArchiveRef = useRef(0);
+  const previousJobStatusesRef = useRef<Map<string, WorkspaceJob["status"]> | null>(
+    null,
+  );
   const activeNodeIdRef = useRef(activeNodeId);
   const historyAction = useRef<"push" | "replace">("replace");
   const managedProviderAppliedRef = useRef(false);
@@ -1676,11 +1820,44 @@ export default function App({
       }
       assistantDeltaBuffers.current.clear();
       sourceRewriteController.current?.abort();
+      if (saveRetryTimerRef.current !== null) {
+        window.clearTimeout(saveRetryTimerRef.current);
+      }
+      if (recoveryDraftTimerRef.current !== null) {
+        window.clearTimeout(recoveryDraftTimerRef.current);
+      }
     },
     [],
   );
 
   const activeChat = workspace.chats.find((chat) => chat.id === workspace.activeChatId) ?? null;
+  const recoveryOwnerKey =
+    runtime.mode === "hosted" && runtime.user?.id
+      ? `hosted:${runtime.user.id}`
+      : "local";
+  const allWorkspaceJobs = useMemo(() => workspaceJobs(workspace), [workspace]);
+  const activeAnnotationIntegrity = useMemo(
+    () => (activeChat ? annotationIntegrity(activeChat) : []),
+    [activeChat],
+  );
+  const deferredSearch = useDeferredValue(search);
+  const workspaceSearchResults = useMemo(
+    () => searchWorkspace(workspace, deferredSearch),
+    [deferredSearch, workspace],
+  );
+  useEffect(() => {
+    const previous = previousJobStatusesRef.current;
+    const next = new Map(allWorkspaceJobs.map((job) => [job.id, job.status]));
+    previousJobStatusesRef.current = next;
+    if (!previous) return;
+    const completed = allWorkspaceJobs.find(
+      (job) =>
+        previous.get(job.id) === "running" &&
+        job.status !== "running" &&
+        job.status !== "draft",
+    );
+    if (completed) setJobCompletionNotice(completed);
+  }, [allWorkspaceJobs]);
   const isAdministrator = runtime.mode === "hosted" && Boolean(
     runtime.user?.role?.split(",").includes("admin"),
   );
@@ -1899,7 +2076,7 @@ export default function App({
           ? ((await response.json()) as HostedWorkspaceResponse)
           : ({ state: (await response.json()) as WorkspaceState, revision: 0 } satisfies HostedWorkspaceResponse);
       })
-      .then(({ state, revision }) => {
+      .then(async ({ state, revision }) => {
         const requestedView = readViewLocation();
         const chat = requestedView.chatId
           ? state.chats.find((item) => item.id === requestedView.chatId) ?? null
@@ -1930,6 +2107,27 @@ export default function App({
         setFocusMaximized(
           Boolean(chat && requestedNode !== chat.rootId && requestedView.maximized),
         );
+        try {
+          const [draftRecord, records] = await Promise.all([
+            readRecoveryDraft(recoveryOwnerKey),
+            listRecoverySnapshots(recoveryOwnerKey),
+          ]);
+          setRecoveryRecords(records);
+          if (
+            draftRecord &&
+            workspaceContentSignature(draftRecord.workspace) !==
+              workspaceContentSignature(nextState)
+          ) {
+            setRecoveryFound(draftRecord);
+          } else if (draftRecord) {
+            await clearRecoveryDraft(recoveryOwnerKey);
+            setRecoveryRecords((current) =>
+              current.filter((record) => record.id !== draftRecord.id),
+            );
+          }
+        } catch {
+          // IndexedDB recovery is an additional safety layer; workspace loading remains usable.
+        }
       })
       .catch((error) => {
         if (runtime.mode === "local") {
@@ -1940,7 +2138,7 @@ export default function App({
         }
       })
       .finally(() => setLoaded(true));
-  }, [runtime.mode]);
+  }, [recoveryOwnerKey, runtime.mode]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -2095,6 +2293,34 @@ export default function App({
   }, [loaded, workspace.settings.provider, providerConnections]);
 
   useEffect(() => {
+    if (!loaded || loadError || recoveryFound) return;
+    const baseline = lastSavedWorkspaceRef.current;
+    if (
+      baseline &&
+      !workspaceSyncChanges(baseline, workspace, hostedRevisionRef.current)
+    ) {
+      return;
+    }
+    if (recoveryDraftTimerRef.current !== null) {
+      window.clearTimeout(recoveryDraftTimerRef.current);
+    }
+    const snapshot = workspace;
+    recoveryDraftTimerRef.current = window.setTimeout(() => {
+      recoveryDraftTimerRef.current = null;
+      void writeRecoveryDraft(recoveryOwnerKey, snapshot)
+        .then(() => listRecoverySnapshots(recoveryOwnerKey))
+        .then(setRecoveryRecords)
+        .catch(() => undefined);
+    }, 250);
+    return () => {
+      if (recoveryDraftTimerRef.current !== null) {
+        window.clearTimeout(recoveryDraftTimerRef.current);
+        recoveryDraftTimerRef.current = null;
+      }
+    };
+  }, [loaded, loadError, recoveryFound, recoveryOwnerKey, workspace]);
+
+  useEffect(() => {
     if (!loaded || loadError) return;
     const currentBaseline = lastSavedWorkspaceRef.current;
     if (
@@ -2104,6 +2330,13 @@ export default function App({
       lastSavedWorkspaceRef.current = workspace;
       setSaveState("saved");
       setSaveFailure(null);
+      saveRetryCountRef.current = 0;
+      if (!recoveryFound) {
+        void clearRecoveryDraft(recoveryOwnerKey)
+          .then(() => listRecoverySnapshots(recoveryOwnerKey))
+          .then(setRecoveryRecords)
+          .catch(() => undefined);
+      }
       return;
     }
     setSaveState("saving");
@@ -2111,8 +2344,24 @@ export default function App({
       const target = workspace;
       const markTargetSaved = () => {
         if (workspaceRef.current !== target) return;
+        if (saveRetryTimerRef.current !== null) {
+          window.clearTimeout(saveRetryTimerRef.current);
+          saveRetryTimerRef.current = null;
+        }
+        saveRetryCountRef.current = 0;
         setSaveState("saved");
         setSaveFailure(null);
+        void clearRecoveryDraft(recoveryOwnerKey)
+          .then(() => {
+            const now = Date.now();
+            if (now - lastRecoveryArchiveRef.current > 10 * 60_000) {
+              lastRecoveryArchiveRef.current = now;
+              return archiveRecoverySnapshot(recoveryOwnerKey, target, "saved");
+            }
+          })
+          .then(() => listRecoverySnapshots(recoveryOwnerKey))
+          .then(setRecoveryRecords)
+          .catch(() => undefined);
       };
       saveQueueRef.current = saveQueueRef.current
         .catch(() => undefined)
@@ -2132,7 +2381,23 @@ export default function App({
               body: JSON.stringify(changes),
             });
             if (!response.ok) {
-              const result = (await response.json().catch(() => ({}))) as ApiError;
+              const result = (await response.json().catch(() => ({}))) as ApiError & {
+                chatId?: string;
+              };
+              if (response.status === 409 && result.chatId) {
+                const remoteResponse = await fetch("/api/state", { cache: "no-store" });
+                const remoteState = (await remoteResponse.json()) as WorkspaceState;
+                const localChat = target.chats.find((chat) => chat.id === result.chatId);
+                if (remoteResponse.ok && localChat) {
+                  setWorkspaceConflict({
+                    chatId: result.chatId,
+                    localChat,
+                    remoteState,
+                    remoteRevision: 0,
+                  });
+                  throw new WorkspaceSaveConflictError(result.error ?? "Save conflict");
+                }
+              }
               const detail = result.error || `Save request failed with HTTP ${response.status}`;
               throw new Error(
                 result.requestId ? `${detail} (request ${result.requestId})` : detail,
@@ -2152,16 +2417,30 @@ export default function App({
           const result = (await response.json().catch(() => ({}))) as {
             revision?: number;
             error?: string;
+            chatId?: string;
           };
           if (response.status === 401) {
             throw new Error(
               "Your session expired. Download an unsaved backup before signing in again or reloading this tab.",
             );
           }
-          if (response.status === 409) {
-            throw new Error(
-              "This chat changed in another tab. Download an unsaved backup before reloading or resolving the conflict.",
-            );
+          if (response.status === 409 && result.chatId) {
+            const remoteResponse = await fetch("/api/workspace", {
+              credentials: "same-origin",
+              cache: "no-store",
+            });
+            const remote = (await remoteResponse.json()) as HostedWorkspaceResponse;
+            const localChat = target.chats.find((chat) => chat.id === result.chatId);
+            if (remoteResponse.ok && localChat) {
+              setWorkspaceConflict({
+                chatId: result.chatId,
+                localChat,
+                remoteState: remote.state,
+                remoteRevision: remote.revision,
+              });
+              throw new WorkspaceSaveConflictError(result.error ?? "Save conflict");
+            }
+            throw new Error("The conflicting workspace could not be loaded safely.");
           }
           if (!response.ok || !Number.isSafeInteger(result.revision)) {
             const detail = result.error ?? `Save request failed with HTTP ${response.status}`;
@@ -2173,11 +2452,43 @@ export default function App({
         })
         .catch((error: unknown) => {
           setSaveState("error");
-          setSaveFailure(saveFailureMessage(error));
+          if (error instanceof WorkspaceSaveConflictError) {
+            setSaveFailure(null);
+            return;
+          }
+          const message = saveFailureMessage(error);
+          setSaveFailure(message);
+          void archiveRecoverySnapshot(
+            recoveryOwnerKey,
+            workspaceRef.current,
+            "failure",
+          )
+            .then(() => listRecoverySnapshots(recoveryOwnerKey))
+            .then(setRecoveryRecords)
+            .catch(() => undefined);
+          if (saveRetryTimerRef.current === null && navigator.onLine) {
+            const delays = [2_000, 5_000, 15_000, 30_000, 60_000];
+            const delay = delays[
+              Math.min(saveRetryCountRef.current, delays.length - 1)
+            ];
+            saveRetryCountRef.current += 1;
+            saveRetryTimerRef.current = window.setTimeout(() => {
+              saveRetryTimerRef.current = null;
+              setSaveAttempt((attempt) => attempt + 1);
+            }, delay);
+          }
         });
     }, 350);
     return () => window.clearTimeout(timeout);
-  }, [loaded, loadError, runtime.mode, saveAttempt, workspace]);
+  }, [
+    loaded,
+    loadError,
+    recoveryFound,
+    recoveryOwnerKey,
+    runtime.mode,
+    saveAttempt,
+    workspace,
+  ]);
 
   useEffect(() => {
     if (saveState === "saved") return;
@@ -2188,6 +2499,19 @@ export default function App({
     window.addEventListener("beforeunload", warnBeforeLeaving);
     return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
   }, [saveState]);
+
+  useEffect(() => {
+    const retryWhenOnline = () => {
+      if (saveState !== "error" || workspaceConflict) return;
+      if (saveRetryTimerRef.current !== null) {
+        window.clearTimeout(saveRetryTimerRef.current);
+        saveRetryTimerRef.current = null;
+      }
+      setSaveAttempt((attempt) => attempt + 1);
+    };
+    window.addEventListener("online", retryWhenOnline);
+    return () => window.removeEventListener("online", retryWhenOnline);
+  }, [saveState, workspaceConflict]);
 
   useEffect(() => {
     if (!loaded || !importingPdfSignature) return;
@@ -2319,8 +2643,12 @@ export default function App({
         window.getSelection()?.removeAllRanges();
         closeElaborationDraft();
         setSettingsOpen(false);
+        setStudyToolsOpen(null);
         setProvidersOpen(false);
         setCustomInstructionsOpen(false);
+        setPromptProfilesOpen(false);
+        setRecoveryCenterOpen(false);
+        setStudyExportOpen(false);
         setChatMenuOpen(false);
         setBranchMenuOpen(null);
         setRenamingNodeId(null);
@@ -2434,6 +2762,215 @@ export default function App({
     setAnnotationMove(null);
     setSelection(null);
     window.getSelection()?.removeAllRanges();
+  };
+
+  const refreshRecoveryRecords = () => {
+    void listRecoverySnapshots(recoveryOwnerKey)
+      .then(setRecoveryRecords)
+      .catch(() => undefined);
+  };
+
+  const restoreRecoveryRecord = (record: RecoveryRecord) => {
+    const recoveredSettings = record.workspace.settings as Partial<
+      WorkspaceState["settings"]
+    >;
+    const restored = {
+      ...record.workspace,
+      settings: {
+        ...DEFAULT_STATE.settings,
+        ...recoveredSettings,
+        providerModels: {
+          ...DEFAULT_STATE.settings.providerModels,
+          ...(recoveredSettings.providerModels ?? {}),
+        },
+        definitionModels: {
+          ...DEFAULT_STATE.settings.definitionModels,
+          ...(recoveredSettings.definitionModels ?? {}),
+        },
+        visualizationModels: {
+          ...DEFAULT_STATE.settings.visualizationModels,
+          ...(recoveredSettings.visualizationModels ?? {}),
+        },
+        rewriteModels: {
+          ...DEFAULT_STATE.settings.rewriteModels,
+          ...(recoveredSettings.rewriteModels ?? {}),
+        },
+        promptProfiles: recoveredSettings.promptProfiles ?? [],
+        promptProfileAssignments:
+          recoveredSettings.promptProfileAssignments ?? {},
+        mobileSelectionActions:
+          recoveredSettings.mobileSelectionActions ??
+          DEFAULT_STATE.settings.mobileSelectionActions,
+      },
+      activeChatId:
+        record.workspace.activeChatId &&
+        record.workspace.chats.some((chat) => chat.id === record.workspace.activeChatId)
+          ? record.workspace.activeChatId
+          : null,
+    };
+    workspaceRef.current = restored;
+    setWorkspace(restored);
+    const chat = restored.chats.find((item) => item.id === restored.activeChatId);
+    setActiveNodeId(chat?.rootId ?? null);
+    setRecoveryFound(null);
+    setRecoveryCenterOpen(false);
+    setSaveState("saving");
+    setSaveAttempt((attempt) => attempt + 1);
+  };
+
+  const discardRecoveryDraft = () => {
+    void clearRecoveryDraft(recoveryOwnerKey)
+      .then(() => listRecoverySnapshots(recoveryOwnerKey))
+      .then(setRecoveryRecords)
+      .catch(() => undefined);
+    setRecoveryFound(null);
+  };
+
+  const createManualRecoverySnapshot = () => {
+    void archiveRecoverySnapshot(
+      recoveryOwnerKey,
+      workspaceRef.current,
+      "manual",
+    )
+      .then(() => listRecoverySnapshots(recoveryOwnerKey))
+      .then(setRecoveryRecords)
+      .catch(() => undefined);
+  };
+
+  const resolveWorkspaceConflict = (
+    choice: "local" | "remote" | "both",
+  ) => {
+    const conflict = workspaceConflict;
+    const baseline = lastSavedWorkspaceRef.current;
+    if (!conflict || !baseline) return;
+    const local = workspaceRef.current;
+    const remote = conflict.remoteState;
+    const localChanges = workspaceSyncChanges(
+      baseline,
+      local,
+      hostedRevisionRef.current,
+    );
+    const remoteChats = new Map(remote.chats.map((chat) => [chat.id, chat]));
+    let duplicateChatId: string | null = null;
+
+    if (localChanges?.upsertChats) {
+      localChanges.upsertChats.forEach((chat) => {
+        if (chat.id !== conflict.chatId) remoteChats.set(chat.id, chat);
+      });
+    }
+    if (localChanges?.deleteChatIds) {
+      localChanges.deleteChatIds.forEach((chatId) => {
+        if (chatId !== conflict.chatId) remoteChats.delete(chatId);
+      });
+    }
+
+    if (choice === "local") {
+      remoteChats.set(conflict.chatId, conflict.localChat);
+    } else if (choice === "both") {
+      const duplicate = {
+        ...cloneChatForImport(conflict.localChat, newId()),
+        title: `${conflict.localChat.title} (recovered copy)`,
+        pinned: false,
+        updatedAt: timestamp(),
+      };
+      duplicateChatId = duplicate.id;
+      remoteChats.set(duplicate.id, duplicate);
+    }
+
+    const next: WorkspaceState = {
+      ...remote,
+      settings: localChanges?.settings ?? remote.settings,
+      categories: localChanges?.categories ?? remote.categories,
+      chats: [...remoteChats.values()],
+      activeChatId:
+        duplicateChatId ??
+        (local.activeChatId && remoteChats.has(local.activeChatId)
+          ? local.activeChatId
+          : remoteChats.has(conflict.chatId)
+            ? conflict.chatId
+            : null),
+    };
+    hostedRevisionRef.current = conflict.remoteRevision;
+    lastSavedWorkspaceRef.current = {
+      ...remote,
+      activeChatId: next.activeChatId,
+    };
+    workspaceRef.current = next;
+    setWorkspace(next);
+    const nextActiveChat = next.chats.find((chat) => chat.id === next.activeChatId);
+    if (!nextActiveChat?.nodes[activeNodeIdRef.current ?? ""]) {
+      setActiveNodeId(nextActiveChat?.rootId ?? null);
+    }
+    setWorkspaceConflict(null);
+    setSaveState("saving");
+    setSaveAttempt((attempt) => attempt + 1);
+  };
+
+  const navigateToStudyLocation = (location: StudyToolsNavigation) => {
+    const chat = workspaceRef.current.chats.find(
+      (candidate) => candidate.id === location.chatId,
+    );
+    const node = chat?.nodes[location.nodeId];
+    if (!chat || !node) return;
+    historyAction.current = "push";
+    setWorkspace((current) => ({ ...current, activeChatId: chat.id }));
+    setActiveNodeId(node.id);
+    setFocusMaximized(false);
+    setSidebarOpen(false);
+    setStudyToolsOpen(null);
+    setSelection(null);
+    setDefinitionPopover(null);
+    if (location.anchor) {
+      setThreadScrollRequest({
+        id: newId(),
+        nodeId: node.id,
+        anchor: location.anchor,
+      });
+    }
+  };
+
+  const repairAnnotationManually = (item: AnnotationIntegrityItem) => {
+    setStudyToolsOpen(null);
+    navigateToStudyLocation({
+      chatId: item.chatId,
+      nodeId: item.nodeId,
+      anchor: item.anchor,
+      annotation: item.target,
+    });
+    setAnnotationMove({
+      chatId: item.chatId,
+      nodeId: item.nodeId,
+      target: item.target,
+      originalAnchor: item.anchor,
+      error: "",
+    });
+  };
+
+  const autoRepairAnnotations = (items: AnnotationIntegrityItem[]) => {
+    const byChat = new Map<string, AnnotationIntegrityItem[]>();
+    items.forEach((item) => {
+      if (!item.suggestedAnchor) return;
+      const current = byChat.get(item.chatId);
+      if (current) current.push(item);
+      else byChat.set(item.chatId, [item]);
+    });
+    byChat.forEach((chatItems, chatId) => {
+      updateChat(chatId, (chat) =>
+        chatItems.reduce(
+          (current, item) =>
+            item.suggestedAnchor
+              ? moveAnnotation(
+                  current,
+                  item.nodeId,
+                  item.target,
+                  item.suggestedAnchor,
+                  timestamp(),
+                )
+              : current,
+          chat,
+        ),
+      );
+    });
   };
 
   const shareActiveChat = async () => {
@@ -2749,7 +3286,7 @@ export default function App({
           model: workspace.settings.model,
           reasoningEffort: workspace.settings.reasoningEffort,
           maxOutputTokens: workspace.settings.maxOutputTokens,
-          customInstructions: workspace.settings.customInstructions,
+          customInstructions: instructionsForPurpose(workspace.settings, "chat"),
           context: contextFor(chat, nodeId, [userMessage.id, assistantId]),
           message: userMessage.content,
           anchor,
@@ -2837,7 +3374,7 @@ export default function App({
             ] || "medium",
           ),
           maxOutputTokens: workspace.settings.maxOutputTokens,
-          customInstructions: workspace.settings.customInstructions,
+          customInstructions: instructionsForPurpose(workspace.settings, "definition"),
           context: [
             {
               title: node.title,
@@ -3048,7 +3585,7 @@ export default function App({
           model: settings.model,
           reasoningEffort: settings.reasoningEffort,
           maxOutputTokens: settings.maxOutputTokens,
-          customInstructions: settings.customInstructions,
+          customInstructions: instructionsForPurpose(settings, "inline-elaboration"),
           context: [
             {
               title: node.title,
@@ -3508,7 +4045,10 @@ export default function App({
             ] || "high",
           ),
           maxOutputTokens: workspaceRef.current.settings.maxOutputTokens,
-          customInstructions: workspaceRef.current.settings.customInstructions,
+          customInstructions: instructionsForPurpose(
+            workspaceRef.current.settings,
+            "visualization",
+          ),
           context: [
             {
               title: node.title,
@@ -3664,9 +4204,14 @@ export default function App({
     });
   };
 
-  const stopResponse = async (nodeId: string, assistantId: string) => {
-    if (!activeChat) return;
-    const node = activeChat.nodes[nodeId];
+  const stopResponse = async (
+    nodeId: string,
+    assistantId: string,
+    chatId = workspaceRef.current.activeChatId,
+  ) => {
+    const chat = workspaceRef.current.chats.find((item) => item.id === chatId);
+    if (!chat) return;
+    const node = chat.nodes[nodeId];
     const assistant = node ? assistantMessageById(node, assistantId) : undefined;
     if (!assistant?.requestId) {
       window.alert("This response predates resumable requests and cannot be stopped remotely.");
@@ -3687,7 +4232,7 @@ export default function App({
       };
       flushAssistantDeltas();
       responseControllers.current.get(assistantId)?.abort();
-      markAssistantStopped(activeChat.id, nodeId, assistantId, data.generation);
+      markAssistantStopped(chat.id, nodeId, assistantId, data.generation);
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "The response could not be stopped");
     }
@@ -3717,7 +4262,7 @@ export default function App({
           reasoningEffort:
             requestOptions?.reasoningEffort ?? workspace.settings.reasoningEffort,
           maxOutputTokens: workspace.settings.maxOutputTokens,
-          customInstructions: workspace.settings.customInstructions,
+          customInstructions: instructionsForPurpose(workspace.settings, "chat"),
           context: contextBeforeMessage(chat, nodeId, revisionGroupId),
           message: userMessage.content,
           anchor: chat.nodes[nodeId]?.anchor,
@@ -4213,7 +4758,7 @@ export default function App({
             DEFAULT_PROVIDER_MODELS[providerKind(settings.rewriteProvider)],
           reasoningEffort: settings.rewriteReasoningEfforts[settings.rewriteProvider] || "high",
           maxOutputTokens: settings.maxOutputTokens,
-          customInstructions: "",
+          customInstructions: instructionsForPurpose(settings, "rewrite"),
           context: [
             {
               title: node.title,
@@ -4598,9 +5143,11 @@ export default function App({
     assistantId: string,
     modelOverride?: string,
     reasoningEffortOverride?: ReasoningEffort,
+    chatId = workspaceRef.current.activeChatId,
   ) => {
-    if (!activeChat) return;
-    const node = activeChat.nodes[nodeId];
+    const chat = workspaceRef.current.chats.find((item) => item.id === chatId);
+    if (!chat) return;
+    const node = chat.nodes[nodeId];
     if (
       !node ||
       messagesForNode(node).some(
@@ -4659,10 +5206,10 @@ export default function App({
     };
     const updatedAt = timestamp();
     const nextChat: ChatTree = {
-      ...activeChat,
+      ...chat,
       updatedAt,
       nodes: {
-        ...activeChat.nodes,
+        ...chat.nodes,
         [nodeId]: {
           ...node,
           updatedAt,
@@ -5362,12 +5909,88 @@ export default function App({
     setFocusMaximized(false);
   };
 
+  const stopWorkspaceJob = (job: WorkspaceJob) => {
+    if (job.kind === "response") {
+      void stopResponse(job.nodeId, job.subjectId, job.chatId);
+      return;
+    }
+    if (job.kind === "definition") {
+      void stopDefinition(job.chatId, job.nodeId, job.subjectId);
+      return;
+    }
+    if (job.kind === "visualization") {
+      void stopVisualization(job.chatId, job.nodeId, job.subjectId);
+      return;
+    }
+    if (job.kind === "inline-elaboration") {
+      void stopInlineElaboration(job.chatId, job.nodeId, job.subjectId);
+    }
+  };
+
+  const retryWorkspaceJob = (job: WorkspaceJob) => {
+    const chat = workspaceRef.current.chats.find((item) => item.id === job.chatId);
+    const node = chat?.nodes[job.nodeId];
+    if (!chat || !node) return;
+    if (job.kind === "response") {
+      regenerateAssistantMessage(
+        job.nodeId,
+        job.subjectId,
+        undefined,
+        undefined,
+        job.chatId,
+      );
+      return;
+    }
+    if (job.kind === "definition") {
+      const definition = node.definitions?.find((item) => item.id === job.subjectId);
+      if (definition) {
+        regenerateDefinition(
+          job.chatId,
+          job.nodeId,
+          job.subjectId,
+          definition.hint ?? "",
+        );
+      }
+      return;
+    }
+    if (job.kind === "visualization") {
+      const visualization = node.visualizations?.find(
+        (item) => item.id === job.subjectId,
+      );
+      if (visualization) {
+        void generateVisualization(
+          job.chatId,
+          job.nodeId,
+          job.subjectId,
+          visualization.hint,
+          visualizationEngine(visualization),
+          undefined,
+          visualization.contextScope,
+        );
+      }
+      return;
+    }
+    if (job.kind === "inline-elaboration") {
+      const elaboration = node.inlineElaborations?.find(
+        (item) => item.id === job.subjectId,
+      );
+      if (elaboration) {
+        generateInlineElaboration(
+          job.chatId,
+          job.nodeId,
+          job.subjectId,
+          elaboration.hint,
+        );
+      }
+    }
+  };
+
   const filteredChats = useMemo(() => {
-    const query = search.trim().toLowerCase();
+    const matchingChatIds = new Set(workspaceSearchResults.map((result) => result.chatId));
     return workspace.chats
-      .filter((chat) => !query || chat.title.toLowerCase().includes(query))
+      .filter((chat) => !search.trim() || matchingChatIds.has(chat.id))
       .sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)));
-  }, [search, workspace.chats]);
+  }, [search, workspace.chats, workspaceSearchResults]);
 
   const chatsByCategory = useMemo(() => {
     const grouped = new Map<string, ChatTree[]>();
@@ -5466,6 +6089,28 @@ export default function App({
         theme: current.settings.theme === "dark" ? "light" : "dark",
       },
     }));
+  };
+
+  const setMobileSelectionAction = (
+    index: number,
+    action: WorkspaceState["settings"]["mobileSelectionActions"][number],
+  ) => {
+    setWorkspace((current) => {
+      const actions = [...current.settings.mobileSelectionActions];
+      const existingIndex = actions.indexOf(action);
+      if (existingIndex >= 0 && existingIndex !== index) {
+        [actions[index], actions[existingIndex]] = [actions[existingIndex], actions[index]];
+      } else {
+        actions[index] = action;
+      }
+      return {
+        ...current,
+        settings: {
+          ...current.settings,
+          mobileSelectionActions: actions,
+        },
+      };
+    });
   };
 
   const applyComposerInsertion = (id: string) => {
@@ -5876,7 +6521,7 @@ export default function App({
             <input
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search studies"
+              placeholder="Search titles, content, equations…"
             />
           </label>
         </div>
@@ -5893,8 +6538,39 @@ export default function App({
               <Plus size={13} /> Category
             </button>
           </div>
-          {search && !filteredChats.length ? (
-            <p className="empty-list">No matching studies</p>
+          {search ? (
+            workspaceSearchResults.length ? (
+              <div className="workspace-search-results" role="list" aria-label="Search results">
+                {workspaceSearchResults.map((result) => (
+                  <button
+                    type="button"
+                    role="listitem"
+                    key={result.id}
+                    onClick={() => navigateToStudyLocation(result)}
+                  >
+                    {result.kind === "thread" ? (
+                      <GitBranch size={14} />
+                    ) : result.kind === "definition" ? (
+                      <BookOpen size={14} />
+                    ) : result.kind === "visualization" ? (
+                      <ChartNoAxesCombined size={14} />
+                    ) : result.kind === "inline-elaboration" ? (
+                      <Sparkles size={14} />
+                    ) : (
+                      <Search size={14} />
+                    )}
+                    <span>
+                      <strong><InlineMath source={result.title} /></strong>
+                      <small>{result.context}</small>
+                      <em>{result.snippet}</em>
+                    </span>
+                    <ChevronRight size={12} />
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <p className="empty-list">No matching titles, messages, equations, or annotations</p>
+            )
           ) : (
             <>
               {workspace.categories.map((category, categoryIndex) => {
@@ -6055,6 +6731,33 @@ export default function App({
 
         <div className="sidebar__footer">
           <button
+            className="settings-launcher study-tools-launcher"
+            type="button"
+            onClick={() => {
+              setStudyToolsOpen(activeChat ? "map" : "jobs");
+              setSidebarOpen(false);
+            }}
+          >
+            <MapIcon size={16} />
+            <span>
+              <strong>Study tools</strong>
+              <small>
+                {allWorkspaceJobs.some((job) => job.status === "running")
+                  ? `${allWorkspaceJobs.filter((job) => job.status === "running").length} running`
+                  : activeChat
+                    ? "Map, anchors, and jobs"
+                    : "Workspace jobs"}
+              </small>
+            </span>
+            {allWorkspaceJobs.some((job) => job.status === "running") ? (
+              <em className="study-tools-launcher__badge">
+                {allWorkspaceJobs.filter((job) => job.status === "running").length}
+              </em>
+            ) : (
+              <ChevronRight size={14} />
+            )}
+          </button>
+          <button
             className="settings-launcher"
             type="button"
             onClick={() => {
@@ -6179,6 +6882,15 @@ export default function App({
               )}
             </div>
             <div className="pane-header__actions">
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="Open study map"
+                title="Open study map"
+                onClick={() => setStudyToolsOpen("map")}
+              >
+                <MapIcon size={16} />
+              </button>
               {runtime.mode === "hosted" && (
                 <button
                   className="share-chat-button"
@@ -6233,6 +6945,15 @@ export default function App({
                   </label>
                   <button type="button" onClick={exportActiveChat}>
                     <Download size={15} /> Export chat as JSON
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setChatMenuOpen(false);
+                      setStudyExportOpen(true);
+                    }}
+                  >
+                    <FileInput size={15} /> Export readable study
                   </button>
                   <div className="chat-menu__divider" />
                   <button className="chat-menu__danger" type="button" onClick={deleteActiveChat}>
@@ -6338,6 +7059,7 @@ export default function App({
             reasoningEffort={workspace.settings.reasoningEffort}
             onReasoningEffortChange={selectReasoningEffort}
             sendShortcut={workspace.settings.sendShortcut}
+            draftNamespace={recoveryOwnerKey}
             composerInsertion={
               composerInsertion?.nodeId === leftPaneNode.id ? composerInsertion : undefined
             }
@@ -6416,6 +7138,7 @@ export default function App({
                 reasoningEffort={workspace.settings.reasoningEffort}
                 onReasoningEffortChange={selectReasoningEffort}
                 sendShortcut={workspace.settings.sendShortcut}
+                draftKey={`${recoveryOwnerKey}:${activeChat.id}:new-branch:${draft.sourceNodeId}:${draft.sourceMessageId}:${draft.blockIndex}`}
               />
               <div className="prompt-suggestions">
                 <button type="button" onClick={() => beginElaboration("Show every missing algebraic step in this passage.")}>Missing algebra</button>
@@ -6478,6 +7201,15 @@ export default function App({
               )}
             </div>
             <div className="focus-header__actions">
+              <button
+                className="icon-button"
+                type="button"
+                aria-label="Open study map"
+                title="Open study map"
+                onClick={() => setStudyToolsOpen("map")}
+              >
+                <MapIcon size={16} />
+              </button>
               {runtime.mode === "hosted" && (
                 <button
                   className="share-chat-button focus-share-button"
@@ -6643,6 +7375,7 @@ export default function App({
             reasoningEffort={workspace.settings.reasoningEffort}
             onReasoningEffortChange={selectReasoningEffort}
             sendShortcut={workspace.settings.sendShortcut}
+            draftNamespace={recoveryOwnerKey}
             composerInsertion={
               composerInsertion?.nodeId === sideNode.id ? composerInsertion : undefined
             }
@@ -6659,6 +7392,22 @@ export default function App({
             }
           />
         </aside>
+      )}
+
+      {studyToolsOpen && (
+        <StudyToolsPanel
+          key={studyToolsOpen}
+          chat={activeChat}
+          jobs={allWorkspaceJobs}
+          integrity={activeAnnotationIntegrity}
+          initialTab={studyToolsOpen}
+          onClose={() => setStudyToolsOpen(null)}
+          onNavigate={navigateToStudyLocation}
+          onRepair={repairAnnotationManually}
+          onAutoRepair={autoRepairAnnotations}
+          onStopJob={stopWorkspaceJob}
+          onRetryJob={retryWorkspaceJob}
+        />
       )}
 
       {settingsOpen && (
@@ -6862,6 +7611,27 @@ export default function App({
                     </span>
                     <ChevronRight size={13} />
                   </button>
+                  <button
+                    className="custom-instructions-button"
+                    type="button"
+                    onClick={() => {
+                      setSettingsOpen(false);
+                      setPromptProfilesOpen(true);
+                    }}
+                  >
+                    <Sparkles size={15} />
+                    <span>
+                      <small>Reusable behavior</small>
+                      <strong>
+                        {workspace.settings.promptProfiles.length
+                          ? `${workspace.settings.promptProfiles.length} prompt profile${
+                              workspace.settings.promptProfiles.length === 1 ? "" : "s"
+                            }`
+                          : "Prompt profiles"}
+                      </strong>
+                    </span>
+                    <ChevronRight size={13} />
+                  </button>
                   <label className="settings-select-control">
                     <CornerDownLeft size={15} />
                     <span>
@@ -6887,6 +7657,35 @@ export default function App({
                       </select>
                     </span>
                   </label>
+                </div>
+                <div className="mobile-selection-settings">
+                  <header>
+                    <strong>Mobile selection sheet</strong>
+                    <span>Choose the three actions shown first after highlighting text.</span>
+                  </header>
+                  <div>
+                    {workspace.settings.mobileSelectionActions.map((action, index) => (
+                      <label key={index}>
+                        <span>{index + 1}</span>
+                        <select
+                          aria-label={`Mobile selection action ${index + 1}`}
+                          value={action}
+                          onChange={(event) =>
+                            setMobileSelectionAction(
+                              index,
+                              event.target.value as WorkspaceState["settings"]["mobileSelectionActions"][number],
+                            )
+                          }
+                        >
+                          {SELECTION_ACTION_OPTIONS.map((option) => (
+                            <option value={option.id} key={option.id}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ))}
+                  </div>
                 </div>
               </section>
 
@@ -6972,6 +7771,34 @@ export default function App({
                       <small>Add a Locus export to this workspace</small>
                     </span>
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSettingsOpen(false);
+                      refreshRecoveryRecords();
+                      setRecoveryCenterOpen(true);
+                    }}
+                  >
+                    <Archive size={15} />
+                    <span>
+                      <strong>Recovery history</strong>
+                      <small>Browser journal, retries, and saved snapshots</small>
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!activeChat}
+                    onClick={() => {
+                      setSettingsOpen(false);
+                      setStudyExportOpen(true);
+                    }}
+                  >
+                    <FileInput size={15} />
+                    <span>
+                      <strong>Export current study</strong>
+                      <small>Portable HTML or print-ready PDF</small>
+                    </span>
+                  </button>
                 </div>
               </section>
             </div>
@@ -6995,6 +7822,53 @@ export default function App({
             </footer>
           </section>
         </div>
+      )}
+
+      {promptProfilesOpen && (
+        <PromptProfilesModal
+          settings={workspace.settings}
+          providers={providerConnections}
+          onChange={(settings) =>
+            setWorkspace((current) => ({ ...current, settings }))
+          }
+          onBack={() => {
+            setPromptProfilesOpen(false);
+            setSettingsOpen(true);
+          }}
+          onClose={() => setPromptProfilesOpen(false)}
+        />
+      )}
+
+      {recoveryCenterOpen && (
+        <RecoveryCenterModal
+          records={recoveryRecords}
+          onBack={() => {
+            setRecoveryCenterOpen(false);
+            setSettingsOpen(true);
+          }}
+          onClose={() => setRecoveryCenterOpen(false)}
+          onCreate={createManualRecoverySnapshot}
+          onRestore={restoreRecoveryRecord}
+          onDownload={(record) => downloadWorkspaceRecovery(record.workspace)}
+          onDelete={(record) => {
+            if (!window.confirm("Delete this browser-side recovery snapshot?")) return;
+            void deleteRecoverySnapshot(record.id)
+              .then(() => listRecoverySnapshots(recoveryOwnerKey))
+              .then(setRecoveryRecords)
+              .catch(() => undefined);
+          }}
+        />
+      )}
+
+      {studyExportOpen && activeChat && (
+        <StudyExportModal
+          chat={activeChat}
+          onBack={() => {
+            setStudyExportOpen(false);
+            setSettingsOpen(true);
+          }}
+          onClose={() => setStudyExportOpen(false)}
+        />
       )}
 
       {adminAccountsOpen && isAdministrator && runtime.user && (
@@ -7051,6 +7925,65 @@ export default function App({
             <X size={13} />
           </button>
         </div>
+      )}
+
+      {jobCompletionNotice && (
+        <div
+          className={`job-completion-toast job-completion-toast--${jobCompletionNotice.status}`}
+          role="status"
+        >
+          <Activity size={15} />
+          <span>
+            <strong>
+              {jobCompletionNotice.status === "completed"
+                ? "Job completed"
+                : jobCompletionNotice.status === "stopped"
+                  ? "Job stopped"
+                  : "Job failed"}
+            </strong>
+            <small>{jobCompletionNotice.title}</small>
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              setJobCompletionNotice(null);
+              setStudyToolsOpen("jobs");
+            }}
+          >
+            View
+          </button>
+          <button
+            type="button"
+            aria-label="Dismiss job notification"
+            onClick={() => setJobCompletionNotice(null)}
+          >
+            <X size={13} />
+          </button>
+        </div>
+      )}
+
+      {recoveryFound && (
+        <RecoveryFoundModal
+          record={recoveryFound}
+          onRestore={() => restoreRecoveryRecord(recoveryFound)}
+          onDownload={() => downloadWorkspaceRecovery(recoveryFound.workspace)}
+          onDiscard={discardRecoveryDraft}
+        />
+      )}
+
+      {workspaceConflict && (
+        <WorkspaceConflictModal
+          localChat={workspaceConflict.localChat}
+          serverChat={
+            workspaceConflict.remoteState.chats.find(
+              (chat) => chat.id === workspaceConflict.chatId,
+            ) ?? null
+          }
+          onKeepLocal={() => resolveWorkspaceConflict("local")}
+          onUseServer={() => resolveWorkspaceConflict("remote")}
+          onKeepBoth={() => resolveWorkspaceConflict("both")}
+          onDownload={() => downloadWorkspaceRecovery(workspaceRef.current)}
+        />
       )}
 
       {saveFailure && (
@@ -7466,6 +8399,7 @@ export default function App({
       {selection && !draft && !annotationMove && (
         <SelectionToolbar
           selection={selection}
+          mobileActions={workspace.settings.mobileSelectionActions}
           onDismiss={() => setSelection(null)}
           onDefine={defineSelection}
           onVisualize={visualizeSelection}

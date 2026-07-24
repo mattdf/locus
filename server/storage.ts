@@ -62,6 +62,9 @@ export const emptyState = (): WorkspaceState => ({
     theme: "light",
     textScale: 100,
     sendShortcut: "enter",
+    mobileSelectionActions: ["define", "elaborate", "rewrite"],
+    promptProfiles: [],
+    promptProfileAssignments: {},
   },
 });
 
@@ -182,6 +185,82 @@ export function normalizeState(state: WorkspaceState): WorkspaceState {
           : 100,
       sendShortcut:
         state.settings?.sendShortcut === "mod-enter" ? "mod-enter" : "enter",
+      mobileSelectionActions: (() => {
+        const allowed = new Set([
+          "define",
+          "visualize",
+          "rewrite",
+          "elaborate",
+          "elaborate-inline",
+          "quote",
+        ]);
+        const selected = Array.isArray(state.settings?.mobileSelectionActions)
+          ? state.settings.mobileSelectionActions.filter(
+              (action, index, actions) =>
+                typeof action === "string" &&
+                allowed.has(action) &&
+                actions.indexOf(action) === index,
+            )
+          : [];
+        return [...selected, "define", "elaborate", "rewrite"]
+          .filter((action, index, actions) => actions.indexOf(action) === index)
+          .slice(0, 3) as import("../src/types.ts").SelectionAction[];
+      })(),
+      promptProfiles: Array.isArray(state.settings?.promptProfiles)
+        ? state.settings.promptProfiles
+            .filter(
+              (profile, index, profiles) =>
+                typeof profile?.id === "string" &&
+                typeof profile?.name === "string" &&
+                typeof profile?.instructions === "string" &&
+                profiles.findIndex((candidate) => candidate?.id === profile.id) === index,
+            )
+            .map((profile) => ({
+              id: profile.id,
+              name: profile.name.slice(0, 120),
+              instructions: profile.instructions.slice(0, 24_000),
+              createdAt:
+                typeof profile.createdAt === "string"
+                  ? profile.createdAt
+                  : new Date().toISOString(),
+              updatedAt:
+                typeof profile.updatedAt === "string"
+                  ? profile.updatedAt
+                  : new Date().toISOString(),
+            }))
+        : [],
+      promptProfileAssignments: (() => {
+        const assignments = state.settings?.promptProfileAssignments;
+        if (!assignments || typeof assignments !== "object") return {};
+        const profileIds = new Set(
+          (state.settings?.promptProfiles ?? []).map((profile) => profile.id),
+        );
+        return Object.fromEntries(
+          Object.entries(assignments)
+            .filter(([purpose, byProvider]) =>
+              [
+                "chat",
+                "definition",
+                "visualization",
+                "rewrite",
+                "inline-elaboration",
+              ].includes(purpose) &&
+              byProvider &&
+              typeof byProvider === "object",
+            )
+            .map(([purpose, byProvider]) => [
+              purpose,
+              Object.fromEntries(
+                Object.entries(byProvider as Record<string, unknown>).filter(
+                  ([provider, profileId]) =>
+                    provider.length > 0 &&
+                    typeof profileId === "string" &&
+                    profileIds.has(profileId),
+                ),
+              ),
+            ]),
+        );
+      })(),
     },
   };
 }

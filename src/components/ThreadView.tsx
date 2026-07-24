@@ -115,6 +115,7 @@ interface ThreadViewProps {
   reasoningEffort: ReasoningEffort;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
   sendShortcut: SendShortcut;
+  draftNamespace?: string;
   composerInsertion?: { id: string; value: string };
   onComposerInsertionApplied?: (id: string) => void;
   scrollRequest?: { id: string; anchor: HighlightAnchor };
@@ -313,6 +314,7 @@ export function ThreadView({
   reasoningEffort,
   onReasoningEffortChange,
   sendShortcut,
+  draftNamespace,
   composerInsertion,
   onComposerInsertionApplied,
   scrollRequest,
@@ -1205,37 +1207,41 @@ export function ThreadView({
         })}
         <div ref={endRef} />
       </div>
-      {!readOnly && <div className="thread-composer-wrap">
-        {pendingAssistant && (
-          <button
-            className="stop-response-button"
-            type="button"
-            onClick={() => onStop(pendingAssistant.id)}
-          >
-            <Square size={10} fill="currentColor" /> Stop response
-          </button>
-        )}
-        <Composer
-          compact={side}
-          disabled={waiting}
-          onSend={onSend}
-          provider={provider}
-          modelOptions={modelOptions}
-          model={model}
-          onModelChange={onModelChange}
-          reasoningEffort={reasoningEffort}
-          onReasoningEffortChange={onReasoningEffortChange}
-          sendShortcut={sendShortcut}
-          insertion={composerInsertion}
-          onInsertionApplied={onComposerInsertionApplied}
-          placeholder={side ? "Continue this line of thought…" : "Ask about this topic…"}
-        />
-        {!side && (
-          <p className="selection-tip">
-            Select any passage or equation to define, visualize, quote, elaborate, or rewrite it.
-          </p>
-        )}
-      </div>}
+      {!readOnly && (
+        <div className="thread-composer-wrap">
+          {pendingAssistant && (
+            <button
+              className="stop-response-button"
+              type="button"
+              onClick={() => onStop(pendingAssistant.id)}
+            >
+              <Square size={10} fill="currentColor" /> Stop response
+            </button>
+          )}
+          <Composer
+            key={node.id}
+            compact={side}
+            disabled={waiting}
+            onSend={onSend}
+            provider={provider}
+            modelOptions={modelOptions}
+            model={model}
+            onModelChange={onModelChange}
+            reasoningEffort={reasoningEffort}
+            onReasoningEffortChange={onReasoningEffortChange}
+            sendShortcut={sendShortcut}
+            draftKey={draftNamespace ? `${draftNamespace}:${chat.id}:${node.id}` : undefined}
+            insertion={composerInsertion}
+            onInsertionApplied={onComposerInsertionApplied}
+            placeholder={side ? "Continue this line of thought…" : "Ask about this topic…"}
+          />
+          {!side && (
+            <p className="selection-tip">
+              Select any passage or equation to define, visualize, quote, elaborate, or rewrite it.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

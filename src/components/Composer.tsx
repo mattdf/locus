@@ -25,6 +25,8 @@ interface ComposerProps {
   reasoningEffort: ReasoningEffort;
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
   sendShortcut: SendShortcut;
+  /** Browser-local recovery key for unsent composer text. */
+  draftKey?: string;
 }
 
 export function Composer({
@@ -43,14 +45,33 @@ export function Composer({
   reasoningEffort,
   onReasoningEffortChange,
   sendShortcut,
+  draftKey,
 }: ComposerProps) {
-  const [value, setValue] = useState(initialValue);
+  const [value, setValue] = useState(() => {
+    if (!draftKey) return initialValue;
+    try {
+      return window.localStorage.getItem(`locus-composer:${draftKey}`) ?? initialValue;
+    } catch {
+      return initialValue;
+    }
+  });
   const ref = useRef<HTMLTextAreaElement>(null);
   const pendingInsertionId = useRef<string | null>(null);
 
   useEffect(() => {
     if (initialValue) ref.current?.focus();
   }, [initialValue]);
+
+  useEffect(() => {
+    if (!draftKey) return;
+    try {
+      const key = `locus-composer:${draftKey}`;
+      if (value) window.localStorage.setItem(key, value);
+      else window.localStorage.removeItem(key);
+    } catch {
+      // Workspace journaling still protects sent content if browser storage is unavailable.
+    }
+  }, [draftKey, value]);
 
   useEffect(() => {
     if (!insertion) return;
@@ -94,6 +115,13 @@ export function Composer({
     if (!value.trim() || !model.trim() || disabled) return;
     onSend(value.trim());
     setValue("");
+    if (draftKey) {
+      try {
+        window.localStorage.removeItem(`locus-composer:${draftKey}`);
+      } catch {
+        // Ignore unavailable browser storage.
+      }
+    }
   };
 
   return (

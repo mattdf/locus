@@ -1,6 +1,19 @@
 export type MessageRole = "user" | "assistant" | "source";
 export type ReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh" | "max";
 export type SendShortcut = "enter" | "mod-enter";
+export type SelectionAction =
+  | "define"
+  | "visualize"
+  | "rewrite"
+  | "elaborate"
+  | "elaborate-inline"
+  | "quote";
+export type PromptProfilePurpose =
+  | "chat"
+  | "definition"
+  | "visualization"
+  | "rewrite"
+  | "inline-elaboration";
 export type ProviderKind =
   | "openai"
   | "openrouter"
@@ -248,6 +261,14 @@ export interface ChatCategory {
   updatedAt: string;
 }
 
+export interface PromptProfile {
+  id: string;
+  name: string;
+  instructions: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface WorkspaceState {
   version: 1;
   categories: ChatCategory[];
@@ -277,6 +298,13 @@ export interface WorkspaceState {
     theme: "light" | "dark";
     textScale: number;
     sendShortcut: SendShortcut;
+    /** The first three actions shown in the mobile selection sheet. */
+    mobileSelectionActions: SelectionAction[];
+    promptProfiles: PromptProfile[];
+    /** Profile assignments are scoped to both operation and provider connection. */
+    promptProfileAssignments: Partial<
+      Record<PromptProfilePurpose, Record<ProviderRef, string>>
+    >;
   };
 }
 
