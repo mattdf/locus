@@ -1,0 +1,39 @@
+name: locus-pdf
+
+services:
+  pdf2markdown:
+    build:
+      context: ./docker/pdf2markdown
+    image: locus-pdf2markdown:local
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${PDF2MARKDOWN_PORT:-8091}:8000"
+    environment:
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:?MISTRAL_API_KEY is required}
+      MISTRAL_API_KEY_ID: ${MISTRAL_API_KEY_ID:-embedded}
+      MISTRAL_OCR_MODEL: ${MISTRAL_OCR_MODEL:-mistral-ocr-4-0}
+      MISTRAL_TIMEOUT_SECONDS: ${MISTRAL_TIMEOUT_SECONDS:-600}
+      PDF2MARKDOWN_API_TOKEN: ${PDF2MARKDOWN_API_TOKEN:-locus-local-pdf-api}
+      PDF2MARKDOWN_ADMIN_TOKEN: ${PDF2MARKDOWN_ADMIN_TOKEN:-locus-local-pdf-admin}
+      PDF2MARKDOWN_SIGNING_SECRET: ${PDF2MARKDOWN_SIGNING_SECRET:-locus-local-pdf-signing}
+      PDF2MARKDOWN_REQUIRE_AUTH: "true"
+      PDF2MARKDOWN_DATA_ROOT: /data/pdf2markdown
+      PDF2MARKDOWN_MAX_UPLOAD_MB: ${PDF2MARKDOWN_MAX_UPLOAD_MB:-100}
+      PDF2MARKDOWN_MAX_PAGES: ${PDF2MARKDOWN_MAX_PAGES:-1000}
+      PDF2MARKDOWN_MAX_CONCURRENT_JOBS: ${PDF2MARKDOWN_MAX_CONCURRENT_JOBS:-4}
+      PDF2MARKDOWN_MAX_QUEUED_JOBS: ${PDF2MARKDOWN_MAX_QUEUED_JOBS:-100}
+      PDF2MARKDOWN_DEFAULT_USER_MONTHLY_PAGE_CAP: ${PDF2MARKDOWN_DEFAULT_USER_MONTHLY_PAGE_CAP:-}
+      PDF2MARKDOWN_DEFAULT_KEY_MONTHLY_PAGE_CAP: ${PDF2MARKDOWN_DEFAULT_KEY_MONTHLY_PAGE_CAP:-}
+    volumes:
+      - locus_pdf2markdown_data:/data/pdf2markdown
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=${PDF2MARKDOWN_TMPFS_SIZE:-2g}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  locus_pdf2markdown_data:

@@ -7,6 +7,7 @@ import {
   ChevronUp,
   Clock3,
   Copy,
+  ExternalLink,
   MessageSquareText,
   Pencil,
   Printer,
@@ -758,12 +759,41 @@ export function ThreadView({
                 )}
                 {message.role === "source" && (
                   <span className="message__controls">
+                    {!readOnly &&
+                      node.id === chat.rootId &&
+                      chat.source?.kind === "pdf" &&
+                      chat.source.status === "ready" && (
+                        <a
+                          className="source-pdf-button"
+                          href={`/api/pdf-documents/${encodeURIComponent(chat.source.documentId)}/source`}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={chat.source.filename}
+                        >
+                          <ExternalLink size={11} />
+                          <span>View original PDF</span>
+                        </a>
+                      )}
+                    {node.id === chat.rootId &&
+                      chat.source?.kind === "pdf" &&
+                      chat.source.status === "importing" && (
+                        <span className="source-pdf-status">
+                          <span /> Converting PDF…
+                        </span>
+                      )}
                     {!readOnly && (
                       <button
                         className="edit-message-button"
                         type="button"
                         aria-label="Edit imported Markdown source"
-                        disabled={waiting}
+                        disabled={
+                          waiting ||
+                          (
+                            node.id === chat.rootId &&
+                            chat.source?.kind === "pdf" &&
+                            chat.source.status === "importing"
+                          )
+                        }
                         onClick={() => onEditSource(message.id)}
                       >
                         <Pencil size={11} />

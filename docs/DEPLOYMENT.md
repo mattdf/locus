@@ -13,20 +13,24 @@ Copy `.env.hosted.example` to a secret environment file outside version control 
 placeholder. Generate independent random values for the PostgreSQL password and Better Auth
 secret. `LOCUS_CREDENTIAL_KEYS` is a comma-separated key ring; each item is a base64url-encoded
 32-byte key, newest first. `POSTMARK_SERVER_TOKEN` must be the Server API token, not the
-account-management token.
+account-management token. PDF import also requires `MISTRAL_API_KEY` plus three independent
+random values for `PDF2MARKDOWN_API_TOKEN`, `PDF2MARKDOWN_ADMIN_TOKEN`, and
+`PDF2MARKDOWN_SIGNING_SECRET`.
 
 ```bash
 docker compose --env-file /secure/path/locus.env -f compose.hosted.yaml up -d --build
 ```
 
-The stack contains four roles:
+The stack contains five roles:
 
 - `postgres`: persistent account, workspace, generation, and credential data
 - `migrate`: a one-shot, checksummed migration runner
 - `metapost`: a network-internal, non-root compiler with a read-only root filesystem and bounded resources
+- `pdf2markdown`: a persistent, parallel Mistral OCR worker with tenant-isolated document storage
 - `app`: the web/API container; only this service should be routed from the public proxy
 
-Do not publish the PostgreSQL or MetaPost ports. Do not mount the Docker socket into any service.
+Do not publish the PostgreSQL, MetaPost, or PDF worker ports. Do not mount the Docker socket into
+any service.
 The reverse proxy should route the configured HTTPS host to `app:8787`, preserve
 `X-Forwarded-Proto` and `X-Forwarded-Host`, and overwrite `X-Real-IP` with the connecting client
 address. Do not expose `app:8787` directly while trusting a client-supplied IP header.
@@ -66,6 +70,10 @@ node build/server/admin.mjs create-user --email you@example.com --name 'Your Nam
   every protected request.
 - The MetaPost service accepts bounded, server-wrapped source over an internal-only Compose
   network and executes compilation without a shell.
+- Mistral and PDF-worker credentials exist only in server-side service environments. Browser
+  endpoints use the authenticated Locus account identity and never expose those credentials.
+- Uploaded PDFs, Markdown, and extracted images are isolated by the authenticated owner ID. Source
+  PDFs and images are served through Locus authorization checks rather than public worker URLs.
 
 MetaPost and TikZ jobs run as a non-root user with no external network access, no Linux
 capabilities, a read-only root filesystem, bounded CPU, memory, process and output limits, and
@@ -77,3 +85,5 @@ pathological jobs are bounded by hard wall-clock deadlines. Set
 
 Run one `app` replica for now. Streaming jobs are reconnectable across browser refreshes but live
 in application memory; horizontal scaling requires sticky routing or a shared job/event backend.
+The PDF worker can execute multiple conversions in parallel, but its SQLite job/usage store assumes
+one worker-service replica backed by its durable volume.

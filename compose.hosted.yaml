@@ -42,6 +42,45 @@ services:
       timeout: 3s
       retries: 10
 
+  pdf2markdown:
+    build:
+      context: ./docker/pdf2markdown
+    restart: unless-stopped
+    environment:
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:?MISTRAL_API_KEY is required}
+      MISTRAL_API_KEY_ID: ${MISTRAL_API_KEY_ID:-embedded}
+      MISTRAL_OCR_MODEL: ${MISTRAL_OCR_MODEL:-mistral-ocr-4-0}
+      MISTRAL_TIMEOUT_SECONDS: ${MISTRAL_TIMEOUT_SECONDS:-600}
+      PDF2MARKDOWN_API_TOKEN: ${PDF2MARKDOWN_API_TOKEN:?PDF2MARKDOWN_API_TOKEN is required}
+      PDF2MARKDOWN_ADMIN_TOKEN: ${PDF2MARKDOWN_ADMIN_TOKEN:?PDF2MARKDOWN_ADMIN_TOKEN is required}
+      PDF2MARKDOWN_SIGNING_SECRET: ${PDF2MARKDOWN_SIGNING_SECRET:?PDF2MARKDOWN_SIGNING_SECRET is required}
+      PDF2MARKDOWN_REQUIRE_AUTH: "true"
+      PDF2MARKDOWN_DATA_ROOT: /data/pdf2markdown
+      PDF2MARKDOWN_MAX_UPLOAD_MB: ${PDF2MARKDOWN_MAX_UPLOAD_MB:-100}
+      PDF2MARKDOWN_MAX_PAGES: ${PDF2MARKDOWN_MAX_PAGES:-1000}
+      PDF2MARKDOWN_MAX_CONCURRENT_JOBS: ${PDF2MARKDOWN_MAX_CONCURRENT_JOBS:-4}
+      PDF2MARKDOWN_MAX_QUEUED_JOBS: ${PDF2MARKDOWN_MAX_QUEUED_JOBS:-100}
+      PDF2MARKDOWN_DEFAULT_USER_MONTHLY_PAGE_CAP: ${PDF2MARKDOWN_DEFAULT_USER_MONTHLY_PAGE_CAP:-}
+      PDF2MARKDOWN_DEFAULT_KEY_MONTHLY_PAGE_CAP: ${PDF2MARKDOWN_DEFAULT_KEY_MONTHLY_PAGE_CAP:-}
+    volumes:
+      - locus_pdf2markdown_data:/data/pdf2markdown
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=${PDF2MARKDOWN_TMPFS_SIZE:-2g}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 3g
+    cpus: 4.0
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
   migrate:
     build:
       context: .
@@ -74,6 +113,9 @@ services:
       LOCUS_CREDENTIAL_KEYS: ${LOCUS_CREDENTIAL_KEYS:?LOCUS_CREDENTIAL_KEYS is required}
       POSTMARK_SERVER_TOKEN: ${POSTMARK_SERVER_TOKEN:?POSTMARK_SERVER_TOKEN is required}
       METAPOST_SERVICE_URL: http://metapost:8090
+      PDF2MARKDOWN_SERVICE_URL: http://pdf2markdown:8000
+      PDF2MARKDOWN_API_TOKEN: ${PDF2MARKDOWN_API_TOKEN:?PDF2MARKDOWN_API_TOKEN is required}
+      PDF2MARKDOWN_ADMIN_TOKEN: ${PDF2MARKDOWN_ADMIN_TOKEN:?PDF2MARKDOWN_ADMIN_TOKEN is required}
       LOCUS_MAX_CONCURRENT_GENERATIONS: "3"
       HOST: 0.0.0.0
       PORT: "8787"
@@ -81,6 +123,8 @@ services:
       migrate:
         condition: service_completed_successfully
       metapost:
+        condition: service_healthy
+      pdf2markdown:
         condition: service_healthy
     read_only: true
     tmpfs:
@@ -106,6 +150,7 @@ services:
 
 volumes:
   locus_postgres_data:
+  locus_pdf2markdown_data:
 
 networks:
   visualization:

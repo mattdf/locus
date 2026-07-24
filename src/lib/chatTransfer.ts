@@ -162,6 +162,24 @@ function isChat(value: unknown): value is ChatTree {
 
   const nodes = Object.values(value.nodes);
   return (
+    (
+      value.source === undefined ||
+      (
+        isRecord(value.source) &&
+        value.source.kind === "pdf" &&
+        typeof value.source.jobId === "string" &&
+        typeof value.source.workerChatId === "string" &&
+        typeof value.source.documentId === "string" &&
+        typeof value.source.filename === "string" &&
+        Number.isSafeInteger(value.source.pageCount) &&
+        (
+          value.source.status === "importing" ||
+          value.source.status === "ready" ||
+          value.source.status === "error"
+        ) &&
+        (value.source.error === undefined || typeof value.source.error === "string")
+      )
+    ) &&
     isRecord(value.nodes[value.rootId]) &&
     nodes.length > 0 &&
     nodes.every(

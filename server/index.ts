@@ -61,6 +61,15 @@ import {
   type WorkspaceSyncInput,
 } from "./workspaces.ts";
 import { accountUsage } from "./usage.ts";
+import {
+  getAccountPdfUsage,
+  getPdfImport,
+  getPdfMarkdown,
+  pdfImportAvailable,
+  PdfImportServiceError,
+  proxyPdfDocument,
+  submitPdfImport,
+} from "./pdf-imports.ts";
 import { isBuiltInProviderId } from "../src/lib/providers.ts";
 import type {
   ContextNode,
@@ -315,8 +324,15 @@ app.get("/api/usage", async (request, response, next) => {
       return;
     }
     const month = typeof request.query.month === "string" ? request.query.month : undefined;
+    const usage = await accountUsage(owner(response), month);
     response.setHeader("Cache-Control", "no-store");
-    response.json(await accountUsage(owner(response), month));
+    response.json({
+      ...usage,
+      pdf: await getAccountPdfUsage(
+        owner(response),
+        usage.selectedMonth,
+      ),
+    });
   } catch (error) {
     if (error instanceof Error && /valid month/i.test(error.message)) {
       response.status(400).json({ error: error.message });
@@ -325,6 +341,127 @@ app.get("/api/usage", async (request, response, next) => {
     next(error);
   }
 });
+
+app.get("/api/pdf-imports/status", async (_request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ available: await pdfImportAvailable() });
+});
+
+app.post("/api/pdf-imports", async (request, response, next) => {
+  try {
+    if (request.is("application/pdf") !== "application/pdf") {
+      response.status(415).json({ error: "Upload a PDF file" });
+      return;
+    }
+    const filename =
+      typeof request.query.filename === "string"
+        ? request.query.filename.trim()
+        : "";
+    const title =
+      typeof request.query.title === "string"
+        ? request.query.title.trim()
+        : undefined;
+    if (!filename || filename.length > 255 || /[/\\\0\r\n]/.test(filename)) {
+      response.status(400).json({ error: "Enter a valid PDF filename" });
+      return;
+    }
+    if (title && title.length > 200) {
+      response.status(400).json({ error: "PDF title is too long" });
+      return;
+    }
+    const imported = await submitPdfImport(
+      request,
+      owner(response),
+      { filename, title },
+    );
+    response.status(202).json({
+      job_id: imported.job_id,
+      chat_id: imported.chat_id,
+      document_id: imported.document_id,
+      status: imported.status,
+      page_count: imported.page_count,
+    });
+  } catch (error) {
+    if (error instanceof PdfImportServiceError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+app.get("/api/pdf-imports/:jobId", async (request, response, next) => {
+  try {
+    response.setHeader("Cache-Control", "no-store");
+    response.json(await getPdfImport(owner(response), request.params.jobId));
+  } catch (error) {
+    if (error instanceof PdfImportServiceError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+app.get("/api/pdf-documents/:documentId/markdown", async (request, response, next) => {
+  try {
+    response.setHeader("Cache-Control", "private, no-store");
+    response.type("text/markdown").send(
+      await getPdfMarkdown(owner(response), request.params.documentId),
+    );
+  } catch (error) {
+    if (error instanceof PdfImportServiceError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+app.get("/api/pdf-documents/:documentId/source", async (request, response, next) => {
+  try {
+    await proxyPdfDocument(
+      owner(response),
+      request.params.documentId,
+      { kind: "source" },
+      response,
+    );
+  } catch (error) {
+    if (error instanceof PdfImportServiceError && !response.headersSent) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+app.get(
+  "/api/pdf-documents/:documentId/assets/:collection/*assetPath",
+  async (request, response, next) => {
+    try {
+      const parameter = request.params.assetPath;
+      const assetPath = Array.isArray(parameter)
+        ? parameter.join("/")
+        : String(parameter ?? "");
+      await proxyPdfDocument(
+        owner(response),
+        request.params.documentId,
+        {
+          kind: "asset",
+          collection: request.params.collection,
+          assetPath,
+        },
+        response,
+      );
+    } catch (error) {
+      if (error instanceof PdfImportServiceError && !response.headersSent) {
+        response.status(error.status).json({ error: error.message });
+        return;
+      }
+      next(error);
+    }
+  },
+);
 
 app.get("/api/metapost/status", async (_request, response) => {
   response.json({ available: await metapostImageAvailable() });

@@ -3,6 +3,7 @@ import {
   Check,
   Clipboard,
   DollarSign,
+  FileText,
   KeyRound,
   Link2,
   LoaderCircle,
@@ -67,6 +68,32 @@ interface AccessResponse {
   waitlist: WaitlistEntry[];
 }
 
+interface PdfUsageRow {
+  user_id?: string;
+  key_id?: string;
+  label?: string;
+  fingerprint?: string;
+  monthly_page_cap: number | null;
+  active?: boolean;
+  pages_processed: number;
+  quota_pages: number;
+  estimated_pages: number;
+  reserved_pages: number;
+  api_calls: number;
+  account?: { id: string; email: string; name: string } | null;
+}
+
+interface PdfUsageSummary {
+  period: string;
+  pages_processed: number;
+  quota_pages: number;
+  estimated_pages: number;
+  reserved_pages: number;
+  api_calls: number;
+  users: PdfUsageRow[];
+  api_keys: PdfUsageRow[];
+}
+
 function inviteStatus(invite: InviteSummary): string {
   if (invite.usedAt) return `Used${invite.usedByEmail ? ` by ${invite.usedByEmail}` : ""}`;
   if (invite.revokedAt) return "Revoked";
@@ -80,6 +107,184 @@ function formatUsd(value: number): string {
 
 function formatTokens(value: number): string {
   return Math.round(value).toLocaleString();
+}
+
+function PdfOcrUsagePanel({ reportError }: { reportError: (message: string) => void }) {
+  const [period, setPeriod] = useState(() => new Date().toISOString().slice(0, 7));
+  const [usage, setUsage] = useState<PdfUsageSummary | null>(null);
+  const [busy, setBusy] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+
+  const load = useCallback(async () => {
+    setBusy("load");
+    try {
+      const result = await adminRequest<PdfUsageSummary>(
+        `/api/admin/access/pdf-usage?period=${encodeURIComponent(period)}`,
+      );
+      setUsage(result);
+      setDrafts(Object.fromEntries([
+        ...result.users
+          .filter((item) => item.user_id)
+          .map((item) => [
+            `user:${item.user_id}`,
+            item.monthly_page_cap === null ? "" : String(item.monthly_page_cap),
+          ]),
+        ...result.api_keys
+          .filter((item) => item.key_id)
+          .map((item) => [
+            `key:${item.key_id}`,
+            item.monthly_page_cap === null ? "" : String(item.monthly_page_cap),
+          ]),
+      ]));
+    } catch (reason) {
+      reportError(reason instanceof Error ? reason.message : "Could not load PDF usage");
+    } finally {
+      setBusy("");
+    }
+  }, [period, reportError]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const saveLimit = async (kind: "user" | "key", id: string) => {
+    const draft = drafts[`${kind}:${id}`] ?? "";
+    const monthlyPageCap = draft.trim() === "" ? null : Number(draft);
+    if (
+      monthlyPageCap !== null &&
+      (!Number.isSafeInteger(monthlyPageCap) || monthlyPageCap < 0)
+    ) {
+      reportError("OCR limits must be whole page counts, or blank for unlimited.");
+      return;
+    }
+    setBusy(`${kind}:${id}`);
+    try {
+      await adminRequest(
+        kind === "user"
+          ? `/api/admin/access/pdf-users/${encodeURIComponent(id)}`
+          : `/api/admin/access/pdf-keys/${encodeURIComponent(id)}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ monthlyPageCap }),
+        },
+      );
+      await load();
+    } catch (reason) {
+      reportError(reason instanceof Error ? reason.message : "Could not update the OCR limit");
+      setBusy("");
+    }
+  };
+
+  return (
+    <section className="admin-access__section pdf-admin-usage">
+      <header>
+        <span><FileText size={15} /><strong>PDF OCR usage</strong></span>
+        <span className="pdf-admin-usage__period">
+          <input
+            type="month"
+            aria-label="PDF usage month"
+            value={period}
+            onChange={(event) => event.target.value && setPeriod(event.target.value)}
+          />
+          <button type="button" disabled={Boolean(busy)} onClick={() => void load()}>
+            <RefreshCw size={12} /> Refresh
+          </button>
+        </span>
+      </header>
+      <p>
+        Mistral OCR is metered in pages. Reservations prevent concurrent imports from
+        racing past account or embedded-key limits; blank limits are unlimited.
+      </p>
+      {!usage ? (
+        <small>{busy ? "Loading OCR usage…" : "OCR usage is unavailable."}</small>
+      ) : (
+        <>
+          <div className="pdf-admin-usage__totals">
+            <span><strong>{usage.pages_processed.toLocaleString()}</strong><small>processed pages</small></span>
+            <span><strong>{usage.reserved_pages.toLocaleString()}</strong><small>reserved pages</small></span>
+            <span><strong>{usage.api_calls.toLocaleString()}</strong><small>imports</small></span>
+          </div>
+          <strong className="pdf-admin-usage__label">Embedded Mistral keys</strong>
+          <div className="admin-access__rows">
+            {usage.api_keys.map((item) => (
+              <article key={item.key_id} data-disabled={item.active === false || undefined}>
+                <span>
+                  <strong>{item.label || item.key_id}</strong>
+                  <small>
+                    fingerprint {item.fingerprint} · {item.pages_processed.toLocaleString()} pages
+                    {" · "}{item.api_calls.toLocaleString()} imports
+                  </small>
+                </span>
+                <label className="pdf-admin-usage__limit">
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    placeholder="Unlimited"
+                    aria-label={`Monthly page limit for ${item.label || item.key_id}`}
+                    value={drafts[`key:${item.key_id}`] ?? ""}
+                    onChange={(event) => setDrafts((current) => ({
+                      ...current,
+                      [`key:${item.key_id}`]: event.target.value,
+                    }))}
+                  />
+                  <button
+                    type="button"
+                    disabled={Boolean(busy)}
+                    onClick={() => void saveLimit("key", item.key_id!)}
+                  >
+                    Save cap
+                  </button>
+                </label>
+              </article>
+            ))}
+          </div>
+          <strong className="pdf-admin-usage__label">Accounts</strong>
+          <div className="admin-access__rows">
+            {usage.users.length === 0 ? (
+              <small>No PDF imports this month.</small>
+            ) : usage.users.map((item) => (
+              <article key={item.user_id}>
+                <span>
+                  <strong>{item.account?.name || item.account?.email || item.user_id}</strong>
+                  <small>
+                    {item.account?.email && item.account.email !== item.account.name
+                      ? `${item.account.email} · `
+                      : ""}
+                    {item.pages_processed.toLocaleString()} pages
+                    {" · "}{item.reserved_pages.toLocaleString()} reserved
+                    {" · "}{item.api_calls.toLocaleString()} imports
+                    {item.estimated_pages > 0
+                      ? ` · ${item.estimated_pages.toLocaleString()} estimated`
+                      : ""}
+                  </small>
+                </span>
+                <label className="pdf-admin-usage__limit">
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    placeholder="Unlimited"
+                    aria-label={`Monthly OCR page limit for ${item.account?.email || item.user_id}`}
+                    value={drafts[`user:${item.user_id}`] ?? ""}
+                    onChange={(event) => setDrafts((current) => ({
+                      ...current,
+                      [`user:${item.user_id}`]: event.target.value,
+                    }))}
+                  />
+                  <button
+                    type="button"
+                    disabled={Boolean(busy)}
+                    onClick={() => void saveLimit("user", item.user_id!)}
+                  >
+                    Save cap
+                  </button>
+                </label>
+              </article>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
+  );
 }
 
 export function AdminAccessPanel() {
@@ -458,6 +663,8 @@ export function AdminAccessPanel() {
           </div>
         )}
       </form>
+
+      <PdfOcrUsagePanel reportError={setError} />
 
       <form className="admin-access__section admin-access__form" onSubmit={createInvite}>
         <header><span><Link2 size={15} /><strong>Invite links</strong></span></header>

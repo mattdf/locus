@@ -15,6 +15,7 @@ conversation.
 - OpenAI, OpenRouter, Claude, Kimi, GLM, MiniMax, DeepSeek, Qwen, and multiple custom OpenAI-compatible providers with BYOK credentials
 - Independent provider/model routing for chat, definitions, visualizations, and rewrites
 - Hosted access controls with public signup, waitlists, invite links, managed API access, and account suspension
+- PDF import with equation-aware Mistral OCR, rendered extracted images, and retained source documents
 - Markdown import plus portable JSON import and export
 - Categories, sharing, search-friendly URLs, and persistent navigation through nested threads
 - Local single-user mode by default, with an optional private multi-user deployment
@@ -36,6 +37,13 @@ Configure a provider and API key in **Settings**. Alternatively, place
 `OPENAI_API_KEY.txt`, `OPENROUTER_API_KEY.txt`, `DEEPSEEK_API_KEY.txt`, or
 `QWEN_API_KEY.txt` in the project directory. Local
 Custom OpenAI-compatible endpoints can use HTTP or HTTPS locally and may omit a key when the server does not require one.
+
+PDF import additionally requires a Mistral API key and its persistent worker:
+
+```bash
+export MISTRAL_API_KEY='your-key'
+npm run pdf:up
+```
 
 For a production-style local build:
 

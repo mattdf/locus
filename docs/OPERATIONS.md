@@ -22,10 +22,17 @@ single-use invite links, and administrator-managed provider keys. Managed key pl
 only when the key is created. Later API responses expose only its label, provider, status, and usage
 counts. Revoking a managed key immediately removes provider access from every account relying on it.
 
+The PDF OCR section reports monthly Mistral pages and calls by account and embedded key.
+Administrators can set or clear monthly page caps independently for each user and key. Cap checks
+reserve pages before an OCR job starts, so concurrent jobs cannot overspend the configured
+allowance.
+
 ## Backups
 
-Back up PostgreSQL and the credential key ring together. A database dump without the matching
-`LOCUS_CREDENTIAL_KEYS` can restore chats but cannot decrypt saved provider keys.
+Back up PostgreSQL, the credential key ring, and the `locus_pdf2markdown_data` volume together. A
+database dump without the matching `LOCUS_CREDENTIAL_KEYS` can restore chats but cannot decrypt
+saved provider keys. A database dump without the PDF volume retains chat Markdown but loses original
+source PDFs and extracted image files.
 
 ```bash
 docker compose --env-file /secure/path/locus.env -f compose.hosted.yaml exec -T postgres \
@@ -63,8 +70,11 @@ Before an update:
 
 - `/api/health` reports process liveness.
 - `/api/ready` verifies the database schema and MetaPost compiler.
+- `/api/pdf-imports/status` reports whether the authenticated app can reach the PDF worker.
 - `locus_generation_jobs` checkpoints partial output and marks interrupted jobs on restart.
 - `locus_usage_events` records provider/model/token/cost metrics per owner.
+- PDF OCR job state and page/call usage live in the durable PDF-worker volume; the administrator
+  interface reads the same accounting store through a server-only credential.
 
 Generation rows have an `expiresAt` value but automated deletion is not yet scheduled. Add a
 database maintenance job appropriate to the retention policy before operating at substantial

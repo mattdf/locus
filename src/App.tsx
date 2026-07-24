@@ -135,6 +135,7 @@ import type {
   ProviderConnectionSummary,
   ProviderKind,
   ProviderModelOption,
+  PdfChatSource,
   ReasoningEffort,
   SelectionDraft,
   SourceEditUndo,
@@ -1033,6 +1034,7 @@ function DefinitionPopover({
 function NewChatScreen({
   initialMode,
   onCreate,
+  onPdfQueued,
   onOpenSidebar,
   categories,
   provider,
@@ -1050,6 +1052,11 @@ function NewChatScreen({
     title: string,
     categoryId: string | null,
   ) => void;
+  onPdfQueued: (
+    source: PdfChatSource,
+    title: string,
+    categoryId: string | null,
+  ) => void;
   onOpenSidebar: () => void;
   categories: ChatCategory[];
   provider: ProviderKind;
@@ -1060,10 +1067,14 @@ function NewChatScreen({
   onReasoningEffortChange: (effort: ReasoningEffort) => void;
   sendShortcut: WorkspaceState["settings"]["sendShortcut"];
 }) {
-  const [mode, setMode] = useState(initialMode);
+  const [mode, setMode] = useState<"ask" | "import" | "pdf">(initialMode);
   const [content, setContent] = useState("");
   const [title, setTitle] = useState("");
   const [categoryId, setCategoryId] = useState("");
+  const [pdfFile, setPdfFile] = useState<File | null>(null);
+  const [pdfUploading, setPdfUploading] = useState(false);
+  const [pdfError, setPdfError] = useState("");
+  const [pdfAvailable, setPdfAvailable] = useState<boolean | null>(null);
 
   useEffect(() => setMode(initialMode), [initialMode]);
   useEffect(() => {
@@ -1072,7 +1083,67 @@ function NewChatScreen({
     }
   }, [categories, categoryId]);
 
-  const submitNewChat = () => {
+  useEffect(() => {
+    if (mode !== "pdf" || pdfAvailable !== null) return;
+    fetch("/api/pdf-imports/status", { cache: "no-store" })
+      .then(async (response) => {
+        const result = (await response.json().catch(() => ({}))) as {
+          available?: boolean;
+        };
+        setPdfAvailable(response.ok && result.available === true);
+      })
+      .catch(() => setPdfAvailable(false));
+  }, [mode, pdfAvailable]);
+
+  const submitNewChat = async () => {
+    if (mode === "pdf") {
+      if (!pdfFile || pdfUploading) return;
+      setPdfUploading(true);
+      setPdfError("");
+      try {
+        const parameters = new URLSearchParams({ filename: pdfFile.name });
+        if (title.trim()) parameters.set("title", title.trim());
+        const response = await fetch(`/api/pdf-imports?${parameters}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/pdf" },
+          credentials: "same-origin",
+          body: pdfFile,
+        });
+        const result = (await response.json().catch(() => ({}))) as {
+          job_id?: string;
+          chat_id?: string;
+          document_id?: string;
+          page_count?: number;
+          error?: string;
+        };
+        if (
+          !response.ok ||
+          !result.job_id ||
+          !result.chat_id ||
+          !result.document_id ||
+          !Number.isSafeInteger(result.page_count)
+        ) {
+          throw new Error(result.error || "Could not queue the PDF import");
+        }
+        onPdfQueued(
+          {
+            kind: "pdf",
+            jobId: result.job_id,
+            workerChatId: result.chat_id,
+            documentId: result.document_id,
+            filename: pdfFile.name,
+            pageCount: result.page_count!,
+            status: "importing",
+          },
+          title.trim(),
+          categoryId || null,
+        );
+      } catch (error) {
+        setPdfError(error instanceof Error ? error.message : "Could not import the PDF");
+        setPdfUploading(false);
+      }
+      return;
+    }
     if (!content.trim() || (mode === "ask" && !model.trim())) return;
     onCreate(mode, content.trim(), title.trim(), categoryId || null);
   };
@@ -1129,6 +1200,15 @@ function NewChatScreen({
             >
               <FileInput size={15} /> Import Markdown
             </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={mode === "pdf"}
+              className={mode === "pdf" ? "active" : ""}
+              onClick={() => setMode("pdf")}
+            >
+              <Upload size={15} /> Import PDF
+            </button>
           </div>
           <div className="start-card__meta">
             <input
@@ -1152,25 +1232,57 @@ function NewChatScreen({
               ))}
             </select>
           </div>
-          <textarea
-            autoFocus
-            value={content}
-            onChange={(event) => setContent(event.target.value)}
-            onKeyDown={(event) => {
-              if (applyMarkdownShortcut(event, content, setContent)) return;
-              if (isSendShortcut(event, sendShortcut)) {
-                event.preventDefault();
-                submitNewChat();
+          {mode === "pdf" ? (
+            <div className="pdf-import-field">
+              <input
+                id="pdf-import-file"
+                type="file"
+                accept="application/pdf,.pdf"
+                disabled={pdfUploading}
+                onChange={(event) => {
+                  setPdfFile(event.target.files?.[0] ?? null);
+                  setPdfError("");
+                }}
+              />
+              <label htmlFor="pdf-import-file">
+                <Upload size={22} />
+                <strong>{pdfFile ? pdfFile.name : "Choose a PDF"}</strong>
+                <span>
+                  {pdfFile
+                    ? `${(pdfFile.size / (1024 * 1024)).toFixed(1)} MB`
+                    : "The document will be converted to Markdown with its figures preserved."}
+                </span>
+              </label>
+              {pdfAvailable === false && (
+                <p className="pdf-import-field__error" role="alert">
+                  The PDF conversion service is not available.
+                </p>
+              )}
+              {pdfError && (
+                <p className="pdf-import-field__error" role="alert">{pdfError}</p>
+              )}
+            </div>
+          ) : (
+            <textarea
+              autoFocus
+              value={content}
+              onChange={(event) => setContent(event.target.value)}
+              onKeyDown={(event) => {
+                if (applyMarkdownShortcut(event, content, setContent)) return;
+                if (isSendShortcut(event, sendShortcut)) {
+                  event.preventDefault();
+                  void submitNewChat();
+                }
+              }}
+              rows={9}
+              placeholder={
+                mode === "import"
+                  ? "Paste Markdown here — nothing is sent to the model.\n\nEquations like $\\nabla_\\theta L$ render automatically."
+                  : "What are you trying to understand? Include as much context as you like."
               }
-            }}
-            rows={9}
-            placeholder={
-              mode === "import"
-                ? "Paste Markdown here — nothing is sent to the model.\n\nEquations like $\\nabla_\\theta L$ render automatically."
-                : "What are you trying to understand? Include as much context as you like."
-            }
-            aria-label={mode === "import" ? "Markdown to import" : "Question for Locus"}
-          />
+              aria-label={mode === "import" ? "Markdown to import" : "Question for Locus"}
+            />
+          )}
           <div className="start-card__footer">
             {mode === "ask" ? (
               <ModelPicker
@@ -1184,16 +1296,30 @@ function NewChatScreen({
                 ariaLabel="Model for new chat"
                 reasoningAriaLabel="Reasoning effort for new chat"
               />
-            ) : (
+            ) : mode === "import" ? (
               <span>Saved without a model call</span>
+            ) : (
+              <span>
+                {pdfUploading
+                  ? "Uploading…"
+                  : "Converted with Mistral OCR"}
+              </span>
             )}
             <button
               className="primary-button"
               type="button"
-              disabled={!content.trim() || (mode === "ask" && !model.trim())}
-              onClick={submitNewChat}
+              disabled={
+                mode === "pdf"
+                  ? !pdfFile || pdfUploading || pdfAvailable === false
+                  : !content.trim() || (mode === "ask" && !model.trim())
+              }
+              onClick={() => void submitNewChat()}
             >
-              {mode === "import" ? "Create from Markdown" : "Start conversation"}
+              {mode === "import"
+                ? "Create from Markdown"
+                : mode === "pdf"
+                  ? pdfUploading ? "Uploading…" : "Import PDF"
+                  : "Start conversation"}
               <ChevronRight size={16} />
             </button>
           </div>
@@ -1349,6 +1475,11 @@ export default function App({
     selectedMessage?.role === "assistant" ||
     selectedInlineElaboration,
   );
+  const importingPdfSignature = workspace.chats
+    .filter((chat) => chat.source?.kind === "pdf" && chat.source.status === "importing")
+    .map((chat) => `${chat.id}:${chat.source!.jobId}`)
+    .sort()
+    .join("|");
 
   const closeElaborationDraft = () => {
     if (!draftRef.current) {
@@ -1800,6 +1931,126 @@ export default function App({
     window.addEventListener("beforeunload", warnBeforeLeaving);
     return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
   }, [saveState]);
+
+  useEffect(() => {
+    if (!loaded || !importingPdfSignature) return;
+    let stopped = false;
+    let timer: number | null = null;
+    let polling = false;
+
+    const poll = async () => {
+      if (stopped || polling) return;
+      polling = true;
+      const imports = workspaceRef.current.chats
+        .filter(
+          (chat) =>
+            chat.source?.kind === "pdf" &&
+            chat.source.status === "importing",
+        )
+        .map((chat) => ({
+          chatId: chat.id,
+          jobId: chat.source!.jobId,
+          documentId: chat.source!.documentId,
+        }));
+      await Promise.all(imports.map(async (item) => {
+        try {
+          const response = await fetch(
+            `/api/pdf-imports/${encodeURIComponent(item.jobId)}`,
+            { cache: "no-store", credentials: "same-origin" },
+          );
+          const job = (await response.json().catch(() => ({}))) as {
+            status?: "queued" | "running" | "completed" | "failed";
+            error?: string | null;
+          };
+          if (!response.ok) return;
+          if (job.status === "failed") {
+            const updatedAt = timestamp();
+            setWorkspace((current) => ({
+              ...current,
+              chats: current.chats.map((chat) => {
+                if (
+                  chat.id !== item.chatId ||
+                  chat.source?.jobId !== item.jobId ||
+                  chat.source.status !== "importing"
+                ) return chat;
+                const root = chat.nodes[chat.rootId];
+                const error = job.error || "The PDF conversion failed.";
+                return {
+                  ...chat,
+                  source: { ...chat.source, status: "error", error },
+                  updatedAt,
+                  nodes: {
+                    ...chat.nodes,
+                    [root.id]: {
+                      ...root,
+                      messages: root.messages.map((message) =>
+                        message.role === "source"
+                          ? {
+                              ...message,
+                              content: `# PDF import failed\n\n${error}`,
+                              error: true,
+                            }
+                          : message,
+                      ),
+                      updatedAt,
+                    },
+                  },
+                };
+              }),
+            }));
+            return;
+          }
+          if (job.status !== "completed") return;
+
+          const markdownResponse = await fetch(
+            `/api/pdf-documents/${encodeURIComponent(item.documentId)}/markdown`,
+            { cache: "no-store", credentials: "same-origin" },
+          );
+          const markdown = await markdownResponse.text();
+          if (!markdownResponse.ok) return;
+          const updatedAt = timestamp();
+          setWorkspace((current) => ({
+            ...current,
+            chats: current.chats.map((chat) => {
+              if (
+                chat.id !== item.chatId ||
+                chat.source?.jobId !== item.jobId ||
+                chat.source.status !== "importing"
+              ) return chat;
+              const root = chat.nodes[chat.rootId];
+              return {
+                ...chat,
+                source: { ...chat.source, status: "ready", error: undefined },
+                updatedAt,
+                nodes: {
+                  ...chat.nodes,
+                  [root.id]: {
+                    ...root,
+                    messages: root.messages.map((message) =>
+                      message.role === "source"
+                        ? { ...message, content: markdown, error: false }
+                        : message,
+                    ),
+                    updatedAt,
+                  },
+                },
+              };
+            }),
+          }));
+        } catch {
+          // Durable jobs continue server-side. Transient polling failures retry.
+        }
+      }));
+      polling = false;
+      if (!stopped) timer = window.setTimeout(poll, 2_000);
+    };
+
+    void poll();
+    return () => {
+      stopped = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [importingPdfSignature, loaded]);
 
   useEffect(() => {
     const close = (event: KeyboardEvent) => {
@@ -4369,6 +4620,51 @@ export default function App({
     }
   };
 
+  const createPdfChat = (
+    source: PdfChatSource,
+    suppliedTitle: string,
+    categoryId: string | null,
+  ) => {
+    historyAction.current = "push";
+    const createdAt = timestamp();
+    const rootId = newId();
+    const chatId = newId();
+    const filenameTitle = source.filename
+      .replace(/\.pdf$/i, "")
+      .replace(/[-_]+/g, " ")
+      .trim();
+    const title = suppliedTitle || filenameTitle || "Imported PDF";
+    const sourceMessage = makeMessage(
+      "source",
+      `# Importing ${title}\n\nConverting **${source.filename}** to Markdown. This job continues on the server if you refresh or close this page.`,
+    );
+    const root: ThreadNode = {
+      id: rootId,
+      parentId: null,
+      title,
+      messages: [sourceMessage],
+      createdAt,
+      updatedAt: createdAt,
+    };
+    const chat: ChatTree = {
+      id: chatId,
+      title,
+      rootId,
+      categoryId,
+      source,
+      nodes: { [rootId]: root },
+      createdAt,
+      updatedAt: createdAt,
+    };
+    setWorkspace((current) => ({
+      ...current,
+      activeChatId: chatId,
+      chats: [chat, ...current.chats],
+    }));
+    setActiveNodeId(rootId);
+    setDraft(null);
+  };
+
   const sendToThread = (nodeId: string, content: string) => {
     if (!activeChat) return;
     const node = activeChat.nodes[nodeId];
@@ -5558,6 +5854,7 @@ export default function App({
         <NewChatScreen
           initialMode={newMode}
           onCreate={createChat}
+          onPdfQueued={createPdfChat}
           onOpenSidebar={openSidebar}
           categories={workspace.categories}
           provider={chatProviderKind}

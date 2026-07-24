@@ -2,6 +2,7 @@ import {
   CalendarDays,
   ChevronLeft,
   Coins,
+  FileText,
   KeyRound,
   LoaderCircle,
   RefreshCw,
@@ -35,6 +36,18 @@ interface AccountUsage {
   lifetime: UsageTotals;
   months: MonthlyUsage[];
   credentials: CredentialUsage[];
+  pdf?: {
+    available: boolean;
+    period: string;
+    usage: {
+      monthly_page_cap: number | null;
+      pages_processed: number;
+      quota_pages: number;
+      estimated_pages: number;
+      reserved_pages: number;
+      api_calls: number;
+    } | null;
+  };
 }
 
 function zeroTotals(): UsageTotals {
@@ -241,6 +254,53 @@ export function UsageSettingsModal({
                   </button>
                 ))}
               </div>
+            )}
+          </section>
+
+          <section className="usage-view__section">
+            <header>
+              <div>
+                <FileText size={14} />
+                <span>
+                  <strong>PDF OCR usage</strong>
+                  <small>{formatMonth(selectedMonth)} · Mistral OCR</small>
+                </span>
+              </div>
+            </header>
+            {usage?.pdf?.available === false ? (
+              <div className="usage-view__empty">PDF usage is temporarily unavailable.</div>
+            ) : (
+              <div className="usage-view__month-total">
+                <span>
+                  <small>Processed pages</small>
+                  <strong>{(usage?.pdf?.usage?.pages_processed ?? 0).toLocaleString()}</strong>
+                </span>
+                <span>
+                  <small>Imports</small>
+                  <strong>{(usage?.pdf?.usage?.api_calls ?? 0).toLocaleString()}</strong>
+                </span>
+                <span>
+                  <small>Monthly cap</small>
+                  <strong>
+                    {usage?.pdf?.usage?.monthly_page_cap === null ||
+                    usage?.pdf?.usage?.monthly_page_cap === undefined
+                      ? "Unlimited"
+                      : usage.pdf.usage.monthly_page_cap.toLocaleString()}
+                  </strong>
+                </span>
+              </div>
+            )}
+            {(usage?.pdf?.usage?.reserved_pages ?? 0) > 0 && (
+              <p className="usage-view__note">
+                {usage!.pdf!.usage!.reserved_pages.toLocaleString()} pages are currently
+                reserved by queued or running imports.
+              </p>
+            )}
+            {(usage?.pdf?.usage?.estimated_pages ?? 0) > 0 && (
+              <p className="usage-view__note">
+                {usage!.pdf!.usage!.estimated_pages.toLocaleString()} pages were conservatively
+                counted after an interrupted or indeterminate upstream call.
+              </p>
             )}
           </section>
 

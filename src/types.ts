@@ -215,11 +215,23 @@ export interface ThreadNode {
   updatedAt: string;
 }
 
+export interface PdfChatSource {
+  kind: "pdf";
+  jobId: string;
+  workerChatId: string;
+  documentId: string;
+  filename: string;
+  pageCount: number;
+  status: "importing" | "ready" | "error";
+  error?: string;
+}
+
 export interface ChatTree {
   id: string;
   title: string;
   pinned?: boolean;
   categoryId?: string | null;
+  source?: PdfChatSource;
   rootId: string;
   nodes: Record<string, ThreadNode>;
   createdAt: string;

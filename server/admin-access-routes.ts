@@ -16,6 +16,13 @@ import {
   updateManagedCredentialLimit,
 } from "./credentials.ts";
 import { abortOwnerGenerations } from "./generations.ts";
+import { query } from "./db.ts";
+import {
+  getPdfUsage,
+  PdfImportServiceError,
+  setPdfKeyCap,
+  setPdfUserCap,
+} from "./pdf-imports.ts";
 
 export const adminAccessRouter = express.Router();
 
@@ -30,6 +37,29 @@ function managedKeyLimit(value: unknown): number | null {
     throw new Error("The monthly managed-key limit must be between $0 and $10,000,000");
   }
   return value;
+}
+
+function pageLimit(value: unknown): number | null {
+  if (value === null || value === undefined || value === "" || value === 0) return null;
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 0 ||
+    value > 100_000_000
+  ) {
+    throw new Error("The monthly OCR limit must be a whole number of pages, or blank for unlimited");
+  }
+  return value;
+}
+
+function usagePeriod(value: unknown): string {
+  const period = typeof value === "string" && value.trim()
+    ? value.trim()
+    : new Date().toISOString().slice(0, 7);
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period)) {
+    throw new Error("Choose a valid month in YYYY-MM format");
+  }
+  return period;
 }
 
 adminAccessRouter.get("/", async (_request, response, next) => {
@@ -205,6 +235,104 @@ adminAccessRouter.delete("/waitlist/:entryId", async (request, response, next) =
     }
     response.status(204).end();
   } catch (error) {
+    next(error);
+  }
+});
+
+adminAccessRouter.get("/pdf-usage", async (request, response, next) => {
+  try {
+    if (!requireAdmin(response)) return;
+    const usage = await getPdfUsage(usagePeriod(request.query.period));
+    const accounts = await query<{ id: string; email: string; name: string }>(
+      `select "id", "email", "name" from "user" order by lower("email")`,
+    );
+    const accountById = new Map(accounts.rows.map((account) => [account.id, account]));
+    const usageByUserId = new Map(
+      usage.users
+        .filter((item) => item.user_id)
+        .map((item) => [item.user_id!, item]),
+    );
+    response.setHeader("Cache-Control", "no-store");
+    response.json({
+      ...usage,
+      users: [
+        ...accounts.rows.map((account) => ({
+          user_id: account.id,
+          monthly_page_cap: null,
+          pages_processed: 0,
+          quota_pages: 0,
+          estimated_pages: 0,
+          reserved_pages: 0,
+          api_calls: 0,
+          ...usageByUserId.get(account.id),
+          account,
+        })),
+        ...usage.users
+          .filter((item) => item.user_id && !accountById.has(item.user_id))
+          .map((item) => ({ ...item, account: null })),
+      ],
+    });
+  } catch (error) {
+    if (error instanceof PdfImportServiceError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    if (error instanceof Error && /valid month/i.test(error.message)) {
+      response.status(400).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+adminAccessRouter.patch("/pdf-users/:userId", async (request, response, next) => {
+  try {
+    if (!requireAdmin(response)) return;
+    if (!validIdentifier(request.params.userId)) {
+      response.status(400).json({ error: "Invalid account identifier" });
+      return;
+    }
+    response.json(
+      await setPdfUserCap(
+        request.params.userId,
+        pageLimit(request.body?.monthlyPageCap),
+      ),
+    );
+  } catch (error) {
+    if (error instanceof PdfImportServiceError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    if (error instanceof Error && /OCR limit/i.test(error.message)) {
+      response.status(400).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+adminAccessRouter.patch("/pdf-keys/:keyId", async (request, response, next) => {
+  try {
+    if (!requireAdmin(response)) return;
+    if (!validIdentifier(request.params.keyId)) {
+      response.status(400).json({ error: "Invalid OCR key identifier" });
+      return;
+    }
+    response.json(
+      await setPdfKeyCap(
+        request.params.keyId,
+        pageLimit(request.body?.monthlyPageCap),
+      ),
+    );
+  } catch (error) {
+    if (error instanceof PdfImportServiceError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    if (error instanceof Error && /OCR limit/i.test(error.message)) {
+      response.status(400).json({ error: error.message });
+      return;
+    }
     next(error);
   }
 });

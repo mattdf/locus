@@ -27,6 +27,21 @@ exact ancestor path supplied to the model while keeping individual updates inexp
   administrator portions of that policy.
 - `server/metapost.ts` and `server/tikz.ts` bound request and artifact sizes and dispatch figure
   bodies to an isolated compiler.
+- `server/pdf-imports.ts` authenticates PDF operations, streams uploads to the private OCR worker,
+  rewrites extracted-image URLs to same-origin protected routes, and proxies source/image reads
+  without exposing worker or Mistral credentials.
+
+## PDF import worker
+
+`docker/pdf2markdown` is an independent persistent API service. Its bounded thread pool processes
+multiple Mistral OCR jobs concurrently while a SQLite WAL database records jobs, documents,
+reservations, page/call usage, and per-user/per-key caps. Original PDFs, converted Markdown, and
+extracted images live under tenant-hashed directories in a durable volume.
+
+The browser stores only stable source metadata in the chat tree. It can therefore resume polling
+an accepted job after refresh, replace the placeholder with completed Markdown, and access
+document assets through authenticated Locus routes. In hosted mode the worker is reachable only
+from the application network.
 
 `LOCUS_MODE=local` and `LOCUS_MODE=hosted` are explicit modes. Hosted mode does not fall back to
 the local workspace or project key files. The broader multi-user design is recorded in
