@@ -8,7 +8,13 @@ import remarkMath from "remark-math";
 import type { ChatTree, ThreadNode } from "../types";
 import { generationDetails } from "../lib/generation";
 import { normalizeMathDelimiters } from "../lib/markdown";
-import { activeEditContent, messagesForNode, threadPath } from "../lib/tree";
+import {
+  activeEditContent,
+  messagesForNode,
+  recoveredThreadTitle,
+  threadPath,
+} from "../lib/tree";
+import { InlineMath } from "./MathText";
 
 interface ExportOptions {
   structure: "tree" | "flat";
@@ -60,9 +66,22 @@ function NodeSection({
     >
       <header className="study-export-node__header">
         <span>{node.id === chat.rootId ? "Main thread" : `Branch · depth ${depth}`}</span>
-        <h2>{node.id === chat.rootId ? chat.title : node.title}</h2>
+        <h2>
+          <InlineMath
+            source={node.id === chat.rootId ? chat.title : recoveredThreadTitle(node)}
+          />
+        </h2>
         {options.structure === "tree" && depth > 0 && (
-          <p>{path.map((item) => item.id === chat.rootId ? "Main" : item.title).join(" › ")}</p>
+          <p>
+            {path.map((item, index) => (
+              <span key={item.id}>
+                {index > 0 && " › "}
+                {item.id === chat.rootId
+                  ? "Main"
+                  : <InlineMath source={recoveredThreadTitle(item)} />}
+              </span>
+            ))}
+          </p>
         )}
         {node.anchor && (
           <blockquote className="study-export-anchor">
@@ -101,13 +120,17 @@ function NodeSection({
                 <div className="study-export-annotations">
                   {definitions.map((definition) => (
                     <aside className="study-export-annotation study-export-definition" key={definition.id}>
-                      <strong>Definition · {definition.anchor.quote}</strong>
+                      <strong>
+                        Definition · <InlineMath source={definition.anchor.quote} />
+                      </strong>
                       <Markdown source={definition.content} />
                     </aside>
                   ))}
                   {elaborations.map((elaboration) => (
                     <aside className="study-export-annotation study-export-elaboration" key={elaboration.id}>
-                      <strong>Inline elaboration · {elaboration.anchor.quote}</strong>
+                      <strong>
+                        Inline elaboration · <InlineMath source={elaboration.anchor.quote} />
+                      </strong>
                       <Markdown
                         source={activeEditContent(
                           node,
@@ -125,7 +148,9 @@ function NodeSection({
                             className="study-export-annotation study-export-definition"
                             key={definition.id}
                           >
-                            <strong>Definition · {definition.anchor.quote}</strong>
+                            <strong>
+                              Definition · <InlineMath source={definition.anchor.quote} />
+                            </strong>
                             <Markdown source={definition.content} />
                           </aside>
                         ))}
@@ -133,7 +158,9 @@ function NodeSection({
                   ))}
                   {visualizations.map((visualization) => (
                     <figure className="study-export-annotation study-export-visualization" key={visualization.id}>
-                      <figcaption>Visualization · {visualization.anchor.quote}</figcaption>
+                      <figcaption>
+                        Visualization · <InlineMath source={visualization.anchor.quote} />
+                      </figcaption>
                       {visualization.svg ? (
                         <div dangerouslySetInnerHTML={{ __html: visualization.svg }} />
                       ) : (
@@ -177,7 +204,7 @@ function ExportDocument({
     <main className="study-export-document">
       <header className="study-export-cover">
         <span>Locus study export</span>
-        <h1>{chat.title}</h1>
+        <h1><InlineMath source={chat.title} /></h1>
         <p>
           {Object.keys(chat.nodes).length} threads · exported{" "}
           {new Date().toLocaleString()}
@@ -198,7 +225,8 @@ function ExportDocument({
 const EXPORT_CSS = `
   :root { color-scheme: light; --accent:#216b59; --line:#ddd9cf; }
   * { box-sizing:border-box; }
-  body { margin:0; color:#26322e; background:#fff; font-family:Inter,system-ui,sans-serif; }
+  html { width:100%; height:auto; min-height:100%; overflow-x:hidden; overflow-y:auto; }
+  body { width:100%; height:auto; min-height:100%; min-width:0; margin:0; overflow-x:hidden; overflow-y:auto; color:#26322e; background:#fff; font-family:Inter,system-ui,sans-serif; }
   .study-export-document { width:min(860px,calc(100% - 48px)); margin:0 auto; padding:56px 0 80px; }
   .study-export-cover { padding:0 0 34px; margin-bottom:38px; border-bottom:2px solid #26322e; }
   .study-export-cover > span,.study-export-node__header > span { color:#68736e; font-size:10px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }

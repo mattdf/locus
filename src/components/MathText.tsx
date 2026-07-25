@@ -21,7 +21,12 @@ export const InlineMath = memo(function InlineMath({
         .replace(/\$\$\s*([\s\S]*?)\s*\$\$/g, (_match, equation: string) =>
           `$${equation.trim()}$`,
         )
-        .replace(/\s*\n\s*/g, " "),
+        .replace(/\s*\n\s*/g, " ")
+        // Inline labels should not turn leading section numbers or dashes into
+        // block-level Markdown lists.
+        .replace(/^(\s*)(\d+)\.\s+/, "$1$2\\. ")
+        .replace(/^(\s*)([-+])\s+/, "$1\\$2 ")
+        .replace(/^(\s*)>\s+/, "$1\\> "),
     [source],
   );
   return (

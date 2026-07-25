@@ -23,6 +23,7 @@ import type {
   WorkspaceJob,
 } from "../lib/study";
 import { generationDetails } from "../lib/generation";
+import { recoveredThreadTitle } from "../lib/tree";
 import { InlineMath } from "./MathText";
 
 export type StudyToolsTab = "map" | "integrity" | "jobs";
@@ -144,7 +145,9 @@ export function StudyToolsPanel({
           <GitBranch size={13} />
           <span>
             <strong>
-              {node.id === chat.rootId ? "Main thread" : <InlineMath source={node.title} />}
+              {node.id === chat.rootId
+                ? "Main thread"
+                : <InlineMath source={recoveredThreadTitle(node)} />}
             </strong>
             <small>
               {node.messages.length} messages
@@ -173,7 +176,7 @@ export function StudyToolsPanel({
                     <Icon size={12} />
                     <span>{annotation.kind}</span>
                     <em>
-                      <InlineMath source={annotation.anchor.quote.slice(0, 90)} />
+                      <InlineMath source={annotation.anchor.quote} />
                     </em>
                   </button>
                 </li>
@@ -196,7 +199,9 @@ export function StudyToolsPanel({
         <header className="study-tools-panel__header">
           <div>
             <span>Workspace</span>
-            <h2>{chat?.title ?? "Study tools"}</h2>
+            <h2>
+              {chat ? <InlineMath source={chat.title} /> : "Study tools"}
+            </h2>
           </div>
           <button className="icon-button" type="button" aria-label="Close study tools" onClick={onClose}>
             <X size={17} />
@@ -274,7 +279,7 @@ export function StudyToolsPanel({
                         <div>
                           <strong>{item.title}</strong>
                           <span>{item.reason}</span>
-                          <blockquote><InlineMath source={item.quote.slice(0, 180)} /></blockquote>
+                          <blockquote><InlineMath source={item.quote} /></blockquote>
                         </div>
                         <div className="integrity-item__actions">
                           <button

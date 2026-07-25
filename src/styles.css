@@ -9040,6 +9040,16 @@ body.resizing-drawer {
   white-space: nowrap;
 }
 
+.study-tools-panel__header h2 .inline-math,
+.study-map__thread strong .inline-math,
+.study-map__annotations em .inline-math {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .study-tools-tabs {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

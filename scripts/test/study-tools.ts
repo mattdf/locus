@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { annotationIntegrity, searchWorkspace, workspaceJobs } from "../../src/lib/study.ts";
+import { titleFrom } from "../../src/lib/tree.ts";
 import type { ChatTree, WorkspaceState } from "../../src/types.ts";
 import { emptyState } from "../../server/storage.ts";
 
@@ -77,5 +78,16 @@ const jobs = workspaceJobs(workspace);
 assert.equal(jobs[0]?.kind, "response");
 assert.equal(jobs[0]?.status, "running");
 assert.equal(jobs[0]?.requestId, "request");
+
+assert.equal(
+  titleFrom("Why $\\sqrt{d_k}$ keeps the variance stable"),
+  "Why $\\sqrt{d_k}$ keeps the variance stable",
+);
+const longEquationTitle = titleFrom(
+  "$$\\begin{aligned}F(p)&=\\sum_jp_js_j-\\sum_jp_j\\log p_j\\\\&=\\log Z-D_{\\mathrm{KL}}(p\\|a).\\end{aligned}$$",
+);
+assert.ok(longEquationTitle.includes("p_j"));
+assert.ok(longEquationTitle.endsWith("$$"));
+assert.ok(!longEquationTitle.includes("…"));
 
 console.log("Study search, annotation integrity, and job indexing invariants passed");

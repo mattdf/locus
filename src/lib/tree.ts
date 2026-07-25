@@ -130,27 +130,84 @@ export function treeDepth(chat: ChatTree): number {
   return Math.max(0, ...Object.keys(chat.nodes).map((id) => threadPath(chat, id).length - 1));
 }
 
+const TITLE_MATH_PATTERN =
+  /(\$\$[\s\S]*?\$\$|(?<!\\)\$(?!\$)[\s\S]*?(?<!\\)\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\])/g;
+
+function cleanTitleMarkdown(text: string): string {
+  return text
+    .split(TITLE_MATH_PATTERN)
+    .map((part, index) => (index % 2 === 1 ? part : part.replace(/[*_`]/g, "")))
+    .join("");
+}
+
+function truncateTitleWithoutBreakingMath(text: string, limit: number): string {
+  if (text.length <= limit) return text;
+  const parts = text.split(TITLE_MATH_PATTERN);
+  let result = "";
+  let truncated = false;
+
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index] ?? "";
+    if (!part) continue;
+    const isMath = index % 2 === 1;
+    if (isMath) {
+      if (result.length >= limit) {
+        truncated = true;
+        break;
+      }
+      // A complete equation is preferable to a short but invalid TeX fragment.
+      result += part;
+      continue;
+    }
+
+    const remaining = limit - result.length;
+    if (remaining <= 0) {
+      truncated = true;
+      break;
+    }
+    if (part.length <= remaining) {
+      result += part;
+      continue;
+    }
+    const candidate = part.slice(0, remaining);
+    const wordBoundary = candidate.search(/\s+\S*$/);
+    result += (wordBoundary >= Math.max(12, Math.floor(remaining * 0.55))
+      ? candidate.slice(0, wordBoundary)
+      : candidate
+    ).trimEnd();
+    truncated = true;
+    break;
+  }
+
+  if (!truncated && result.length < text.length) truncated = true;
+  return `${result.trim()}${truncated ? "…" : ""}`;
+}
+
 export function titleFrom(text: string, fallback = "Untitled thread"): string {
-  const cleaned = text
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/^\s{0,3}(?:#{1,6}|>)\s*/gm, "")
-    .replace(/[*_`]/g, "")
+  const cleaned = cleanTitleMarkdown(
+    text
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/^\s{0,3}(?:#{1,6}|>)\s*/gm, ""),
+  )
     .replace(/\s+/g, " ")
     .trim();
   if (!cleaned) return fallback;
-  if (cleaned.length <= 58) return cleaned;
+  return truncateTitleWithoutBreakingMath(cleaned, 58);
+}
 
-  let shortened = cleaned.slice(0, 57).trim();
-  const displayDelimiters = shortened.match(/(?<!\\)\$\$/g)?.length ?? 0;
-  if (displayDelimiters % 2) shortened += "$$";
-  else {
-    const withoutDisplayMath = shortened.replace(/(?<!\\)\$\$/g, "");
-    const inlineDelimiters = withoutDisplayMath.match(/(?<!\\)\$/g)?.length ?? 0;
-    if (inlineDelimiters % 2) shortened += "$";
-  }
-  if (shortened.lastIndexOf("\\(") > shortened.lastIndexOf("\\)")) shortened += "\\)";
-  if (shortened.lastIndexOf("\\[") > shortened.lastIndexOf("\\]")) shortened += "\\]";
-  return `${shortened}…`;
+function containsMathDelimiter(value: string): boolean {
+  return /(?<!\\)\$|\\\(|\\\[/.test(value);
+}
+
+export function recoveredThreadTitle(node: ThreadNode): string {
+  const quote = node.anchor?.quote;
+  if (!quote || !containsMathDelimiter(quote)) return node.title;
+  const storedTitleHasBareTex =
+    /\\[A-Za-z]+/.test(node.title) && !containsMathDelimiter(node.title);
+  const storedTitleWasCut = node.title.endsWith("…");
+  return storedTitleHasBareTex || storedTitleWasCut
+    ? titleFrom(quote, node.title)
+    : node.title;
 }
 
 export function makeMessage(role: Message["role"], content: string): Message {
