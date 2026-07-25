@@ -9013,7 +9013,7 @@ body.resizing-drawer {
   border-bottom: 1px solid #e2dfd6;
 }
 
-.study-tools-panel__header span,
+.study-tools-panel__header > div > span,
 .study-map > header p,
 .integrity-view > header p,
 .job-center > header p {
@@ -9171,7 +9171,7 @@ body.resizing-drawer {
   border-color: #c8ddd6;
 }
 
-.study-map__thread span,
+.study-map__thread > span,
 .study-map__thread strong,
 .study-map__thread small {
   display: block;

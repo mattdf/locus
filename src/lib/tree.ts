@@ -199,14 +199,31 @@ function containsMathDelimiter(value: string): boolean {
   return /(?<!\\)\$|\\\(|\\\[/.test(value);
 }
 
+function titleComparisonKey(value: string): string {
+  return value
+    .normalize("NFKD")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
 export function recoveredThreadTitle(node: ThreadNode): string {
   const quote = node.anchor?.quote;
   if (!quote || !containsMathDelimiter(quote)) return node.title;
+  const recovered = titleFrom(quote, node.title);
+  const storedKey = titleComparisonKey(node.title);
+  const recoveredKey = titleComparisonKey(recovered);
+  const storedTitleMatchesAnchor =
+    Boolean(storedKey && recoveredKey) &&
+    (
+      storedKey === recoveredKey ||
+      storedKey.startsWith(recoveredKey) ||
+      recoveredKey.startsWith(storedKey)
+    );
   const storedTitleHasBareTex =
     /\\[A-Za-z]+/.test(node.title) && !containsMathDelimiter(node.title);
   const storedTitleWasCut = node.title.endsWith("…");
-  return storedTitleHasBareTex || storedTitleWasCut
-    ? titleFrom(quote, node.title)
+  return storedTitleMatchesAnchor || storedTitleHasBareTex || storedTitleWasCut
+    ? recovered
     : node.title;
 }
 

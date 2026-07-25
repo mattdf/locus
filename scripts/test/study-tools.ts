@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { annotationIntegrity, searchWorkspace, workspaceJobs } from "../../src/lib/study.ts";
-import { titleFrom } from "../../src/lib/tree.ts";
+import { recoveredThreadTitle, titleFrom } from "../../src/lib/tree.ts";
 import type { ChatTree, WorkspaceState } from "../../src/types.ts";
 import { emptyState } from "../../server/storage.ts";
 
@@ -89,5 +89,40 @@ const longEquationTitle = titleFrom(
 assert.ok(longEquationTitle.includes("p_j"));
 assert.ok(longEquationTitle.endsWith("$$"));
 assert.ok(!longEquationTitle.includes("…"));
+
+assert.equal(
+  recoveredThreadTitle({
+    id: "legacy-math-title",
+    parentId: rootId,
+    title: "Pfi = \\sumjP{ij}fj.",
+    anchor: {
+      sourceNodeId: rootId,
+      sourceMessageId: sourceId,
+      quote: "$(Pf)(i)=\\sum_jP_{ij}f(j).$",
+      blockIndex: 1,
+    },
+    messages: [],
+    createdAt,
+    updatedAt: createdAt,
+  }),
+  "$(Pf)(i)=\\sum_jP_{ij}f(j).$",
+);
+assert.equal(
+  recoveredThreadTitle({
+    id: "legacy-delimited-title",
+    parentId: rootId,
+    title: "$s(X)=(s{i1}(X),\\ldots,s{in}(X))\\in\\mathbb R^n,$",
+    anchor: {
+      sourceNodeId: rootId,
+      sourceMessageId: sourceId,
+      quote: "$s(X)=(s_{i1}(X),\\ldots,s_{in}(X))\\in\\mathbb R^n,$",
+      blockIndex: 1,
+    },
+    messages: [],
+    createdAt,
+    updatedAt: createdAt,
+  }),
+  "$s(X)=(s_{i1}(X),\\ldots,s_{in}(X))\\in\\mathbb R^n,$",
+);
 
 console.log("Study search, annotation integrity, and job indexing invariants passed");
