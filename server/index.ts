@@ -73,6 +73,7 @@ import {
   getAccountPdfUsage,
   getPdfImport,
   getPdfMarkdown,
+  getPdfToc,
   inspectPdfImport,
   pdfImportAvailable,
   PdfImportServiceError,
@@ -541,6 +542,19 @@ app.get("/api/pdf-documents/:documentId/markdown", async (request, response, nex
     response.type("text/markdown").send(
       await getPdfMarkdown(owner(response), request.params.documentId),
     );
+  } catch (error) {
+    if (error instanceof PdfImportServiceError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+app.get("/api/pdf-documents/:documentId/toc", async (request, response, next) => {
+  try {
+    response.setHeader("Cache-Control", "private, max-age=300");
+    response.json(await getPdfToc(owner(response), request.params.documentId));
   } catch (error) {
     if (error instanceof PdfImportServiceError) {
       response.status(error.status).json({ error: error.message });

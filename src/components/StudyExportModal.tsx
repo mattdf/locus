@@ -33,9 +33,19 @@ const EXPORT_MARKDOWN_COMPONENTS: Components = {
   },
 };
 
-function Markdown({ source, imported = false }: { source: string; imported?: boolean }) {
+function Markdown({
+  source,
+  imported = false,
+  preserveSoftBreaks = false,
+}: {
+  source: string;
+  imported?: boolean;
+  preserveSoftBreaks?: boolean;
+}) {
   return (
-    <div className="markdown-message">
+    <div
+      className={`markdown-message${preserveSoftBreaks ? " markdown-message--preserve-soft-breaks" : ""}`}
+    >
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[[rehypeKatex, { strict: false }], rehypeHighlight]}
@@ -112,7 +122,15 @@ function NodeSection({
                 </strong>
                 <time>{new Date(message.createdAt).toLocaleString()}</time>
               </header>
-              <Markdown source={message.content} imported={message.role === "source"} />
+              <Markdown
+                source={message.content}
+                imported={message.role === "source"}
+                preserveSoftBreaks={
+                  message.role === "source" &&
+                  node.id === chat.rootId &&
+                  chat.source?.kind === "pdf"
+                }
+              />
               {options.includeGenerationDetails && message.generation && (
                 <footer>{generationDetails(message.generation)}</footer>
               )}
@@ -251,6 +269,7 @@ const EXPORT_CSS = `
   .study-export-visualization { border-color:#d8cce8; background:#fbf9fd; }
   .study-export-visualization svg { display:block; max-width:100%; height:auto; margin:auto; }
   .markdown-message { min-width:0; max-width:100%; color:#293430; font:15px/1.72 Georgia,serif; }
+  .markdown-message--preserve-soft-breaks p,.markdown-message--preserve-soft-breaks li,.markdown-message--preserve-soft-breaks blockquote { white-space:pre-line; }
   .markdown-message h1,.markdown-message h2,.markdown-message h3,.markdown-message h4 { font-family:Inter,system-ui,sans-serif; }
   .markdown-message img { display:block; max-width:100%; height:auto; margin:1em auto; }
   .markdown-message pre { padding:14px; overflow:auto; color:#edf3f1; background:#24302d; border-radius:7px; }

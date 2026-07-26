@@ -15,6 +15,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from .markdown_cleanup import CleanupStats, normalize_ocr_page_markdown
 from .markdown_images import center_markdown_images
 from .markdown_pages import format_markdown_page
 
@@ -135,6 +136,8 @@ def export_result(
     block_types: Counter[str] = Counter()
     page_confidences: list[float] = []
     image_count = 0
+    cleanup_totals = CleanupStats()
+    cleanup_pages: list[dict[str, Any]] = []
 
     pages = response.get("pages") or []
     sanitized_pages = sanitized.get("pages") or []
@@ -143,6 +146,26 @@ def export_result(
         page_number = page_index + 1 + page_number_offset
         markdown = page.get("markdown") or ""
         sanitized_page = sanitized_pages[position]
+
+        try:
+            markdown, cleanup_stats = normalize_ocr_page_markdown(
+                markdown,
+                page.get("blocks") or [],
+            )
+            cleanup_error = None
+        except Exception as exc:
+            # Cleanup is an enhancement, never a reason to lose an OCR import.
+            cleanup_stats = CleanupStats()
+            cleanup_error = f"{type(exc).__name__}: {exc}"
+        for field, value in cleanup_stats.to_dict().items():
+            setattr(cleanup_totals, field, getattr(cleanup_totals, field) + value)
+        cleanup_page: dict[str, Any] = {
+            "page_number": page_number,
+            **cleanup_stats.to_dict(),
+        }
+        if cleanup_error:
+            cleanup_page["error"] = cleanup_error
+        cleanup_pages.append(cleanup_page)
 
         for image_position, image in enumerate(page.get("images") or []):
             image_id = str(image.get("id") or f"image-{image_position}.bin")
@@ -209,6 +232,11 @@ def export_result(
             min(page_confidences) if page_confidences else None
         ),
         "center_images": center_images,
+        "markdown_cleanup": {
+            "strategy": "ocr-block-aware-v1",
+            "totals": cleanup_totals.to_dict(),
+            "pages": cleanup_pages,
+        },
         "rate_limit_remaining": {
             key: value
             for key, value in response_headers.items()

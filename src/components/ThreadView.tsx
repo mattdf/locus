@@ -1,4 +1,5 @@
 import {
+  ArrowRight,
   ChevronDown,
   BookOpen,
   Check,
@@ -8,6 +9,7 @@ import {
   Clock3,
   Copy,
   ExternalLink,
+  ListTree,
   MessageSquareText,
   Pencil,
   Printer,
@@ -39,6 +41,7 @@ import type {
   SendShortcut,
   ProviderId,
   ProviderModelOption,
+  PdfTocEntry,
   VisualizationContextScope,
   VisualizationEngine,
 } from "../types";
@@ -333,6 +336,7 @@ export function ThreadView({
   const copyResetTimer = useRef<number | null>(null);
   const scrollFrame = useRef<number | null>(null);
   const visualizationScrollFrame = useRef<number | null>(null);
+  const pdfJumpCleanupRef = useRef<(() => void) | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [currentMessageIndex, setCurrentMessageIndex] = useState(0);
@@ -346,6 +350,23 @@ export function ThreadView({
     model: string;
     reasoningEffort: ReasoningEffort;
   } | null>(null);
+  const pdfSource =
+    !readOnly &&
+    node.id === chat.rootId &&
+    chat.source?.kind === "pdf" &&
+    chat.source.status === "ready"
+      ? chat.source
+      : null;
+  const pdfPageStart = pdfSource?.pageStart ?? 1;
+  const pdfPageEnd = pdfSource?.pageEnd ?? pdfSource?.pageCount ?? 1;
+  const [currentPdfPage, setCurrentPdfPage] = useState(pdfPageStart);
+  const [pdfPageInput, setPdfPageInput] = useState(String(pdfPageStart));
+  const [pdfToc, setPdfToc] = useState<PdfTocEntry[]>([]);
+  const [pdfTocOpen, setPdfTocOpen] = useState(false);
+  const [pdfTocLoading, setPdfTocLoading] = useState(false);
+  const [pdfTocError, setPdfTocError] = useState<string | null>(null);
+  const [pdfTocQuery, setPdfTocQuery] = useState("");
+  const pdfNavigationRef = useRef<HTMLDivElement>(null);
   const children = useMemo(() => childThreads(chat, node.id), [chat, node.id]);
   const messages = useMemo(() => messagesForNode(node), [node]);
   const linkedAnchorsByMessage = useMemo(() => {
@@ -425,6 +446,76 @@ export function ThreadView({
   }, [node.id]);
 
   useEffect(() => {
+    setCurrentPdfPage(pdfPageStart);
+    setPdfPageInput(String(pdfPageStart));
+    setPdfToc([]);
+    setPdfTocOpen(false);
+    setPdfTocError(null);
+    setPdfTocQuery("");
+    if (!pdfSource) return;
+    const controller = new AbortController();
+    setPdfTocLoading(true);
+    void fetch(
+      `/api/pdf-documents/${encodeURIComponent(pdfSource.documentId)}/toc`,
+      {
+        credentials: "same-origin",
+        signal: controller.signal,
+      },
+    )
+      .then(async (response) => {
+        const result = (await response.json().catch(() => null)) as
+          | { items?: PdfTocEntry[]; error?: string }
+          | null;
+        if (!response.ok) {
+          throw new Error(result?.error || "Could not load the PDF contents");
+        }
+        const items = Array.isArray(result?.items)
+          ? result.items.filter(
+              (item) =>
+                Number.isInteger(item.level) &&
+                typeof item.title === "string" &&
+                Number.isInteger(item.page) &&
+                item.page >= pdfPageStart &&
+                item.page <= pdfPageEnd,
+            )
+          : [];
+        setPdfToc(items);
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return;
+        setPdfTocError(
+          error instanceof Error ? error.message : "Could not load the PDF contents",
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setPdfTocLoading(false);
+      });
+    return () => controller.abort();
+  }, [pdfSource?.documentId, pdfPageEnd, pdfPageStart]);
+
+  useEffect(() => {
+    if (!pdfTocOpen) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        pdfNavigationRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      setPdfTocOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPdfTocOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [pdfTocOpen]);
+
+  useEffect(() => {
     if (!regenerationSettings) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
       const control =
@@ -493,6 +584,55 @@ export function ThreadView({
   }, [node.id, messages.length]);
 
   useEffect(() => {
+    const container = messagesRef.current;
+    if (!container || !pdfSource) return;
+    let frame: number | null = null;
+    const syncCurrentPage = () => {
+      if (frame !== null) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        const markerTop = container.getBoundingClientRect().top + 24;
+        const markers = Array.from(
+          container.querySelectorAll<HTMLElement>("[data-pdf-page]"),
+        );
+        let page = pdfPageStart;
+        for (const marker of markers) {
+          const candidate = Number(marker.dataset.pdfPage);
+          if (marker.getBoundingClientRect().top <= markerTop) page = candidate;
+          else break;
+        }
+        if (
+          container.scrollTop + container.clientHeight >=
+          container.scrollHeight - 4
+        ) {
+          page = pdfPageEnd;
+        }
+        setCurrentPdfPage((current) => (current === page ? current : page));
+      });
+    };
+    const resizeObserver = new ResizeObserver(syncCurrentPage);
+    resizeObserver.observe(container);
+    syncCurrentPage();
+    container.addEventListener("scroll", syncCurrentPage, { passive: true });
+    window.addEventListener("resize", syncCurrentPage);
+    return () => {
+      container.removeEventListener("scroll", syncCurrentPage);
+      window.removeEventListener("resize", syncCurrentPage);
+      resizeObserver.disconnect();
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, [
+    messages[0]?.content,
+    pdfPageEnd,
+    pdfPageStart,
+    pdfSource?.documentId,
+  ]);
+
+  useEffect(() => {
+    setPdfPageInput(String(currentPdfPage));
+  }, [currentPdfPage]);
+
+  useEffect(() => {
     if (!scrollRequest || scrollRequest.anchor.sourceNodeId !== node.id) return;
     let attempts = 0;
     const scrollToAnchor = () => {
@@ -531,6 +671,7 @@ export function ThreadView({
       if (visualizationScrollFrame.current !== null) {
         window.cancelAnimationFrame(visualizationScrollFrame.current);
       }
+      pdfJumpCleanupRef.current?.();
     },
     [],
   );
@@ -638,8 +779,187 @@ export function ThreadView({
     article?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
+  const jumpToPdfPage = (requestedPage: number) => {
+    const page = Math.min(pdfPageEnd, Math.max(pdfPageStart, requestedPage));
+    const container = messagesRef.current;
+    const target = container?.querySelector<HTMLElement>(
+      `[data-pdf-page="${page}"]`,
+    );
+    if (!container || !target) return;
+
+    // Smooth-scrolling through a large imported PDF intersects every lazy
+    // image on the way. As those images decode, their newly known heights move
+    // the destination marker and the animation lands many pages early. Jump
+    // atomically, then keep the marker pinned briefly while nearby images
+    // settle. Any deliberate user interaction immediately releases the pin.
+    pdfJumpCleanupRef.current?.();
+    const previousScrollBehavior = container.style.scrollBehavior;
+    container.style.scrollBehavior = "auto";
+    target.scrollIntoView({ behavior: "auto", block: "start" });
+    container.style.scrollBehavior = previousScrollBehavior;
+
+    let frame: number | null = null;
+    let timer: number | null = null;
+    let disposed = false;
+    const article = target.closest<HTMLElement>("article") ?? target;
+    const align = () => {
+      frame = null;
+      if (disposed || !target.isConnected) return;
+      const delta =
+        target.getBoundingClientRect().top -
+        container.getBoundingClientRect().top -
+        18;
+      if (Math.abs(delta) > 1) {
+        const behavior = container.style.scrollBehavior;
+        container.style.scrollBehavior = "auto";
+        container.scrollTop += delta;
+        container.style.scrollBehavior = behavior;
+      }
+    };
+    const scheduleAlign = () => {
+      if (disposed || frame !== null) return;
+      frame = window.requestAnimationFrame(align);
+    };
+    const resizeObserver = new ResizeObserver(scheduleAlign);
+    const cleanup = () => {
+      if (disposed) return;
+      disposed = true;
+      resizeObserver.disconnect();
+      article.removeEventListener("load", scheduleAlign, true);
+      container.removeEventListener("wheel", cleanup);
+      container.removeEventListener("touchstart", cleanup);
+      container.removeEventListener("pointerdown", cleanup);
+      container.removeEventListener("keydown", cleanup);
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      if (timer !== null) window.clearTimeout(timer);
+      if (pdfJumpCleanupRef.current === cleanup) {
+        pdfJumpCleanupRef.current = null;
+      }
+    };
+    resizeObserver.observe(article);
+    article.addEventListener("load", scheduleAlign, true);
+    container.addEventListener("wheel", cleanup, { passive: true, once: true });
+    container.addEventListener("touchstart", cleanup, { passive: true, once: true });
+    container.addEventListener("pointerdown", cleanup, { passive: true, once: true });
+    container.addEventListener("keydown", cleanup, { once: true });
+    timer = window.setTimeout(cleanup, 2_500);
+    pdfJumpCleanupRef.current = cleanup;
+    scheduleAlign();
+
+    setCurrentPdfPage(page);
+    setPdfPageInput(String(page));
+  };
+
+  const filteredPdfToc = pdfTocQuery.trim()
+    ? pdfToc.filter((item) =>
+        item.title.toLocaleLowerCase().includes(pdfTocQuery.trim().toLocaleLowerCase()),
+      )
+    : pdfToc;
+
   return (
     <div className={`thread-view ${side ? "thread-view--side" : ""}`}>
+      {pdfSource && (
+        <div className="pdf-document-nav" ref={pdfNavigationRef}>
+          <button
+            className="pdf-document-nav__contents"
+            type="button"
+            aria-expanded={pdfTocOpen}
+            aria-controls={`pdf-toc-${pdfSource.documentId}`}
+            onClick={() => setPdfTocOpen((open) => !open)}
+          >
+            <ListTree size={14} />
+            <span>Contents</span>
+          </button>
+          <form
+            className="pdf-document-nav__pages"
+            onSubmit={(event) => {
+              event.preventDefault();
+              jumpToPdfPage(Number(pdfPageInput));
+            }}
+          >
+            <button
+              type="button"
+              aria-label="Previous PDF page"
+              disabled={currentPdfPage <= pdfPageStart}
+              onClick={() => jumpToPdfPage(currentPdfPage - 1)}
+            >
+              <ChevronLeft size={14} />
+            </button>
+            <label>
+              <span>Page</span>
+              <input
+                type="number"
+                min={pdfPageStart}
+                max={pdfPageEnd}
+                value={pdfPageInput}
+                aria-label="PDF page number"
+                onFocus={(event) => event.currentTarget.select()}
+                onChange={(event) => setPdfPageInput(event.target.value)}
+              />
+              <span>of {pdfPageEnd}</span>
+            </label>
+            <button type="submit" aria-label="Go to PDF page">
+              <ArrowRight size={13} />
+            </button>
+            <button
+              type="button"
+              aria-label="Next PDF page"
+              disabled={currentPdfPage >= pdfPageEnd}
+              onClick={() => jumpToPdfPage(currentPdfPage + 1)}
+            >
+              <ChevronRight size={14} />
+            </button>
+          </form>
+          {pdfTocOpen && (
+            <section
+              className="pdf-document-toc"
+              id={`pdf-toc-${pdfSource.documentId}`}
+              aria-label="PDF table of contents"
+            >
+              <header>
+                <strong>Table of contents</strong>
+                <span>{pdfToc.length} entries</span>
+              </header>
+              {!!pdfToc.length && (
+                <input
+                  type="search"
+                  value={pdfTocQuery}
+                  placeholder="Filter contents…"
+                  aria-label="Filter PDF table of contents"
+                  onChange={(event) => setPdfTocQuery(event.target.value)}
+                />
+              )}
+              <div className="pdf-document-toc__items">
+                {pdfTocLoading ? (
+                  <p>Importing contents…</p>
+                ) : pdfTocError ? (
+                  <p className="pdf-document-toc__error">{pdfTocError}</p>
+                ) : !pdfToc.length ? (
+                  <p>This PDF has no embedded table of contents.</p>
+                ) : !filteredPdfToc.length ? (
+                  <p>No matching sections.</p>
+                ) : (
+                  filteredPdfToc.map((item, index) => (
+                    <button
+                      type="button"
+                      key={`${item.page}-${item.level}-${index}`}
+                      className={item.page === currentPdfPage ? "is-current" : ""}
+                      style={{ paddingLeft: `${12 + Math.min(5, item.level - 1) * 14}px` }}
+                      onClick={() => {
+                        jumpToPdfPage(item.page);
+                        setPdfTocOpen(false);
+                      }}
+                    >
+                      <span>{item.title}</span>
+                      <small>{item.page}</small>
+                    </button>
+                  ))
+                )}
+              </div>
+            </section>
+          )}
+        </div>
+      )}
       {messages.length > 1 && messageNavigationVisible && (
         <nav className="message-jump-nav" aria-label="Message navigation">
           <button
@@ -1087,6 +1407,11 @@ export function ThreadView({
                 <MarkdownMessage
                   message={message}
                   nodeId={node.id}
+                  preserveSoftBreaks={
+                    message.role === "source" &&
+                    node.id === chat.rootId &&
+                    chat.source?.kind === "pdf"
+                  }
                   linkedAnchors={linkedAnchors}
                   definitions={definitions}
                   visualizations={visualizations}

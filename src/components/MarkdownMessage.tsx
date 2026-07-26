@@ -34,6 +34,10 @@ const MARKDOWN_COMPONENTS: Components = {
       <ExternalLink size={11} aria-hidden="true" />
     </a>
   ),
+  img: ({ node, ...props }) => {
+    void node;
+    return <img {...props} loading="lazy" decoding="async" />;
+  },
   table: ({ node, children, ...props }) => {
     void node;
     return (
@@ -45,6 +49,28 @@ const MARKDOWN_COMPONENTS: Components = {
       >
         <table {...props}>{children}</table>
       </div>
+    );
+  },
+};
+
+const PDF_MARKDOWN_COMPONENTS: Components = {
+  ...MARKDOWN_COMPONENTS,
+  strong: ({ node, children, ...props }) => {
+    void node;
+    const text = Array.isArray(children) ? children.join("") : String(children ?? "");
+    const page = /^Page\s+(\d+)$/.exec(text.trim())?.[1];
+    return (
+      <strong
+        {...props}
+        {...(page
+          ? {
+              id: `pdf-page-${page}`,
+              "data-pdf-page": page,
+            }
+          : {})}
+      >
+        {children}
+      </strong>
     );
   },
 };
@@ -93,6 +119,7 @@ function subscribeToSelectionCapture(container: HTMLElement, capture: () => void
 interface MarkdownMessageProps {
   message: Message;
   nodeId: string;
+  preserveSoftBreaks?: boolean;
   linkedAnchors: LinkedAnchor[];
   definitions: InlineDefinition[];
   visualizations: InlineVisualization[];
@@ -276,6 +303,7 @@ function sourceQuoteFromRange(range: Range, container: HTMLElement): string {
 function MarkdownMessageComponent({
   message,
   nodeId,
+  preserveSoftBreaks = false,
   linkedAnchors,
   definitions,
   visualizations,
@@ -664,7 +692,7 @@ function MarkdownMessageComponent({
 
   return (
     <div
-      className="markdown-message"
+      className={`markdown-message${preserveSoftBreaks ? " markdown-message--preserve-soft-breaks" : ""}`}
       ref={containerRef}
       onMouseUp={(event) => {
         if (
@@ -819,7 +847,7 @@ function MarkdownMessageComponent({
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={[[rehypeKatex, { strict: false }], rehypeHighlight]}
-        components={MARKDOWN_COMPONENTS}
+        components={preserveSoftBreaks ? PDF_MARKDOWN_COMPONENTS : MARKDOWN_COMPONENTS}
       >
         {normalizedContent}
       </ReactMarkdown>
@@ -938,5 +966,6 @@ export const MarkdownMessage = memo(
     sameDefinitions(left.definitions, right.definitions) &&
     sameVisualizations(left.visualizations, right.visualizations) &&
     sameInlineElaborations(left.inlineElaborations, right.inlineElaborations) &&
+    left.preserveSoftBreaks === right.preserveSoftBreaks &&
     left.selectionSurface === right.selectionSurface,
 );

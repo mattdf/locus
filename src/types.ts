@@ -242,6 +242,12 @@ export interface PdfChatSource {
   error?: string;
 }
 
+export interface PdfTocEntry {
+  level: number;
+  title: string;
+  page: number;
+}
+
 export interface ChatTree {
   id: string;
   title: string;

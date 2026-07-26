@@ -119,6 +119,39 @@ assert.match(
   renderedPdf,
   /\$\$\n\\operatorname\{Tagged\}\(x\) = x\^2 \\tag\{7\}\n\$\$/,
 );
+
+const proseWithCodeIdentifiers =
+  "Use two attention heads (via num_heads=2) to obtain " +
+  "a four-dimensional vector (d_out*num_heads=4).";
+assert.equal(
+  normalizeMathDelimiters(proseWithCodeIdentifiers, true),
+  proseWithCodeIdentifiers,
+  "Parenthetical prose and snake_case code expressions must not become math",
+);
+assert.equal(
+  normalizeMathDelimiters(
+    "The batch setting (batch_size=32) and keyword argument (dim=1) stay literal.",
+    true,
+  ),
+  "The batch setting (batch_size=32) and keyword argument (dim=1) stay literal.",
+  "Multi-character code identifiers must remain literal text",
+);
+assert.equal(
+  normalizeMathDelimiters(
+    "Literal parentheses stay literal: (a*b=c), (x_i, y_j), and (z_1=z_2).",
+    true,
+  ),
+  "Literal parentheses stay literal: (a*b=c), (x_i, y_j), and (z_1=z_2).",
+  "Plain parentheses must never be inferred as math delimiters",
+);
+assert.equal(
+  normalizeMathDelimiters(
+    String.raw`Explicit inline math \(a*b=c\) still renders.`,
+    true,
+  ),
+  "Explicit inline math $a*b=c$ still renders.",
+  "Explicit LaTeX inline delimiters must continue to normalize",
+);
 const pdfTarget =
   "The exact paragraph that must remain selectable after the page boundary.";
 const pdfRenderedBlocks = markdownBlockRanges(renderedPdf);

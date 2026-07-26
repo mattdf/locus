@@ -30,14 +30,6 @@ function cleanCopiedDisplayMath(equation: string): string {
   return lines.join("\n");
 }
 
-function looksLikeBareInlineMath(value: string): boolean {
-  const expression = value.trim();
-  if (!expression || expression.includes("$")) return false;
-  if (/\\[A-Za-z]+/.test(expression)) return true;
-  if (/[_^=<>∑∏∫∞≤≥±×÷]/.test(expression)) return true;
-  return /^[A-Za-z](?:\s*,\s*[A-Za-z])+$/.test(expression);
-}
-
 function normalizeLegacyPdfMarkup(markdown: string): string {
   return markdown
     .replace(
@@ -73,11 +65,10 @@ function normalizeCopiedInlineMath(markdown: string): string {
     .split(/(```[\s\S]*?```|`[^`\n]*`|\$[^$\n]+\$)/g)
     .map((part) => {
       if (part.startsWith("`") || part.startsWith("$")) return part;
-      return part
-        .replace(/\\\((.*?)\\\)/g, (_match, equation: string) => `$${equation}$`)
-        .replace(/\(([^()\n]{1,120})\)/g, (match, equation: string) =>
-          looksLikeBareInlineMath(equation) ? `$${equation.trim()}$` : match,
-        );
+      return part.replace(
+        /\\\((.*?)\\\)/g,
+        (_match, equation: string) => `$${equation}$`,
+      );
     })
     .join("");
 }

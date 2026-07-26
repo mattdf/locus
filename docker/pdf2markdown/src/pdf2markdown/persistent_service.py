@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -36,7 +37,10 @@ from fastapi import (
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 
-from .mistral_images import upgrade_document_images
+from .mistral_images import (
+    repair_transformed_embedded_images,
+    upgrade_document_images,
+)
 from .mistral_ocr import DEFAULT_MODEL, process_pdf, read_api_key
 from .persistent_store import (
     PersistentStore,
@@ -55,6 +59,7 @@ IMAGE_REFERENCE_PATTERN = re.compile(
     r"(?P<prefix>\]\(|src=[\"'])"
     r"(?P<path>assets(?:-hq)?/[A-Za-z0-9._/-]+)"
 )
+IMAGE_ORIENTATION_REPAIR_LOCK = threading.Lock()
 
 
 def _positive_int(name: str, default: int) -> int:
@@ -1271,6 +1276,46 @@ def create_app(
             content_disposition_type="inline",
         )
 
+    @application.get("/v1/documents/{document_id}/toc", tags=["documents"])
+    def get_document_toc(
+        document_id: str,
+        access_token: Annotated[str | None, Query()] = None,
+        authorization: Annotated[str | None, Header()] = None,
+        user_id: Annotated[
+            str | None,
+            Header(alias="X-PDF2Markdown-User-ID"),
+        ] = None,
+    ) -> dict[str, Any]:
+        _, document = authorize_document(
+            document_id=document_id,
+            scope="source",
+            access_token=access_token,
+            authorization=authorization,
+            user_id=user_id,
+        )
+        source_path = (
+            resolved_settings.data_root / document["storage_relpath"] / "source.pdf"
+        )
+        if not source_path.is_file():
+            raise HTTPException(status_code=404, detail="Source PDF not found")
+        with fitz.open(source_path) as source:
+            items = [
+                {
+                    "level": int(level),
+                    "title": " ".join(str(title).split())[:500],
+                    "page": int(page),
+                }
+                for level, title, page in source.get_toc(simple=True)
+                if (
+                    isinstance(level, int)
+                    and isinstance(page, int)
+                    and level >= 1
+                    and 1 <= page <= source.page_count
+                    and str(title).strip()
+                )
+            ][:5000]
+            return {"page_count": source.page_count, "items": items}
+
     @application.get(
         "/v1/documents/{document_id}/{asset_collection}/{asset_path:path}",
         tags=["documents"],
@@ -1300,6 +1345,14 @@ def create_app(
             raise HTTPException(status_code=409, detail="Document is not ready")
         document_root = resolved_settings.data_root / document["storage_relpath"]
         result_root = _safe_resolve(document_root, markdown_relpath).parent
+        if asset_collection == "assets-hq":
+            with IMAGE_ORIENTATION_REPAIR_LOCK:
+                repair_transformed_embedded_images(
+                    document_root / "source.pdf",
+                    result_root,
+                    dpi=resolved_settings.dpi,
+                    padding_points=resolved_settings.padding_points,
+                )
         asset = _safe_resolve(result_root, f"{asset_collection}/{asset_path}")
         if not asset.is_file():
             raise HTTPException(status_code=404, detail="Asset not found")

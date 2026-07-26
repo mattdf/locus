@@ -73,6 +73,12 @@ export interface PdfUsageSummary {
   api_keys: PdfUsageItem[];
 }
 
+export interface PdfTocEntry {
+  level: number;
+  title: string;
+  page: number;
+}
+
 export class PdfImportServiceError extends Error {
   constructor(
     message: string,
@@ -344,6 +350,19 @@ export async function getPdfMarkdown(
         return `${prefix}${locusAssetUrl(documentId, collection, assetPath)}`;
       },
     );
+}
+
+export async function getPdfToc(
+  ownerUserId: string,
+  documentId: string,
+): Promise<{ page_count: number; items: PdfTocEntry[] }> {
+  return checkedJson<{ page_count: number; items: PdfTocEntry[] }>(
+    `${SERVICE_URL}/v1/documents/${encodeURIComponent(documentId)}/toc`,
+    {
+      headers: userHeaders(ownerUserId),
+      cache: "no-store",
+    },
+  );
 }
 
 export async function proxyPdfDocument(

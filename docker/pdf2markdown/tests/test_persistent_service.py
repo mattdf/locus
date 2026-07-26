@@ -46,6 +46,21 @@ def make_pdf(page_count: int = 1) -> bytes:
     return content
 
 
+def make_pdf_with_toc() -> bytes:
+    document = fitz.open()
+    for number in range(3):
+        page = document.new_page()
+        page.insert_text((72, 72), f"Page {number + 1}")
+    document.set_toc([
+        [1, "Introduction", 1],
+        [2, "Details", 2],
+        [1, "Conclusion", 3],
+    ])
+    content = document.tobytes()
+    document.close()
+    return content
+
+
 class FakeProcessor:
     def __init__(self, delay: float = 0.0) -> None:
         self.delay = delay
@@ -208,6 +223,41 @@ def test_raw_pdf_upload_and_raw_markdown_are_available_to_locus(tmp_path: Path) 
         assert markdown.status_code == 200
         assert "](assets-hq/figure.png)" in markdown.text
         assert "access_token=" not in markdown.text
+
+
+def test_pdf_table_of_contents_is_available_only_to_its_owner(tmp_path: Path) -> None:
+    client, _ = make_test_client(tmp_path)
+    with client:
+        response = client.post(
+            "/v1/imports/pdf/raw",
+            params={"filename": "outlined.pdf"},
+            headers={**USER_HEADERS, "Content-Type": "application/pdf"},
+            content=make_pdf_with_toc(),
+        )
+        assert response.status_code == 202, response.text
+        imported = response.json()
+        assert wait_for_job(client, imported["job_id"])["status"] == "completed"
+
+        toc = client.get(
+            f"/v1/documents/{imported['document_id']}/toc",
+            headers=USER_HEADERS,
+        )
+        assert toc.status_code == 200
+        assert toc.json() == {
+            "page_count": 3,
+            "items": [
+                {"level": 1, "title": "Introduction", "page": 1},
+                {"level": 2, "title": "Details", "page": 2},
+                {"level": 1, "title": "Conclusion", "page": 3},
+            ],
+        }
+        assert (
+            client.get(
+                f"/v1/documents/{imported['document_id']}/toc",
+                headers=OTHER_USER_HEADERS,
+            ).status_code
+            == 404
+        )
 
 
 def test_staged_pdf_can_convert_only_a_selected_page_range(tmp_path: Path) -> None:

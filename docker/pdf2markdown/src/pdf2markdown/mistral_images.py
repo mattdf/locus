@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 from dataclasses import asdict, dataclass
@@ -15,6 +16,8 @@ from typing import Any, Iterable
 
 import fitz
 from PIL import Image
+
+IMAGE_UPGRADE_SCHEMA_VERSION = 3
 
 from .markdown_images import center_markdown_images
 from .markdown_pages import format_markdown_page
@@ -35,6 +38,14 @@ class RecoveryRecord:
     render_bbox: tuple[float, float, float, float]
     source_xref: int | None
     source_smask: int | None
+
+
+@dataclass(frozen=True)
+class RecoveryFailure:
+    page: int
+    image_id: str
+    old_path: str
+    error: str
 
 
 def _drawing_union(page: fitz.Page, predicted: fitz.Rect) -> fitz.Rect | None:
@@ -232,6 +243,23 @@ def _image_dimensions(path: Path) -> tuple[int | None, int | None]:
         return image.size
 
 
+def _pixmap_png_bytes(pixmap: fitz.Pixmap) -> bytes:
+    """Encode a pixmap as PNG, converting unsupported colorspaces to RGB.
+
+    PDFs commonly embed CMYK/ICC images. PyMuPDF can expose those pixels
+    losslessly, but PNG itself only supports grayscale and RGB color models.
+    Convert only when necessary so existing grayscale/RGB and alpha-bearing
+    assets retain their original channel layout.
+    """
+    colorspace = pixmap.colorspace
+    if colorspace is None:
+        raise ValueError("Cannot encode a colorspace-free mask as a PNG image")
+    if colorspace.n in {1, 3}:
+        return pixmap.tobytes("png")
+    converted = fitz.Pixmap(fitz.csRGB, pixmap)
+    return converted.tobytes("png")
+
+
 def _extract_embedded_image(
     document: fitz.Document,
     xref: int,
@@ -243,7 +271,7 @@ def _extract_embedded_image(
         mask = fitz.Pixmap(document, smask)
         pixmap = fitz.Pixmap(base, mask)
         path = output_stem.with_suffix(".png")
-        path.write_bytes(pixmap.tobytes("png"))
+        path.write_bytes(_pixmap_png_bytes(pixmap))
         return path, pixmap.width, pixmap.height
 
     extracted = document.extract_image(xref)
@@ -254,7 +282,7 @@ def _extract_embedded_image(
     if extension not in {"png", "jpg", "webp"}:
         pixmap = fitz.Pixmap(document, xref)
         extension = "png"
-        data = pixmap.tobytes("png")
+        data = _pixmap_png_bytes(pixmap)
     path = output_stem.with_suffix(f".{extension}")
     path.write_bytes(data)
     with Image.open(path) as image:
@@ -289,7 +317,7 @@ def _crop_page_scan(
     crop_info["width"] = pixmap.width
     crop_info["height"] = pixmap.height
     pixel_box = pdf_rect_to_image_box(crop_rect, crop_info)
-    with Image.open(BytesIO(pixmap.tobytes("png"))) as image:
+    with Image.open(BytesIO(_pixmap_png_bytes(pixmap))) as image:
         cropped = image.crop(pixel_box)
         if "A" in cropped.getbands():
             rgba = cropped.convert("RGBA")
@@ -340,7 +368,7 @@ def _render_pdf_region(
     if caption_tops:
         clip.y1 = min(clip.y1, min(caption_tops) - 2.0)
     pixmap = page.get_pixmap(dpi=dpi, clip=clip, alpha=False, annots=False)
-    output_path.write_bytes(pixmap.tobytes("png"))
+    output_path.write_bytes(_pixmap_png_bytes(pixmap))
     return pixmap.width, pixmap.height, clip
 
 
@@ -383,6 +411,7 @@ def upgrade_document_images(
 
     document = fitz.open(pdf_path)
     records: list[RecoveryRecord] = []
+    failures: list[RecoveryFailure] = []
     combined_pages: list[str] = []
     try:
         for position, page_data in enumerate(response.get("pages") or []):
@@ -425,71 +454,91 @@ def upgrade_document_images(
                 )
                 filename_stem = f"page-{page_number:04d}-{_safe_stem(image_id)}"
                 output_stem = assets_dir / filename_stem
-                embedded = choose_embedded_image(
-                    predicted,
-                    image_infos,
-                    page_rect=page.rect,
-                )
-                page_scan = choose_page_scan(image_infos, page.rect)
-                source_xref: int | None = None
-                source_smask: int | None = None
-                if embedded is not None:
-                    source_xref = int(embedded["xref"])
-                    source_smask = smasks.get(source_xref, 0)
-                    output_path, width, height = _extract_embedded_image(
-                        document,
-                        source_xref,
-                        source_smask,
-                        output_stem,
-                    )
-                    method = "embedded-image-lossless"
-                    render_rect = fitz.Rect(embedded["bbox"])
-                elif page_scan is not None and _has_direct_crop_transform(page_scan):
-                    source_xref = int(page_scan["xref"])
-                    source_smask = smasks.get(source_xref, 0)
-                    output_path = output_stem.with_suffix(".png")
-                    width, height, render_rect = _crop_page_scan(
-                        document,
-                        page_scan,
-                        source_smask,
+                try:
+                    embedded = choose_embedded_image(
                         predicted,
-                        page.rect,
-                        output_path,
-                        scan_padding_points,
+                        image_infos,
+                        page_rect=page.rect,
                     )
-                    method = "page-scan-raster-crop"
-                else:
-                    output_path = output_stem.with_suffix(".png")
-                    width, height, render_rect = _render_pdf_region(
-                        page,
-                        predicted,
-                        output_path,
-                        dpi,
-                        padding_points,
-                        expand_vector_geometry=len(page_images) == 1,
-                    )
-                    method = f"pdf-region-render-{dpi}dpi"
+                    page_scan = choose_page_scan(image_infos, page.rect)
+                    source_xref: int | None = None
+                    source_smask: int | None = None
+                    if embedded is not None and _has_direct_crop_transform(embedded):
+                        source_xref = int(embedded["xref"])
+                        source_smask = smasks.get(source_xref, 0)
+                        output_path, width, height = _extract_embedded_image(
+                            document,
+                            source_xref,
+                            source_smask,
+                            output_stem,
+                        )
+                        method = "embedded-image-lossless"
+                        render_rect = fitz.Rect(embedded["bbox"])
+                    elif page_scan is not None and _has_direct_crop_transform(page_scan):
+                        source_xref = int(page_scan["xref"])
+                        source_smask = smasks.get(source_xref, 0)
+                        output_path = output_stem.with_suffix(".png")
+                        width, height, render_rect = _crop_page_scan(
+                            document,
+                            page_scan,
+                            source_smask,
+                            predicted,
+                            page.rect,
+                            output_path,
+                            scan_padding_points,
+                        )
+                        method = "page-scan-raster-crop"
+                    else:
+                        if embedded is not None:
+                            source_xref = int(embedded["xref"])
+                            source_smask = smasks.get(source_xref, 0)
+                        output_path = output_stem.with_suffix(".png")
+                        width, height, render_rect = _render_pdf_region(
+                            page,
+                            predicted,
+                            output_path,
+                            dpi,
+                            padding_points,
+                            expand_vector_geometry=len(page_images) == 1,
+                        )
+                        method = (
+                            f"pdf-region-render-{dpi}dpi-transformed-image"
+                            if embedded is not None
+                            else f"pdf-region-render-{dpi}dpi"
+                        )
 
-                new_path = f"assets-hq/{output_path.name}"
-                markdown = _replace_image_path(markdown, old_path, new_path)
-                old_width, old_height = _image_dimensions(result_dir / old_path)
-                records.append(
-                    RecoveryRecord(
-                        page=page_number,
-                        image_id=image_id,
-                        method=method,
-                        old_path=old_path,
-                        old_width=old_width,
-                        old_height=old_height,
-                        new_path=new_path,
-                        new_width=width,
-                        new_height=height,
-                        pdf_bbox=tuple(round(value, 3) for value in predicted),
-                        render_bbox=tuple(round(value, 3) for value in render_rect),
-                        source_xref=source_xref,
-                        source_smask=source_smask,
+                    new_path = f"assets-hq/{output_path.name}"
+                    old_width, old_height = _image_dimensions(result_dir / old_path)
+                    records.append(
+                        RecoveryRecord(
+                            page=page_number,
+                            image_id=image_id,
+                            method=method,
+                            old_path=old_path,
+                            old_width=old_width,
+                            old_height=old_height,
+                            new_path=new_path,
+                            new_width=width,
+                            new_height=height,
+                            pdf_bbox=tuple(round(value, 3) for value in predicted),
+                            render_bbox=tuple(round(value, 3) for value in render_rect),
+                            source_xref=source_xref,
+                            source_smask=source_smask,
+                        )
                     )
-                )
+                    markdown = _replace_image_path(markdown, old_path, new_path)
+                except Exception as exc:
+                    # High-resolution recovery is an enhancement. Preserve the
+                    # original Mistral preview instead of failing a completed,
+                    # metered OCR conversion because of one unusual PDF image.
+                    failures.append(
+                        RecoveryFailure(
+                            page=page_number,
+                            image_id=image_id,
+                            old_path=old_path,
+                            error=f"{type(exc).__name__}: {exc}",
+                        )
+                    )
 
             if center_images:
                 markdown = center_markdown_images(markdown)
@@ -502,7 +551,7 @@ def upgrade_document_images(
     output_path = result_dir / f"{pdf_path.stem}-hq.md"
     output_path.write_text("\n\n".join(combined_pages).rstrip() + "\n", encoding="utf-8")
     report = {
-        "schema_version": 2,
+        "schema_version": IMAGE_UPGRADE_SCHEMA_VERSION,
         "source_pdf": str(pdf_path),
         "source_sha256": _sha256(pdf_path),
         "ocr_response": str(response_path),
@@ -511,6 +560,7 @@ def upgrade_document_images(
         "scan_padding_points": scan_padding_points,
         "center_images": center_images,
         "asset_count": len(records),
+        "failed_asset_count": len(failures),
         "lossless_embedded_count": sum(
             record.method == "embedded-image-lossless" for record in records
         ),
@@ -521,12 +571,102 @@ def upgrade_document_images(
             record.method.startswith("pdf-region-render") for record in records
         ),
         "assets": [asdict(record) for record in records],
+        "failed_assets": [asdict(failure) for failure in failures],
     }
     (result_dir / "image-upgrade-report.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
     return output_path
+
+
+def repair_transformed_embedded_images(
+    pdf_path: Path,
+    result_dir: Path,
+    *,
+    dpi: int = 360,
+    padding_points: float = 6.0,
+) -> int:
+    """Repair orientation for assets made by the pre-v3 lossless extractor.
+
+    Older reports could label a rotated or mirrored PDF image as losslessly
+    extracted even though the raw raster needs its PDF placement transform to
+    display correctly. Re-render only those legacy assets from the page
+    appearance, retain their URLs, and mark the report as migrated.
+    """
+    report_path = result_dir / "image-upgrade-report.json"
+    if not pdf_path.is_file() or not report_path.is_file():
+        return 0
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    if int(report.get("schema_version") or 0) >= IMAGE_UPGRADE_SCHEMA_VERSION:
+        return 0
+
+    repaired = 0
+    document = fitz.open(pdf_path)
+    try:
+        for record in report.get("assets") or []:
+            if record.get("method") != "embedded-image-lossless":
+                continue
+            page_number = int(record.get("page") or 0)
+            source_xref = int(record.get("source_xref") or 0)
+            if not (1 <= page_number <= document.page_count and source_xref > 0):
+                continue
+            page = document.load_page(page_number - 1)
+            image_info = next(
+                (
+                    info
+                    for info in page.get_image_info(xrefs=True)
+                    if int(info.get("xref") or 0) == source_xref
+                ),
+                None,
+            )
+            if image_info is None or _has_direct_crop_transform(image_info):
+                continue
+            pdf_bbox = record.get("pdf_bbox")
+            new_path = str(record.get("new_path") or "")
+            if (
+                not isinstance(pdf_bbox, list)
+                or len(pdf_bbox) != 4
+                or not new_path.startswith("assets-hq/")
+            ):
+                continue
+            output_path = result_dir / new_path
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary_path = output_path.with_name(f".{output_path.name}.repair")
+            width, height, render_rect = _render_pdf_region(
+                page,
+                fitz.Rect(*(float(value) for value in pdf_bbox)),
+                temporary_path,
+                dpi,
+                padding_points,
+                expand_vector_geometry=False,
+            )
+            os.replace(temporary_path, output_path)
+            record["method"] = f"pdf-region-render-{dpi}dpi-transform-repair"
+            record["new_width"] = width
+            record["new_height"] = height
+            record["render_bbox"] = [
+                round(value, 3)
+                for value in (
+                    render_rect.x0,
+                    render_rect.y0,
+                    render_rect.x1,
+                    render_rect.y1,
+                )
+            ]
+            repaired += 1
+    finally:
+        document.close()
+
+    report["schema_version"] = IMAGE_UPGRADE_SCHEMA_VERSION
+    report["orientation_repair_count"] = repaired
+    temporary_report = report_path.with_suffix(".json.tmp")
+    temporary_report.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(temporary_report, report_path)
+    return repaired
 
 
 def parse_args() -> argparse.Namespace:
