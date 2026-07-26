@@ -41,6 +41,7 @@ import type {
   SendShortcut,
   ProviderId,
   ProviderModelOption,
+  PdfPageFurniture,
   PdfTocEntry,
   VisualizationContextScope,
   VisualizationEngine,
@@ -368,6 +369,7 @@ export function ThreadView({
   const [pdfTocError, setPdfTocError] = useState<string | null>(null);
   const [pdfTocQuery, setPdfTocQuery] = useState("");
   const [pdfTocCenterRequest, setPdfTocCenterRequest] = useState(0);
+  const [pdfFurniture, setPdfFurniture] = useState<PdfPageFurniture[]>([]);
   const [pdfTokenCount, setPdfTokenCount] = useState<number | null>(null);
   const [pdfTokenCountError, setPdfTokenCountError] = useState(false);
   const pdfNavigationRef = useRef<HTMLDivElement>(null);
@@ -516,6 +518,129 @@ export function ThreadView({
       disposed = true;
     };
   }, [pdfMarkdown, pdfSource?.documentId]);
+
+  useEffect(() => {
+    setPdfFurniture([]);
+    if (!pdfSource) return;
+    const controller = new AbortController();
+    void fetch(
+      `/api/pdf-documents/${encodeURIComponent(pdfSource.documentId)}/layout`,
+      {
+        credentials: "same-origin",
+        signal: controller.signal,
+      },
+    )
+      .then(async (response) => {
+        const result = (await response.json().catch(() => null)) as
+          | { pages?: PdfPageFurniture[] }
+          | null;
+        if (!response.ok || !Array.isArray(result?.pages)) return;
+        setPdfFurniture(result.pages);
+      })
+      .catch(() => {
+        // Layout semantics enhance a completed import. Plain Markdown remains
+        // fully usable when an older worker does not expose them.
+      });
+    return () => controller.abort();
+  }, [pdfSource?.documentId]);
+
+  useLayoutEffect(() => {
+    const sourceMessage = pdfSource
+      ? messages.find((message) => message.role === "source")
+      : null;
+    const article = sourceMessage
+      ? messagesRef.current?.querySelector<HTMLElement>(
+          `article[data-message-id="${CSS.escape(sourceMessage.id)}"]`,
+        )
+      : null;
+    const markdown = article?.querySelector<HTMLElement>(".markdown-message");
+    if (!markdown || !pdfFurniture.length) return;
+
+    const topLevel = Array.from(markdown.children).filter(
+      (element): element is HTMLElement =>
+        element instanceof HTMLElement &&
+        !element.classList.contains("inline-annotation-slot") &&
+        !element.classList.contains("elaboration-links"),
+    );
+    const markers = topLevel
+      .map((element, index) => {
+        const marker = element.querySelector<HTMLElement>("[data-pdf-page]");
+        const page = Number(marker?.dataset.pdfPage);
+        return Number.isInteger(page) ? { index, page } : null;
+      })
+      .filter(
+        (marker): marker is { index: number; page: number } => marker !== null,
+      );
+    const furnitureByPage = new Map(
+      pdfFurniture.map((page) => [page.page, page]),
+    );
+    const styled: HTMLElement[] = [];
+
+    const applyFurniture = (
+      element: HTMLElement,
+      kind: "header" | "footer",
+      item: PdfPageFurniture["headers"][number],
+    ) => {
+      element.classList.add(
+        "pdf-running-furniture",
+        `pdf-running-furniture--${kind}`,
+        `pdf-running-furniture--${item.align}`,
+      );
+      if (item.row_index === 0) {
+        element.classList.add("pdf-running-furniture--row-start");
+      } else {
+        element.classList.add("pdf-running-furniture--overlay");
+      }
+      if (item.row_index === item.row_size - 1) {
+        element.classList.add("pdf-running-furniture--row-end");
+      }
+      element.dataset.pdfFurniture = kind;
+      element.setAttribute(
+        "aria-label",
+        `PDF page ${kind}: ${item.content}`,
+      );
+      styled.push(element);
+    };
+
+    markers.forEach((marker, markerIndex) => {
+      const pageFurniture = furnitureByPage.get(marker.page);
+      if (!pageFurniture) return;
+      const end = markers[markerIndex + 1]?.index ?? topLevel.length;
+      const pageBlocks = topLevel
+        .slice(marker.index + 1, end)
+        .filter((element) => element.tagName !== "HR");
+      pageFurniture.headers.forEach((item, index) => {
+        const element = pageBlocks[index];
+        if (element) applyFurniture(element, "header", item);
+      });
+      const footerStart = Math.max(
+        pageFurniture.headers.length,
+        pageBlocks.length - pageFurniture.footers.length,
+      );
+      pageFurniture.footers.forEach((item, index) => {
+        const element = pageBlocks[footerStart + index];
+        if (element) applyFurniture(element, "footer", item);
+      });
+    });
+
+    return () => {
+      styled.forEach((element) => {
+        element.classList.remove(
+          "pdf-running-furniture",
+          "pdf-running-furniture--header",
+          "pdf-running-furniture--footer",
+          "pdf-running-furniture--left",
+          "pdf-running-furniture--center",
+          "pdf-running-furniture--right",
+          "pdf-running-furniture--row-start",
+          "pdf-running-furniture--row-end",
+          "pdf-running-furniture--overlay",
+        );
+        delete element.dataset.pdfFurniture;
+        element.removeAttribute("aria-label");
+      });
+    };
+  }, [messages, node.id, pdfFurniture, pdfSource?.documentId]);
 
   useEffect(() => {
     if (!pdfTocOpen) return;

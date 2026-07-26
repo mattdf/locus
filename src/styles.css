@@ -2088,6 +2088,57 @@ a:focus-visible {
   scroll-margin-top: 18px;
 }
 
+.markdown-message > .pdf-running-furniture {
+  --pdf-furniture-row-height: calc(27px * var(--text-scale, 1));
+  box-sizing: border-box;
+  width: 100%;
+  min-height: var(--pdf-furniture-row-height);
+  margin: 0 !important;
+  padding: 5px 3px;
+  overflow: hidden;
+  color: color-mix(in srgb, var(--muted) 88%, var(--ink));
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+  font-size: calc(9px * var(--text-scale, 1));
+  font-weight: 650;
+  line-height: 1.35;
+  letter-spacing: 0.035em;
+  text-overflow: ellipsis;
+  white-space: nowrap !important;
+}
+
+.markdown-message > .pdf-running-furniture--left {
+  text-align: left;
+}
+
+.markdown-message > .pdf-running-furniture--center {
+  text-align: center;
+}
+
+.markdown-message > .pdf-running-furniture--right {
+  text-align: right;
+}
+
+.markdown-message > .pdf-running-furniture--overlay {
+  margin-top: calc(-1 * var(--pdf-furniture-row-height)) !important;
+}
+
+.markdown-message > .pdf-running-furniture--header.pdf-running-furniture--row-end {
+  margin-bottom: 1.7em !important;
+}
+
+.markdown-message > .pdf-running-furniture--footer.pdf-running-furniture--row-start {
+  margin-top: 1.8em !important;
+}
+
+.markdown-message > .pdf-running-furniture--footer.pdf-running-furniture--overlay {
+  margin-top: calc(-1 * var(--pdf-furniture-row-height)) !important;
+}
+
+.markdown-message > .pdf-running-furniture--footer.pdf-running-furniture--row-end {
+  margin-bottom: 0.4em !important;
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+}
+
 .markdown-message > :first-child {
   margin-top: 0;
 }

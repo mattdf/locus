@@ -248,6 +248,20 @@ export interface PdfTocEntry {
   page: number;
 }
 
+export interface PdfPageFurnitureItem {
+  content: string;
+  align: "left" | "center" | "right";
+  row: number;
+  row_index: number;
+  row_size: number;
+}
+
+export interface PdfPageFurniture {
+  page: number;
+  headers: PdfPageFurnitureItem[];
+  footers: PdfPageFurnitureItem[];
+}
+
 export interface ChatTree {
   id: string;
   title: string;

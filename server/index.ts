@@ -72,6 +72,7 @@ import {
   deleteStagedPdfImport,
   getAccountPdfUsage,
   getPdfImport,
+  getPdfLayout,
   getPdfMarkdown,
   getPdfToc,
   inspectPdfImport,
@@ -555,6 +556,19 @@ app.get("/api/pdf-documents/:documentId/toc", async (request, response, next) =>
   try {
     response.setHeader("Cache-Control", "private, max-age=300");
     response.json(await getPdfToc(owner(response), request.params.documentId));
+  } catch (error) {
+    if (error instanceof PdfImportServiceError) {
+      response.status(error.status).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
+});
+
+app.get("/api/pdf-documents/:documentId/layout", async (request, response, next) => {
+  try {
+    response.setHeader("Cache-Control", "private, max-age=300");
+    response.json(await getPdfLayout(owner(response), request.params.documentId));
   } catch (error) {
     if (error instanceof PdfImportServiceError) {
       response.status(error.status).json({ error: error.message });

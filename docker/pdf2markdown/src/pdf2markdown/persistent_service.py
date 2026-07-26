@@ -42,6 +42,7 @@ from .mistral_images import (
     upgrade_document_images,
 )
 from .mistral_ocr import DEFAULT_MODEL, process_pdf, read_api_key
+from .page_furniture import document_furniture
 from .persistent_store import (
     PersistentStore,
     QuotaExceededError,
@@ -1315,6 +1316,43 @@ def create_app(
                 )
             ][:5000]
             return {"page_count": source.page_count, "items": items}
+
+    @application.get("/v1/documents/{document_id}/layout", tags=["documents"])
+    def get_document_layout(
+        document_id: str,
+        access_token: Annotated[str | None, Query()] = None,
+        authorization: Annotated[str | None, Header()] = None,
+        user_id: Annotated[
+            str | None,
+            Header(alias="X-PDF2Markdown-User-ID"),
+        ] = None,
+    ) -> dict[str, Any]:
+        _, document = authorize_document(
+            document_id=document_id,
+            scope="markdown",
+            access_token=access_token,
+            authorization=authorization,
+            user_id=user_id,
+        )
+        markdown_relpath = document.get("markdown_relpath")
+        if not markdown_relpath:
+            raise HTTPException(status_code=409, detail="Document is not ready")
+        document_root = resolved_settings.data_root / document["storage_relpath"]
+        result_root = _safe_resolve(document_root, markdown_relpath).parent
+        response_path = result_root / "response.json"
+        if not response_path.is_file():
+            raise HTTPException(status_code=404, detail="OCR layout result not found")
+        try:
+            response = json.loads(response_path.read_text("utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise HTTPException(
+                status_code=500,
+                detail="OCR layout result is unreadable",
+            ) from exc
+        return document_furniture(
+            response,
+            page_number_offset=int(document.get("page_start") or 1) - 1,
+        )
 
     @application.get(
         "/v1/documents/{document_id}/{asset_collection}/{asset_path:path}",

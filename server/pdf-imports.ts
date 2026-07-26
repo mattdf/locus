@@ -79,6 +79,20 @@ export interface PdfTocEntry {
   page: number;
 }
 
+export interface PdfPageFurnitureItem {
+  content: string;
+  align: "left" | "center" | "right";
+  row: number;
+  row_index: number;
+  row_size: number;
+}
+
+export interface PdfPageFurniture {
+  page: number;
+  headers: PdfPageFurnitureItem[];
+  footers: PdfPageFurnitureItem[];
+}
+
 export class PdfImportServiceError extends Error {
   constructor(
     message: string,
@@ -362,6 +376,16 @@ export async function getPdfToc(
       headers: userHeaders(ownerUserId),
       cache: "no-store",
     },
+  );
+}
+
+export async function getPdfLayout(
+  ownerUserId: string,
+  documentId: string,
+): Promise<{ page_count: number; pages: PdfPageFurniture[] }> {
+  return checkedJson<{ page_count: number; pages: PdfPageFurniture[] }>(
+    `${SERVICE_URL}/v1/documents/${encodeURIComponent(documentId)}/layout`,
+    { headers: userHeaders(ownerUserId), cache: "no-store" },
   );
 }
 
