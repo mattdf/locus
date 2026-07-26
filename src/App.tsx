@@ -141,7 +141,6 @@ import {
   activeEditContent,
   childThreads,
   contextBeforeMessage,
-  contextFor,
   makeMessage,
   messagesForNode,
   newId,
@@ -150,6 +149,11 @@ import {
   titleFrom,
   treeDepth,
 } from "./lib/tree";
+import {
+  contextForAnchoredRequest,
+  tokenContextWindowForAnchor,
+  tokenContextWindowForRange,
+} from "./lib/tokenContext";
 import type {
   AnnotationTarget,
   AssistantEditGroup,
@@ -3287,7 +3291,12 @@ export default function App({
           reasoningEffort: workspace.settings.reasoningEffort,
           maxOutputTokens: workspace.settings.maxOutputTokens,
           customInstructions: instructionsForPurpose(workspace.settings, "chat"),
-          context: contextFor(chat, nodeId, [userMessage.id, assistantId]),
+          context: await contextForAnchoredRequest(
+            chat,
+            nodeId,
+            [userMessage.id, assistantId],
+            anchor,
+          ),
           message: userMessage.content,
           anchor,
         },
@@ -3358,6 +3367,9 @@ export default function App({
     const controller = new AbortController();
     responseControllers.current.set(definition.id, controller);
     try {
+      const sourceContext = (
+        await tokenContextWindowForAnchor(source.content, definition.anchor)
+      ).content;
       const definitionModel =
         workspace.settings.definitionModels[workspace.settings.definitionProvider]?.trim() ||
         DEFAULT_DEFINITION_MODELS[providerKind(workspace.settings.definitionProvider)];
@@ -3381,7 +3393,7 @@ export default function App({
               messages: [
                 {
                   role: source.role,
-                  content: source.content,
+                  content: sourceContext,
                 },
               ],
             },
@@ -3578,6 +3590,12 @@ export default function App({
     responseControllers.current.set(elaboration.id, controller);
     try {
       const settings = workspaceRef.current.settings;
+      const sourceContext = (
+        await tokenContextWindowForAnchor(
+          sourceMessage.content,
+          elaboration.anchor,
+        )
+      ).content;
       const result = await modelRequest(
         elaboration.requestId,
         {
@@ -3589,7 +3607,7 @@ export default function App({
           context: [
             {
               title: node.title,
-              messages: [{ role: sourceMessage.role, content: sourceMessage.content }],
+              messages: [{ role: sourceMessage.role, content: sourceContext }],
             },
           ],
           message: `Elucidate only the selected passage inline. Keep the response short: at most three compact paragraph-level blocks total. A block may be a short paragraph, a concise worked example, or a necessary displayed equation. Return the explanation directly with no heading, preamble, summary, follow-up question, or offer to continue.${
@@ -4738,8 +4756,12 @@ export default function App({
           )
           .join("\n")}`
       : "";
-    const before = rewrite.documentContent.slice(Math.max(0, rewrite.start - 1_500), rewrite.start);
-    const after = rewrite.documentContent.slice(rewrite.end, Math.min(rewrite.documentContent.length, rewrite.end + 1_500));
+    const rewriteContext = await tokenContextWindowForRange(
+      rewrite.documentContent,
+      { start: rewrite.start, end: rewrite.end },
+    );
+    const before = rewriteContext.before;
+    const after = rewriteContext.after;
     const requestId = newId();
     const controller = new AbortController();
     sourceRewriteController.current = controller;

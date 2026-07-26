@@ -49,6 +49,7 @@ import { activeEditContent, childThreads, messagesForNode } from "../lib/tree";
 import { formatDuration, generationDetails } from "../lib/generation";
 import { applyMarkdownShortcut } from "../lib/textarea";
 import { compatibleReasoningEffort } from "../lib/providers";
+import { countTextTokens } from "../lib/tokenContext";
 import { Composer } from "./Composer";
 import { MarkdownMessage, type LinkedAnchor } from "./MarkdownMessage";
 import { MODEL_OPTIONS, REASONING_OPTIONS } from "./ModelPicker";
@@ -366,9 +367,15 @@ export function ThreadView({
   const [pdfTocLoading, setPdfTocLoading] = useState(false);
   const [pdfTocError, setPdfTocError] = useState<string | null>(null);
   const [pdfTocQuery, setPdfTocQuery] = useState("");
+  const [pdfTocCenterRequest, setPdfTocCenterRequest] = useState(0);
+  const [pdfTokenCount, setPdfTokenCount] = useState<number | null>(null);
+  const [pdfTokenCountError, setPdfTokenCountError] = useState(false);
   const pdfNavigationRef = useRef<HTMLDivElement>(null);
   const children = useMemo(() => childThreads(chat, node.id), [chat, node.id]);
   const messages = useMemo(() => messagesForNode(node), [node]);
+  const pdfMarkdown = pdfSource
+    ? messages.find((message) => message.role === "source")?.content ?? ""
+    : "";
   const linkedAnchorsByMessage = useMemo(() => {
     const anchors = new Map<string, LinkedAnchor[]>();
     children.forEach((child) => {
@@ -494,6 +501,23 @@ export function ThreadView({
   }, [pdfSource?.documentId, pdfPageEnd, pdfPageStart]);
 
   useEffect(() => {
+    let disposed = false;
+    setPdfTokenCount(null);
+    setPdfTokenCountError(false);
+    if (!pdfSource || !pdfMarkdown) return;
+    void countTextTokens(pdfMarkdown)
+      .then((count) => {
+        if (!disposed) setPdfTokenCount(count);
+      })
+      .catch(() => {
+        if (!disposed) setPdfTokenCountError(true);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [pdfMarkdown, pdfSource?.documentId]);
+
+  useEffect(() => {
     if (!pdfTocOpen) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
       if (
@@ -514,6 +538,24 @@ export function ThreadView({
       document.removeEventListener("keydown", closeOnEscape);
     };
   }, [pdfTocOpen]);
+
+  useLayoutEffect(() => {
+    if (!pdfTocOpen || !pdfToc.length) return;
+    const frame = window.requestAnimationFrame(() => {
+      const list = pdfNavigationRef.current?.querySelector<HTMLElement>(
+        ".pdf-document-toc__items",
+      );
+      const active = list?.querySelector<HTMLElement>("[data-toc-active='true']");
+      if (!list || !active) return;
+      const listRect = list.getBoundingClientRect();
+      const activeRect = active.getBoundingClientRect();
+      list.scrollTop +=
+        activeRect.top -
+        listRect.top -
+        (listRect.height - activeRect.height) / 2;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [pdfTocCenterRequest, pdfToc.length, pdfTocOpen]);
 
   useEffect(() => {
     if (!regenerationSettings) return;
@@ -850,26 +892,52 @@ export function ThreadView({
     setPdfPageInput(String(page));
   };
 
+  const activePdfTocIndex = pdfToc.reduce((bestIndex, item, index) => {
+    if (item.page > currentPdfPage) return bestIndex;
+    if (bestIndex < 0) return index;
+    const bestPage = pdfToc[bestIndex]?.page ?? Number.NEGATIVE_INFINITY;
+    return item.page >= bestPage ? index : bestIndex;
+  }, -1);
+  const normalizedActivePdfTocIndex =
+    activePdfTocIndex >= 0 ? activePdfTocIndex : pdfToc.length ? 0 : -1;
+  const indexedPdfToc = pdfToc.map((item, index) => ({ item, index }));
   const filteredPdfToc = pdfTocQuery.trim()
-    ? pdfToc.filter((item) =>
+    ? indexedPdfToc.filter(({ item }) =>
         item.title.toLocaleLowerCase().includes(pdfTocQuery.trim().toLocaleLowerCase()),
       )
-    : pdfToc;
+    : indexedPdfToc;
 
   return (
     <div className={`thread-view ${side ? "thread-view--side" : ""}`}>
       {pdfSource && (
         <div className="pdf-document-nav" ref={pdfNavigationRef}>
-          <button
-            className="pdf-document-nav__contents"
-            type="button"
-            aria-expanded={pdfTocOpen}
-            aria-controls={`pdf-toc-${pdfSource.documentId}`}
-            onClick={() => setPdfTocOpen((open) => !open)}
-          >
-            <ListTree size={14} />
-            <span>Contents</span>
-          </button>
+          <div className="pdf-document-nav__summary">
+            <button
+              className="pdf-document-nav__contents"
+              type="button"
+              aria-expanded={pdfTocOpen}
+              aria-controls={`pdf-toc-${pdfSource.documentId}`}
+              onClick={() => {
+                if (!pdfTocOpen) {
+                  setPdfTocCenterRequest((request) => request + 1);
+                }
+                setPdfTocOpen(!pdfTocOpen);
+              }}
+            >
+              <ListTree size={14} />
+              <span>Contents</span>
+            </button>
+            <span
+              className="pdf-document-nav__token-count"
+              title="Markdown token count (o200k tokenizer)"
+            >
+              {pdfTokenCountError
+                ? "Token count unavailable"
+                : pdfTokenCount === null
+                  ? "Counting tokens…"
+                  : `${pdfTokenCount.toLocaleString()} tokens`}
+            </span>
+          </div>
           <form
             className="pdf-document-nav__pages"
             onSubmit={(event) => {
@@ -939,11 +1007,16 @@ export function ThreadView({
                 ) : !filteredPdfToc.length ? (
                   <p>No matching sections.</p>
                 ) : (
-                  filteredPdfToc.map((item, index) => (
+                  filteredPdfToc.map(({ item, index }) => (
                     <button
                       type="button"
                       key={`${item.page}-${item.level}-${index}`}
-                      className={item.page === currentPdfPage ? "is-current" : ""}
+                      className={
+                        index === normalizedActivePdfTocIndex ? "is-current" : ""
+                      }
+                      data-toc-active={
+                        index === normalizedActivePdfTocIndex ? "true" : undefined
+                      }
                       style={{ paddingLeft: `${12 + Math.min(5, item.level - 1) * 14}px` }}
                       onClick={() => {
                         jumpToPdfPage(item.page);

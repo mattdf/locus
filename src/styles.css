@@ -1534,10 +1534,16 @@ a:focus-visible {
 }
 
 .pdf-document-nav__contents,
+.pdf-document-nav__summary,
 .pdf-document-nav__pages,
 .pdf-document-nav__pages label {
   display: flex;
   align-items: center;
+}
+
+.pdf-document-nav__summary {
+  min-width: 0;
+  gap: 7px;
 }
 
 .pdf-document-nav__contents {
@@ -1552,6 +1558,15 @@ a:focus-visible {
 .pdf-document-nav__contents[aria-expanded="true"] {
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+.pdf-document-nav__token-count {
+  overflow: hidden;
+  color: #8a928e;
+  font-size: 9px;
+  font-weight: 650;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .pdf-document-nav__pages {
@@ -7395,6 +7410,14 @@ body.resizing-drawer {
   .pdf-document-nav__contents span,
   .pdf-document-nav__pages label > span:first-child {
     display: none;
+  }
+
+  .pdf-document-nav__summary {
+    gap: 2px;
+  }
+
+  .pdf-document-nav__token-count {
+    max-width: 92px;
   }
 
   .pdf-document-toc {
