@@ -2326,7 +2326,6 @@ a:focus-visible {
 }
 
 .markdown-message .markdown-table-scroll > table {
-  width: max-content;
   min-width: 100%;
   margin: 0;
 }
