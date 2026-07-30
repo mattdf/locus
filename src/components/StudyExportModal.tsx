@@ -275,7 +275,7 @@ const EXPORT_CSS = `
   .markdown-message pre { padding:14px; overflow:auto; color:#edf3f1; background:#24302d; border-radius:7px; }
   .markdown-message code { font-family:ui-monospace,monospace; }
   .markdown-table-scroll { max-width:100%; overflow-x:auto; }
-  .markdown-table-scroll table { width:max-content; min-width:100%; border-collapse:collapse; font:12px/1.4 Inter,system-ui,sans-serif; }
+  .markdown-table-scroll table { width:100%; border-collapse:collapse; font:12px/1.4 Inter,system-ui,sans-serif; }
   .markdown-table-scroll th,.markdown-table-scroll td { padding:7px 9px; border-bottom:1px solid #ddd; text-align:left; }
   .katex-display { max-width:100%; overflow-x:auto; overflow-y:hidden; }
   @page { margin:16mm 14mm; }
