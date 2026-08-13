@@ -8,6 +8,14 @@ import { releaseManagedGeneration } from "./managed-usage.ts";
 
 type GenerationStatus = "running" | "completed" | "stopped" | "failed";
 
+export interface GenerationSnapshot {
+  id: string;
+  status: GenerationStatus;
+  content: string;
+  generation?: GenerationMetrics;
+  error?: string;
+}
+
 type GenerationEvent =
   | { type: "snapshot"; content: string }
   | { type: "delta"; delta: string }
@@ -68,7 +76,7 @@ function persistStarted(job: GenerationJob, input: RespondInput): Promise<void> 
       job.credentialRef,
       job.credentialLabel,
     ],
-  ).then(() => undefined).catch(() => undefined);
+  ).then(() => undefined);
 }
 
 function persistCheckpoint(job: GenerationJob): void {
@@ -94,7 +102,8 @@ function persistFinished(job: GenerationJob): void {
       await client.query(
         `update "locus_generation_jobs"
          set "status" = $3, "partialContent" = $4, "metrics" = $5::jsonb,
-             "errorCode" = $6, "updatedAt" = current_timestamp, "finishedAt" = current_timestamp
+             "errorCode" = $6, "errorMessage" = $7,
+             "updatedAt" = current_timestamp, "finishedAt" = current_timestamp
          where "ownerUserId" = $1 and "id" = $2`,
         [
           job.ownerUserId,
@@ -103,6 +112,7 @@ function persistFinished(job: GenerationJob): void {
           job.content,
           JSON.stringify(metrics),
           job.status === "failed" ? "upstream_error" : null,
+          job.status === "failed" ? job.error ?? "The model request failed" : null,
         ],
       );
       await client.query(
@@ -215,6 +225,9 @@ function finish(
 
 async function run(job: GenerationJob, input: RespondInput): Promise<void> {
   try {
+    // In hosted mode, the durable row must exist before any upstream work
+    // begins. That makes an accepted request genuinely reconnectable.
+    await job.persistenceReady;
     const usage = await streamResponse(
       input,
       (delta) => {
@@ -241,6 +254,56 @@ async function run(job: GenerationJob, input: RespondInput): Promise<void> {
 
 export function getGeneration(ownerUserId: string, id: string): GenerationJob | undefined {
   return generations.get(generationKey(ownerUserId, id));
+}
+
+function snapshotGeneration(job: GenerationJob): GenerationSnapshot {
+  return {
+    id: job.id,
+    status: job.status,
+    content: job.content,
+    ...(job.generation ? { generation: job.generation } : {}),
+    ...(job.error ? { error: job.error } : {}),
+  };
+}
+
+export async function getGenerationSnapshot(
+  ownerUserId: string,
+  id: string,
+): Promise<GenerationSnapshot | undefined> {
+  const active = getGeneration(ownerUserId, id);
+  if (active) return snapshotGeneration(active);
+  if (!isHosted) return undefined;
+
+  const result = await query<{
+    id: string;
+    status: GenerationStatus;
+    partialContent: string;
+    metrics: GenerationMetrics | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+  }>(
+    `select "id", "status", "partialContent", "metrics", "errorCode", "errorMessage"
+       from "locus_generation_jobs"
+      where "ownerUserId" = $1 and "id" = $2 and "expiresAt" > current_timestamp`,
+    [ownerUserId, id],
+  );
+  const row = result.rows[0];
+  if (!row) return undefined;
+  return {
+    id: row.id,
+    status: row.status,
+    content: row.partialContent,
+    ...(row.metrics ? { generation: row.metrics } : {}),
+    ...(row.errorMessage || row.errorCode
+      ? {
+          error:
+            row.errorMessage ??
+            (row.errorCode === "server_restart"
+              ? "The server restarted before this response completed"
+              : "The model request failed"),
+        }
+      : {}),
+  };
 }
 
 export function createGeneration(

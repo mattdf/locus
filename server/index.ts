@@ -24,6 +24,7 @@ import {
   createGeneration,
   GenerationLimitError,
   getGeneration,
+  getGenerationSnapshot,
   abortOwnerGenerations,
 } from "./generations.ts";
 import {
@@ -910,6 +911,23 @@ app.get("/api/respond/:requestId/stream", (request, response) => {
   attachGenerationStream(response, job);
 });
 
+app.get("/api/respond/:requestId/status", async (request, response, next) => {
+  try {
+    const snapshot = await getGenerationSnapshot(
+      owner(response),
+      request.params.requestId,
+    );
+    if (!snapshot) {
+      response.status(404).json({ error: "This response is no longer available" });
+      return;
+    }
+    response.setHeader("Cache-Control", "private, no-store");
+    response.json(snapshot);
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/respond/:requestId/abort", (request, response) => {
   const job = getGeneration(owner(response), request.params.requestId);
   if (!job) {
@@ -983,7 +1001,13 @@ app.post("/api/respond", async (request, response, next) => {
     const ownerUserId = owner(response);
     const existingJob = getGeneration(ownerUserId, body.requestId);
     if (existingJob) {
-      attachGenerationStream(response, existingJob);
+      await existingJob.persistenceReady;
+      response.status(202).json({ accepted: true, status: existingJob.status });
+      return;
+    }
+    const persistedJob = await getGenerationSnapshot(ownerUserId, body.requestId);
+    if (persistedJob) {
+      response.status(202).json({ accepted: true, status: persistedJob.status });
       return;
     }
     const connection = await resolveProviderConnection(ownerUserId, provider);
@@ -1050,7 +1074,8 @@ app.post("/api/respond", async (request, response, next) => {
       }
       throw error;
     }
-    attachGenerationStream(response, job);
+    await job.persistenceReady;
+    response.status(202).json({ accepted: true, status: job.status });
   } catch (error) {
     if (error instanceof GenerationLimitError) {
       response.status(429).json({ error: error.message });
@@ -1117,6 +1142,7 @@ async function start(): Promise<void> {
     await query(
       `update "locus_generation_jobs"
        set "status" = 'failed', "errorCode" = 'server_restart',
+           "errorMessage" = 'The server restarted before this response completed',
            "finishedAt" = current_timestamp, "updatedAt" = current_timestamp
        where "status" = 'running'`,
     );

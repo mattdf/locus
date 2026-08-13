@@ -284,6 +284,14 @@ interface GenerationResult {
   generation: GenerationMetrics;
 }
 
+interface GenerationStatusSnapshot {
+  id: string;
+  status: "running" | "completed" | "stopped" | "failed";
+  content: string;
+  generation?: GenerationMetrics;
+  error?: string;
+}
+
 interface VisualizationCompileResult {
   svg: string;
   log: string;
@@ -303,6 +311,12 @@ class VisualizationCompileError extends Error {
 
 class GenerationStreamError extends Error {
   constructor(message: string, readonly generation: GenerationMetrics) {
+    super(message);
+  }
+}
+
+class GenerationStatusHttpError extends Error {
+  constructor(message: string, readonly status: number) {
     super(message);
   }
 }
@@ -804,13 +818,30 @@ async function modelRequest(
   onSnapshot: (content: string) => void,
   signal?: AbortSignal,
 ): Promise<GenerationResult> {
-  const response = await fetch("/api/respond", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...(payload as object), requestId }),
-    signal,
-  });
-  return readGenerationStream(response, onDelta, onSnapshot);
+  while (true) {
+    if (signal?.aborted) throw new DOMException("The request was aborted", "AbortError");
+    try {
+      const response = await fetch("/api/respond", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...(payload as object), requestId }),
+        signal,
+      });
+      if (response.ok) break;
+      const data = (await response.json().catch(() => ({}))) as ApiError;
+      if (response.status < 500) {
+        throw new GenerationStatusHttpError(
+          data.error ?? "The model request could not be started",
+          response.status,
+        );
+      }
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      if (error instanceof GenerationStatusHttpError) throw error;
+    }
+    await waitForGenerationReconnect(signal);
+  }
+  return observeGeneration(requestId, onDelta, onSnapshot, signal);
 }
 
 async function resumeModelRequest(
@@ -819,11 +850,172 @@ async function resumeModelRequest(
   onSnapshot: (content: string) => void,
   signal?: AbortSignal,
 ): Promise<GenerationResult> {
+  return observeGeneration(requestId, onDelta, onSnapshot, signal);
+}
+
+function waitForGenerationReconnect(
+  signal?: AbortSignal,
+  timeoutMs = document.visibilityState === "visible" ? 1_500 : 5_000,
+): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(new DOMException("The request was aborted", "AbortError"));
+  }
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(finish, timeoutMs);
+    const wakeOnline = () => finish();
+    const wakeVisible = () => {
+      if (document.visibilityState === "visible") finish();
+    };
+    const abort = () => {
+      cleanup();
+      reject(new DOMException("The request was aborted", "AbortError"));
+    };
+    function cleanup() {
+      window.clearTimeout(timeout);
+      window.removeEventListener("online", wakeOnline);
+      document.removeEventListener("visibilitychange", wakeVisible);
+      signal?.removeEventListener("abort", abort);
+    }
+    function finish() {
+      cleanup();
+      resolve();
+    }
+    window.addEventListener("online", wakeOnline);
+    document.addEventListener("visibilitychange", wakeVisible);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+async function readGenerationStatus(
+  requestId: string,
+  signal?: AbortSignal,
+): Promise<GenerationStatusSnapshot> {
   const response = await fetch(
-    `/api/respond/${encodeURIComponent(requestId)}/stream`,
-    { signal },
+    `/api/respond/${encodeURIComponent(requestId)}/status`,
+    { credentials: "same-origin", cache: "no-store", signal },
   );
-  return readGenerationStream(response, onDelta, onSnapshot);
+  const data = (await response.json().catch(() => ({}))) as
+    | GenerationStatusSnapshot
+    | ApiError;
+  if (!response.ok || !("status" in data)) {
+    throw new GenerationStatusHttpError(
+      "error" in data && data.error
+        ? data.error
+        : "The generation status could not be loaded",
+      response.status,
+    );
+  }
+  return data;
+}
+
+function completedGeneration(
+  snapshot: GenerationStatusSnapshot,
+): GenerationResult | null {
+  if (snapshot.status === "running") return null;
+  if (snapshot.status === "failed") {
+    if (snapshot.generation) {
+      throw new GenerationStreamError(
+        snapshot.error ?? "The model request failed",
+        snapshot.generation,
+      );
+    }
+    throw new Error(snapshot.error ?? "The model request failed");
+  }
+  if (!snapshot.generation) {
+    throw new Error("The completed response omitted generation details");
+  }
+  if (!snapshot.content && snapshot.status === "completed") {
+    throw new Error("The model returned no text");
+  }
+  return {
+    content: snapshot.content,
+    stopped: snapshot.status === "stopped",
+    generation: snapshot.generation,
+  };
+}
+
+async function pollGeneration(
+  requestId: string,
+  onSnapshot: (content: string) => void,
+  signal?: AbortSignal,
+): Promise<GenerationResult> {
+  while (true) {
+    if (signal?.aborted) throw new DOMException("The request was aborted", "AbortError");
+    try {
+      const snapshot = await readGenerationStatus(requestId, signal);
+      onSnapshot(snapshot.content);
+      const result = completedGeneration(snapshot);
+      if (result) return result;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      if (
+        error instanceof GenerationStatusHttpError &&
+        error.status >= 400 &&
+        error.status < 500
+      ) {
+        throw error;
+      }
+    }
+    await waitForGenerationReconnect(signal);
+  }
+}
+
+async function observeGeneration(
+  requestId: string,
+  onDelta: (delta: string) => void,
+  onSnapshot: (content: string) => void,
+  signal?: AbortSignal,
+): Promise<GenerationResult> {
+  // Status is authoritative and survives a lost stream (and, when hosted, an
+  // app-process replacement). The stream is only a live observer.
+  let initial: GenerationStatusSnapshot;
+  while (true) {
+    try {
+      initial = await readGenerationStatus(requestId, signal);
+      break;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      if (
+        error instanceof GenerationStatusHttpError &&
+        error.status >= 400 &&
+        error.status < 500
+      ) {
+        throw error;
+      }
+      await waitForGenerationReconnect(signal);
+    }
+  }
+  onSnapshot(initial.content);
+  const completed = completedGeneration(initial);
+  if (completed) return completed;
+
+  const streamController = new AbortController();
+  const stopObserver = () => streamController.abort();
+  const suspendObserver = () => {
+    if (document.visibilityState === "hidden") stopObserver();
+  };
+  signal?.addEventListener("abort", stopObserver, { once: true });
+  document.addEventListener("visibilitychange", suspendObserver);
+  window.addEventListener("pagehide", stopObserver);
+  try {
+    const response = await fetch(
+      `/api/respond/${encodeURIComponent(requestId)}/stream`,
+      {
+        credentials: "same-origin",
+        cache: "no-store",
+        signal: streamController.signal,
+      },
+    );
+    return await readGenerationStream(response, onDelta, onSnapshot);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    if (error instanceof GenerationStreamError) throw error;
+    return pollGeneration(requestId, onSnapshot, signal);
+  } finally {
+    signal?.removeEventListener("abort", stopObserver);
+    document.removeEventListener("visibilitychange", suspendObserver);
+    window.removeEventListener("pagehide", stopObserver);
+  }
 }
 
 function extractVisualizationSource(response: string, engine: VisualizationEngine): string {
