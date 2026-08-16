@@ -26,6 +26,13 @@ interface PositionedNode {
 
 const markdownParser = unified().use(remarkParse).use(remarkGfm).use(remarkMath);
 
+export interface MarkdownDocumentIndex {
+  source: string;
+  renderedSource: string;
+  renderedBlocks: SourceRange[];
+  renderedToSource: PositionMapper | null;
+}
+
 export function markdownBlockRanges(source: string): SourceRange[] {
   const tree = markdownParser.parse(source) as { children?: PositionedNode[] };
   return (tree.children ?? [])
@@ -43,12 +50,12 @@ export function markdownBlockRanges(source: string): SourceRange[] {
     .map((range) => ({ start: Number(range.start), end: Number(range.end) }));
 }
 
-export function containingMarkdownSection(
+function containingSectionFromBlocks(
   source: string,
+  blocks: readonly SourceRange[],
   startBlockIndex: number,
   endBlockIndex = startBlockIndex,
 ): SourceRange & { content: string } {
-  const blocks = markdownBlockRanges(source);
   const startBlock = blocks[Math.max(0, Math.min(startBlockIndex, blocks.length - 1))];
   const endBlock = blocks[Math.max(0, Math.min(endBlockIndex, blocks.length - 1))];
   if (!startBlock || !endBlock) {
@@ -57,6 +64,36 @@ export function containingMarkdownSection(
   const start = Math.min(startBlock.start, endBlock.start);
   const end = Math.max(startBlock.end, endBlock.end);
   return { start, end, content: source.slice(start, end) };
+}
+
+/**
+ * Builds the expensive parser/diff index once for a rendered message. Imported
+ * books rarely change, while selections can occur hundreds of times.
+ */
+export function createMarkdownDocumentIndex(
+  source: string,
+  renderedSource = source,
+): MarkdownDocumentIndex {
+  return {
+    source,
+    renderedSource,
+    renderedBlocks: markdownBlockRanges(renderedSource),
+    renderedToSource:
+      source === renderedSource ? null : createPositionMapper(renderedSource, source),
+  };
+}
+
+export function containingMarkdownSection(
+  source: string,
+  startBlockIndex: number,
+  endBlockIndex = startBlockIndex,
+): SourceRange & { content: string } {
+  return containingSectionFromBlocks(
+    source,
+    markdownBlockRanges(source),
+    startBlockIndex,
+    endBlockIndex,
+  );
 }
 
 /**
@@ -70,9 +107,15 @@ export function containingOriginalMarkdownSection(
   renderedSource: string,
   startBlockIndex: number,
   endBlockIndex = startBlockIndex,
+  documentIndex?: MarkdownDocumentIndex,
 ): SourceRange & { content: string } {
-  const rendered = containingMarkdownSection(
+  const compatibleIndex =
+    documentIndex?.source === source && documentIndex.renderedSource === renderedSource
+      ? documentIndex
+      : createMarkdownDocumentIndex(source, renderedSource);
+  const rendered = containingSectionFromBlocks(
     renderedSource,
+    compatibleIndex.renderedBlocks,
     startBlockIndex,
     endBlockIndex,
   );
@@ -80,7 +123,7 @@ export function containingOriginalMarkdownSection(
     return { ...rendered, content: source.slice(rendered.start, rendered.end) };
   }
 
-  const mapper = createPositionMapper(renderedSource, source);
+  const mapper = compatibleIndex.renderedToSource!;
   let start = mapper.map(rendered.start);
   let end = mapper.map(rendered.end);
   if (end < start) [start, end] = [end, start];

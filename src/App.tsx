@@ -154,6 +154,7 @@ import {
   tokenContextWindowForAnchor,
   tokenContextWindowForRange,
 } from "./lib/tokenContext";
+import { workspaceSyncChanges } from "./lib/workspaceSync";
 import type {
   AnnotationTarget,
   AssistantEditGroup,
@@ -348,15 +349,6 @@ interface HostedWorkspaceResponse {
   revision: number;
 }
 
-interface HostedWorkspaceSync {
-  baseRevision: number;
-  settings?: WorkspaceState["settings"];
-  categories?: ChatCategory[];
-  upsertChats?: ChatTree[];
-  deleteChatIds?: string[];
-  chatBaseUpdatedAt?: Record<string, string | null>;
-}
-
 interface WorkspaceConflictState {
   chatId: string;
   localChat: ChatTree;
@@ -409,43 +401,6 @@ interface AnnotationMoveState {
   originalAnchor: HighlightAnchor;
   candidate?: SelectionDraft;
   error: string;
-}
-
-function workspaceSyncChanges(
-  before: WorkspaceState,
-  after: WorkspaceState,
-  baseRevision: number,
-): HostedWorkspaceSync | null {
-  const changes: HostedWorkspaceSync = { baseRevision };
-  if (JSON.stringify(before.settings) !== JSON.stringify(after.settings)) {
-    changes.settings = after.settings;
-  }
-  if (JSON.stringify(before.categories) !== JSON.stringify(after.categories)) {
-    changes.categories = after.categories;
-  }
-  const previousChats = new Map(before.chats.map((chat) => [chat.id, chat]));
-  const nextChatIds = new Set(after.chats.map((chat) => chat.id));
-  const upsertChats = after.chats.filter(
-    (chat) => JSON.stringify(previousChats.get(chat.id)) !== JSON.stringify(chat),
-  );
-  const deleteChatIds = before.chats
-    .filter((chat) => !nextChatIds.has(chat.id))
-    .map((chat) => chat.id);
-  if (upsertChats.length) changes.upsertChats = upsertChats;
-  if (deleteChatIds.length) changes.deleteChatIds = deleteChatIds;
-  if (upsertChats.length || deleteChatIds.length) {
-    changes.chatBaseUpdatedAt = Object.fromEntries([
-      ...upsertChats.map((chat) => [
-        chat.id,
-        previousChats.get(chat.id)?.updatedAt ?? null,
-      ] as const),
-      ...deleteChatIds.map((chatId) => [
-        chatId,
-        previousChats.get(chatId)?.updatedAt ?? null,
-      ] as const),
-    ]);
-  }
-  return Object.keys(changes).length === 1 ? null : changes;
 }
 
 function readViewLocation(): ViewLocation {

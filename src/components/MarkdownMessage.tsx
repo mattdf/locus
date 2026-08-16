@@ -9,6 +9,7 @@ import { normalizeMathDelimiters } from "../lib/markdown";
 import {
   anchorForSelection,
   containingOriginalMarkdownSection,
+  createMarkdownDocumentIndex,
 } from "../lib/sourceEditing";
 import type {
   AnnotationTarget,
@@ -74,6 +75,24 @@ const PDF_MARKDOWN_COMPONENTS: Components = {
     );
   },
 };
+
+const RenderedMarkdownBody = memo(function RenderedMarkdownBody({
+  content,
+  preserveSoftBreaks,
+}: {
+  content: string;
+  preserveSoftBreaks: boolean;
+}) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[[rehypeKatex, { strict: false }], rehypeHighlight]}
+      components={preserveSoftBreaks ? PDF_MARKDOWN_COMPONENTS : MARKDOWN_COMPONENTS}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+});
 
 const selectionCaptureByContainer = new WeakMap<HTMLElement, () => void>();
 let selectionCaptureSubscriberCount = 0;
@@ -230,6 +249,10 @@ function topLevelBlockIndex(container: HTMLElement, sourceNode: Node): number {
   while (element.parentElement && element.parentElement !== container) {
     element = element.parentElement;
   }
+  if (element instanceof HTMLElement) {
+    const indexed = Number(element.dataset.markdownBlockIndex);
+    if (Number.isSafeInteger(indexed) && indexed >= 0) return indexed;
+  }
   return Math.max(0, topLevelBlocks(container).indexOf(element));
 }
 
@@ -237,10 +260,6 @@ function topLevelBlocks(container: HTMLElement): Element[] {
   return Array.from(container.children).filter(
     (element) => !element.classList.contains("inline-annotation-slot"),
   );
-}
-
-function topLevelBlock(container: HTMLElement, index: number): Element | undefined {
-  return topLevelBlocks(container)[index];
 }
 
 function mathSource(math: Element): string | null {
@@ -325,6 +344,8 @@ function MarkdownMessageComponent({
   const visualizationBlockTargetsRef = useRef<VisualizationBlockTarget[]>([]);
   const inlineElaborationTargetsRef = useRef<InlineElaborationRangeTarget[]>([]);
   const inlineElaborationBlockTargetsRef = useRef<InlineElaborationBlockTarget[]>([]);
+  const renderedBlocksRef = useRef<Element[]>([]);
+  const blockTextMapsRef = useRef<WeakMap<Element, ReturnType<typeof textMap>>>(new WeakMap());
   const highlightName = useMemo(
     () => `elaboration-${message.id.replace(/[^a-zA-Z0-9-]/g, "")}`,
     [message.id],
@@ -345,25 +366,53 @@ function MarkdownMessageComponent({
     () => normalizeMathDelimiters(message.content, message.role === "source"),
     [message.content, message.role],
   );
+  const documentIndex = useMemo(
+    () => createMarkdownDocumentIndex(message.content, normalizedContent),
+    [message.content, normalizedContent],
+  );
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const blocks = topLevelBlocks(container);
+    blocks.forEach((block, index) => {
+      if (block instanceof HTMLElement) block.dataset.markdownBlockIndex = String(index);
+    });
+    renderedBlocksRef.current = blocks;
+    blockTextMapsRef.current = new WeakMap();
+    return () => {
+      renderedBlocksRef.current = [];
+      blockTextMapsRef.current = new WeakMap();
+    };
+  }, [normalizedContent, preserveSoftBreaks]);
+
+  const indexedTextMap = (root: Element): ReturnType<typeof textMap> => {
+    const existing = blockTextMapsRef.current.get(root);
+    if (existing) return existing;
+    const mapped = textMap(root as HTMLElement);
+    blockTextMapsRef.current.set(root, mapped);
+    return mapped;
+  };
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !linkedAnchors.length) return;
 
-    const { text, points } = textMap(container);
     const ranges: Range[] = [];
     const targets: RangeTarget[] = [];
     const styledBlocks: Element[] = [];
     const blockTargets: BlockTarget[] = [];
 
     for (const linked of linkedAnchors) {
-      const block = topLevelBlock(container, linked.anchor.blockIndex);
+      const block = renderedBlocksRef.current[linked.anchor.blockIndex];
+      const searchRoot = block ?? container;
       if (block) {
         block.classList.add("has-linked-elaboration");
         styledBlocks.push(block);
         blockTargets.push({ element: block, childId: linked.childId });
       }
 
+      const { text, points } = indexedTextMap(searchRoot);
       const quote = normalizedQuote(linked.anchor.quote);
       const index = quote ? text.indexOf(quote) : -1;
       if (index >= 0 && points[index] && points[index + quote.length - 1]) {
@@ -411,9 +460,9 @@ function MarkdownMessageComponent({
     const blockTargets: DefinitionBlockTarget[] = [];
 
     for (const definition of definitions) {
-      const block = topLevelBlock(container, definition.anchor.blockIndex);
+      const block = renderedBlocksRef.current[definition.anchor.blockIndex];
       const searchRoot = block instanceof HTMLElement ? block : container;
-      const { text, points } = textMap(searchRoot);
+      const { text, points } = indexedTextMap(searchRoot);
       const quote = normalizedQuote(definition.anchor.quote);
       const index = quote ? text.indexOf(quote) : -1;
       if (index >= 0 && points[index] && points[index + quote.length - 1]) {
@@ -477,9 +526,9 @@ function MarkdownMessageComponent({
     const styledBlocks: Element[] = [];
     const blockTargets: VisualizationBlockTarget[] = [];
     for (const visualization of visualizations) {
-      const block = topLevelBlock(container, visualization.anchor.blockIndex);
+      const block = renderedBlocksRef.current[visualization.anchor.blockIndex];
       const searchRoot = block instanceof HTMLElement ? block : container;
-      const { text, points } = textMap(searchRoot);
+      const { text, points } = indexedTextMap(searchRoot);
       const quote = normalizedQuote(visualization.anchor.quote);
       const index = quote ? text.indexOf(quote) : -1;
       if (index >= 0 && points[index] && points[index + quote.length - 1]) {
@@ -535,9 +584,9 @@ function MarkdownMessageComponent({
     const styledBlocks: Element[] = [];
     const blockTargets: InlineElaborationBlockTarget[] = [];
     for (const elaboration of inlineElaborations) {
-      const block = topLevelBlock(container, elaboration.anchor.blockIndex);
+      const block = renderedBlocksRef.current[elaboration.anchor.blockIndex];
       const searchRoot = block instanceof HTMLElement ? block : container;
-      const { text, points } = textMap(searchRoot);
+      const { text, points } = indexedTextMap(searchRoot);
       const quote = normalizedQuote(elaboration.anchor.quote);
       const index = quote ? text.indexOf(quote) : -1;
       if (index >= 0 && points[index] && points[index + quote.length - 1]) {
@@ -600,6 +649,7 @@ function MarkdownMessageComponent({
       normalizedContent,
       startBlockIndex,
       endBlockIndex,
+      documentIndex,
     );
     const anchor = anchorForSelection(
       message.content,
@@ -631,6 +681,7 @@ function MarkdownMessageComponent({
     message.id,
     nodeId,
     normalizedContent,
+    documentIndex,
     onSelect,
     selectionSurface,
   ]);
@@ -844,13 +895,10 @@ function MarkdownMessageComponent({
         }
       }}
     >
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[[rehypeKatex, { strict: false }], rehypeHighlight]}
-        components={preserveSoftBreaks ? PDF_MARKDOWN_COMPONENTS : MARKDOWN_COMPONENTS}
-      >
-        {normalizedContent}
-      </ReactMarkdown>
+      <RenderedMarkdownBody
+        content={normalizedContent}
+        preserveSoftBreaks={preserveSoftBreaks}
+      />
       {!!linkedAnchors.length && (
         <div className="elaboration-links" aria-label="Elaborations from this passage">
           {linkedAnchors.map((linked) => (

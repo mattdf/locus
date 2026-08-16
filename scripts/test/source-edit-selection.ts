@@ -3,6 +3,7 @@ import { normalizeMathDelimiters } from "../../src/lib/markdown.ts";
 import {
   anchorForSelection,
   containingOriginalMarkdownSection,
+  createMarkdownDocumentIndex,
   markdownBlockRanges,
 } from "../../src/lib/sourceEditing.ts";
 
@@ -39,6 +40,7 @@ For the formulation requiring determinant $1$, replace $F=(P,Q,R)$ with
 
 const rendered = normalizeMathDelimiters(source, true);
 const renderedBlocks = markdownBlockRanges(rendered);
+const documentIndex = createMarkdownDocumentIndex(source, rendered);
 
 function renderedBlockIndexContaining(text: string): number {
   const index = renderedBlocks.findIndex((range) =>
@@ -55,6 +57,8 @@ const targetSection = containingOriginalMarkdownSection(
   source,
   rendered,
   targetBlockIndex,
+  targetBlockIndex,
+  documentIndex,
 );
 assert.equal(
   targetSection.content,
@@ -83,6 +87,8 @@ const equationSection = containingOriginalMarkdownSection(
   source,
   rendered,
   equationBlockIndex,
+  equationBlockIndex,
+  documentIndex,
 );
 assert.match(equationSection.content, /^\[\n/);
 assert.match(equationSection.content, /\n\]$/);
@@ -117,7 +123,7 @@ assert.match(renderedPdf, /^---\n\n\*\*Page 1\*\*/);
 assert.match(renderedPdf, /\n---\n\n\*\*Page 2\*\*/);
 assert.match(
   renderedPdf,
-  /\$\$\n\\operatorname\{Tagged\}\(x\) = x\^2 \\tag\{7\}\n\$\$/,
+  /\$\$\\operatorname\{Tagged\}\(x\) = x\^2 \\tag\{7\}\$\$/,
 );
 
 const proseWithCodeIdentifiers =
