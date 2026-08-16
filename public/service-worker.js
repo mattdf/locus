@@ -1,4 +1,4 @@
-const CACHE_NAME = "locus-public-assets-v1";
+const CACHE_NAME = "locus-public-assets-v2";
 const PRECACHE = [
   "/favicon.svg",
   "/manifest.webmanifest",
