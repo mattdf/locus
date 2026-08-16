@@ -2088,7 +2088,32 @@ a:focus-visible {
   scroll-margin-top: 18px;
 }
 
-.markdown-message > .pdf-running-furniture {
+.pdf-virtual-page {
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  scroll-margin-top: 18px;
+  contain: layout style;
+}
+
+.pdf-virtual-page:not(.pdf-virtual-page--active) {
+  pointer-events: none;
+}
+
+.pdf-virtual-page__content {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.pdf-virtual-page__content > :first-child {
+  margin-top: 0;
+}
+
+.pdf-virtual-page__content > :last-child:not(.inline-annotation-slot) {
+  margin-bottom: 0;
+}
+
+.markdown-message .pdf-running-furniture {
   --pdf-furniture-row-height: calc(27px * var(--text-scale, 1));
   box-sizing: border-box;
   width: 100%;
@@ -2106,35 +2131,35 @@ a:focus-visible {
   white-space: nowrap !important;
 }
 
-.markdown-message > .pdf-running-furniture--left {
+.markdown-message .pdf-running-furniture--left {
   text-align: left;
 }
 
-.markdown-message > .pdf-running-furniture--center {
+.markdown-message .pdf-running-furniture--center {
   text-align: center;
 }
 
-.markdown-message > .pdf-running-furniture--right {
+.markdown-message .pdf-running-furniture--right {
   text-align: right;
 }
 
-.markdown-message > .pdf-running-furniture--overlay {
+.markdown-message .pdf-running-furniture--overlay {
   margin-top: calc(-1 * var(--pdf-furniture-row-height)) !important;
 }
 
-.markdown-message > .pdf-running-furniture--header.pdf-running-furniture--row-end {
+.markdown-message .pdf-running-furniture--header.pdf-running-furniture--row-end {
   margin-bottom: 1.7em !important;
 }
 
-.markdown-message > .pdf-running-furniture--footer.pdf-running-furniture--row-start {
+.markdown-message .pdf-running-furniture--footer.pdf-running-furniture--row-start {
   margin-top: 1.8em !important;
 }
 
-.markdown-message > .pdf-running-furniture--footer.pdf-running-furniture--overlay {
+.markdown-message .pdf-running-furniture--footer.pdf-running-furniture--overlay {
   margin-top: calc(-1 * var(--pdf-furniture-row-height)) !important;
 }
 
-.markdown-message > .pdf-running-furniture--footer.pdf-running-furniture--row-end {
+.markdown-message .pdf-running-furniture--footer.pdf-running-furniture--row-end {
   margin-bottom: 0.4em !important;
   border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
 }

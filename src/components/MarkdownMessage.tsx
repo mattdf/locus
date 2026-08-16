@@ -1,5 +1,12 @@
 import { CornerUpRight, ExternalLink } from "lucide-react";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
@@ -11,6 +18,7 @@ import {
   containingOriginalMarkdownSection,
   createMarkdownDocumentIndex,
 } from "../lib/sourceEditing";
+import { createPdfMarkdownPages, type PdfMarkdownPage } from "../lib/pdfVirtualization";
 import type {
   AnnotationTarget,
   HighlightAnchor,
@@ -94,6 +102,91 @@ const RenderedMarkdownBody = memo(function RenderedMarkdownBody({
   );
 });
 
+function PdfVirtualPage({
+  page,
+  active,
+  cachedHeight,
+  onHeight,
+}: {
+  page: PdfMarkdownPage;
+  active: boolean;
+  cachedHeight?: number;
+  onHeight: (page: number, height: number) => void;
+}) {
+  const pageRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const element = pageRef.current;
+    if (!element || !active) return;
+    const measure = () => {
+      const height = Math.ceil(element.getBoundingClientRect().height);
+      if (height > 0) onHeight(page.page, height);
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    measure();
+    return () => observer.disconnect();
+  }, [active, onHeight, page.page]);
+
+  return (
+    <section
+      ref={pageRef}
+      className={`pdf-virtual-page${active ? " pdf-virtual-page--active" : ""}`}
+      data-pdf-page-shell={page.page}
+      data-pdf-page-active={active ? "true" : "false"}
+      data-block-start={page.startBlockIndex}
+      data-block-end={page.endBlockIndex}
+      aria-label={`PDF page ${page.page}`}
+      aria-hidden={!active}
+      style={
+        active
+          ? undefined
+          : { height: `${cachedHeight ?? page.estimatedHeight}px` }
+      }
+    >
+      {active ? (
+        <div
+          className="pdf-virtual-page__content"
+          data-pdf-page-content="true"
+          data-block-start={page.startBlockIndex}
+        >
+          <RenderedMarkdownBody content={page.content} preserveSoftBreaks />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+const VirtualizedPdfMarkdownBody = memo(function VirtualizedPdfMarkdownBody({
+  pages,
+  currentPage,
+  buffer,
+  renderAll,
+}: {
+  pages: PdfMarkdownPage[];
+  currentPage: number;
+  buffer: number;
+  renderAll: boolean;
+}) {
+  const heightsRef = useRef(new Map<number, number>());
+  const recordHeight = useCallback((page: number, height: number) => {
+    if (Math.abs((heightsRef.current.get(page) ?? 0) - height) < 2) return;
+    heightsRef.current.set(page, height);
+  }, []);
+
+  return pages.map((page) => {
+    const active = renderAll || Math.abs(page.page - currentPage) <= buffer;
+    return (
+      <PdfVirtualPage
+        key={page.page}
+        page={page}
+        active={active}
+        cachedHeight={heightsRef.current.get(page.page)}
+        onHeight={recordHeight}
+      />
+    );
+  });
+});
+
 const selectionCaptureByContainer = new WeakMap<HTMLElement, () => void>();
 let selectionCaptureSubscriberCount = 0;
 let selectionCaptureTimer: number | null = null;
@@ -157,6 +250,12 @@ interface MarkdownMessageProps {
     point: { left: number; top: number },
   ) => void;
   selectionSurface?: SelectionDraft["surface"];
+  pdfVirtualization?: {
+    currentPage: number;
+    pageStart: number;
+    buffer?: number;
+    renderAll?: boolean;
+  };
 }
 
 interface Point {
@@ -246,6 +345,11 @@ function normalizedQuote(quote: string) {
 function topLevelBlockIndex(container: HTMLElement, sourceNode: Node): number {
   let element = sourceNode instanceof Element ? sourceNode : sourceNode.parentElement;
   if (!element) return 0;
+  const indexedBlock = element.closest<HTMLElement>("[data-markdown-block-index]");
+  if (indexedBlock && container.contains(indexedBlock)) {
+    const indexed = Number(indexedBlock.dataset.markdownBlockIndex);
+    if (Number.isSafeInteger(indexed) && indexed >= 0) return indexed;
+  }
   while (element.parentElement && element.parentElement !== container) {
     element = element.parentElement;
   }
@@ -257,8 +361,22 @@ function topLevelBlockIndex(container: HTMLElement, sourceNode: Node): number {
 }
 
 function topLevelBlocks(container: HTMLElement): Element[] {
+  const virtualized = Array.from(
+    container.querySelectorAll<HTMLElement>(
+      ":scope > .pdf-virtual-page > [data-pdf-page-content='true']",
+    ),
+  );
+  if (virtualized.length) {
+    return virtualized.flatMap((page) =>
+      Array.from(page.children).filter(
+        (element) => !element.classList.contains("inline-annotation-slot"),
+      ),
+    );
+  }
   return Array.from(container.children).filter(
-    (element) => !element.classList.contains("inline-annotation-slot"),
+    (element) =>
+      !element.classList.contains("inline-annotation-slot") &&
+      !element.classList.contains("pdf-virtual-page"),
   );
 }
 
@@ -334,6 +452,7 @@ function MarkdownMessageComponent({
   onOpenInlineElaboration,
   onAnnotationContextMenu,
   selectionSurface = "message",
+  pdfVirtualization,
 }: MarkdownMessageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const targetsRef = useRef<RangeTarget[]>([]);
@@ -344,7 +463,7 @@ function MarkdownMessageComponent({
   const visualizationBlockTargetsRef = useRef<VisualizationBlockTarget[]>([]);
   const inlineElaborationTargetsRef = useRef<InlineElaborationRangeTarget[]>([]);
   const inlineElaborationBlockTargetsRef = useRef<InlineElaborationBlockTarget[]>([]);
-  const renderedBlocksRef = useRef<Element[]>([]);
+  const renderedBlocksRef = useRef<Map<number, Element>>(new Map());
   const blockTextMapsRef = useRef<WeakMap<Element, ReturnType<typeof textMap>>>(new WeakMap());
   const highlightName = useMemo(
     () => `elaboration-${message.id.replace(/[^a-zA-Z0-9-]/g, "")}`,
@@ -370,21 +489,53 @@ function MarkdownMessageComponent({
     () => createMarkdownDocumentIndex(message.content, normalizedContent),
     [message.content, normalizedContent],
   );
+  const pdfPages = useMemo(
+    () =>
+      pdfVirtualization
+        ? createPdfMarkdownPages(
+            normalizedContent,
+            documentIndex,
+            pdfVirtualization.pageStart,
+          )
+        : [],
+    [documentIndex, normalizedContent, pdfVirtualization?.pageStart],
+  );
 
   useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     const blocks = topLevelBlocks(container);
-    blocks.forEach((block, index) => {
+    const indexedBlocks = new Map<number, Element>();
+    blocks.forEach((block, fallbackIndex) => {
+      const pageContent = block.parentElement?.closest<HTMLElement>(
+        "[data-pdf-page-content='true']",
+      );
+      const blockStart = Number(pageContent?.dataset.blockStart);
+      const localBlocks = pageContent
+        ? Array.from(pageContent.children).filter(
+            (element) => !element.classList.contains("inline-annotation-slot"),
+          )
+        : blocks;
+      const localIndex = pageContent ? localBlocks.indexOf(block) : fallbackIndex;
+      const index =
+        Number.isSafeInteger(blockStart) && blockStart >= 0
+          ? blockStart + Math.max(0, localIndex)
+          : fallbackIndex;
       if (block instanceof HTMLElement) block.dataset.markdownBlockIndex = String(index);
+      indexedBlocks.set(index, block);
     });
-    renderedBlocksRef.current = blocks;
+    renderedBlocksRef.current = indexedBlocks;
     blockTextMapsRef.current = new WeakMap();
     return () => {
-      renderedBlocksRef.current = [];
+      renderedBlocksRef.current = new Map();
       blockTextMapsRef.current = new WeakMap();
     };
-  }, [normalizedContent, preserveSoftBreaks]);
+  }, [
+    normalizedContent,
+    preserveSoftBreaks,
+    pdfVirtualization?.currentPage,
+    pdfVirtualization?.renderAll,
+  ]);
 
   const indexedTextMap = (root: Element): ReturnType<typeof textMap> => {
     const existing = blockTextMapsRef.current.get(root);
@@ -404,8 +555,9 @@ function MarkdownMessageComponent({
     const blockTargets: BlockTarget[] = [];
 
     for (const linked of linkedAnchors) {
-      const block = renderedBlocksRef.current[linked.anchor.blockIndex];
-      const searchRoot = block ?? container;
+      const block = renderedBlocksRef.current.get(linked.anchor.blockIndex);
+      const searchRoot = block ?? (pdfVirtualization ? null : container);
+      if (!searchRoot) continue;
       if (block) {
         block.classList.add("has-linked-elaboration");
         styledBlocks.push(block);
@@ -448,7 +600,13 @@ function MarkdownMessageComponent({
       targetsRef.current = [];
       blockTargetsRef.current = [];
     };
-  }, [highlightName, linkedAnchors, message.content]);
+  }, [
+    highlightName,
+    linkedAnchors,
+    message.content,
+    pdfVirtualization?.currentPage,
+    pdfVirtualization?.renderAll,
+  ]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -460,8 +618,13 @@ function MarkdownMessageComponent({
     const blockTargets: DefinitionBlockTarget[] = [];
 
     for (const definition of definitions) {
-      const block = renderedBlocksRef.current[definition.anchor.blockIndex];
-      const searchRoot = block instanceof HTMLElement ? block : container;
+      const block = renderedBlocksRef.current.get(definition.anchor.blockIndex);
+      const searchRoot = block instanceof HTMLElement
+        ? block
+        : pdfVirtualization
+          ? null
+          : container;
+      if (!searchRoot) continue;
       const { text, points } = indexedTextMap(searchRoot);
       const quote = normalizedQuote(definition.anchor.quote);
       const index = quote ? text.indexOf(quote) : -1;
@@ -515,7 +678,13 @@ function MarkdownMessageComponent({
       definitionTargetsRef.current = [];
       definitionBlockTargetsRef.current = [];
     };
-  }, [definitionHighlightName, definitions, message.content]);
+  }, [
+    definitionHighlightName,
+    definitions,
+    message.content,
+    pdfVirtualization?.currentPage,
+    pdfVirtualization?.renderAll,
+  ]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -526,8 +695,13 @@ function MarkdownMessageComponent({
     const styledBlocks: Element[] = [];
     const blockTargets: VisualizationBlockTarget[] = [];
     for (const visualization of visualizations) {
-      const block = renderedBlocksRef.current[visualization.anchor.blockIndex];
-      const searchRoot = block instanceof HTMLElement ? block : container;
+      const block = renderedBlocksRef.current.get(visualization.anchor.blockIndex);
+      const searchRoot = block instanceof HTMLElement
+        ? block
+        : pdfVirtualization
+          ? null
+          : container;
+      if (!searchRoot) continue;
       const { text, points } = indexedTextMap(searchRoot);
       const quote = normalizedQuote(visualization.anchor.quote);
       const index = quote ? text.indexOf(quote) : -1;
@@ -573,7 +747,13 @@ function MarkdownMessageComponent({
       visualizationTargetsRef.current = [];
       visualizationBlockTargetsRef.current = [];
     };
-  }, [visualizationHighlightName, visualizations, message.content]);
+  }, [
+    visualizationHighlightName,
+    visualizations,
+    message.content,
+    pdfVirtualization?.currentPage,
+    pdfVirtualization?.renderAll,
+  ]);
 
   useLayoutEffect(() => {
     const container = containerRef.current;
@@ -584,8 +764,13 @@ function MarkdownMessageComponent({
     const styledBlocks: Element[] = [];
     const blockTargets: InlineElaborationBlockTarget[] = [];
     for (const elaboration of inlineElaborations) {
-      const block = renderedBlocksRef.current[elaboration.anchor.blockIndex];
-      const searchRoot = block instanceof HTMLElement ? block : container;
+      const block = renderedBlocksRef.current.get(elaboration.anchor.blockIndex);
+      const searchRoot = block instanceof HTMLElement
+        ? block
+        : pdfVirtualization
+          ? null
+          : container;
+      if (!searchRoot) continue;
       const { text, points } = indexedTextMap(searchRoot);
       const quote = normalizedQuote(elaboration.anchor.quote);
       const index = quote ? text.indexOf(quote) : -1;
@@ -631,7 +816,13 @@ function MarkdownMessageComponent({
       inlineElaborationTargetsRef.current = [];
       inlineElaborationBlockTargetsRef.current = [];
     };
-  }, [inlineElaborationHighlightName, inlineElaborations, message.content]);
+  }, [
+    inlineElaborationHighlightName,
+    inlineElaborations,
+    message.content,
+    pdfVirtualization?.currentPage,
+    pdfVirtualization?.renderAll,
+  ]);
 
   const captureSelection = useCallback(() => {
     const container = containerRef.current;
@@ -895,10 +1086,19 @@ function MarkdownMessageComponent({
         }
       }}
     >
-      <RenderedMarkdownBody
-        content={normalizedContent}
-        preserveSoftBreaks={preserveSoftBreaks}
-      />
+      {pdfVirtualization ? (
+        <VirtualizedPdfMarkdownBody
+          pages={pdfPages}
+          currentPage={pdfVirtualization.currentPage}
+          buffer={pdfVirtualization.buffer ?? 10}
+          renderAll={Boolean(pdfVirtualization.renderAll)}
+        />
+      ) : (
+        <RenderedMarkdownBody
+          content={normalizedContent}
+          preserveSoftBreaks={preserveSoftBreaks}
+        />
+      )}
       {!!linkedAnchors.length && (
         <div className="elaboration-links" aria-label="Elaborations from this passage">
           {linkedAnchors.map((linked) => (
@@ -1005,6 +1205,19 @@ function sameInlineElaborations(
   );
 }
 
+function samePdfVirtualization(
+  left: MarkdownMessageProps["pdfVirtualization"],
+  right: MarkdownMessageProps["pdfVirtualization"],
+): boolean {
+  return (
+    left === right ||
+    (left?.currentPage === right?.currentPage &&
+      left?.pageStart === right?.pageStart &&
+      left?.buffer === right?.buffer &&
+      left?.renderAll === right?.renderAll)
+  );
+}
+
 export const MarkdownMessage = memo(
   MarkdownMessageComponent,
   (left, right) =>
@@ -1015,5 +1228,6 @@ export const MarkdownMessage = memo(
     sameVisualizations(left.visualizations, right.visualizations) &&
     sameInlineElaborations(left.inlineElaborations, right.inlineElaborations) &&
     left.preserveSoftBreaks === right.preserveSoftBreaks &&
-    left.selectionSurface === right.selectionSurface,
+    left.selectionSurface === right.selectionSurface &&
+    samePdfVirtualization(left.pdfVirtualization, right.pdfVirtualization),
 );

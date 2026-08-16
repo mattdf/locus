@@ -196,22 +196,21 @@ function AnchoredInlineMount({
       const article = messagesRef.current?.querySelector<HTMLElement>(
         `article[data-message-id="${CSS.escape(messageId)}"]`,
       );
-      const markdown = article?.querySelector<HTMLElement>(".markdown-message");
-      if (!markdown) return false;
-      const blocks = Array.from(markdown.children).filter(
-        (element) => !element.classList.contains("inline-annotation-slot"),
+      const block = article?.querySelector<HTMLElement>(
+        `[data-markdown-block-index="${blockIndex}"]`,
       );
-      const block = blocks[blockIndex];
       if (!block) return false;
-      if (slot.parentElement === markdown) return true;
+      const mountParent = block.parentElement;
+      if (!mountParent) return false;
+      if (slot.parentElement === mountParent) return true;
 
       const existingSlots = Array.from(
-        markdown.querySelectorAll<HTMLElement>(
+        mountParent.querySelectorAll<HTMLElement>(
           `:scope > .inline-annotation-slot[data-block-index="${blockIndex}"]`,
         ),
       ).filter((candidate) => candidate !== slot);
       const lastSlot = existingSlots.at(-1);
-      markdown.insertBefore(slot, lastSlot ? lastSlot.nextSibling : block.nextSibling);
+      mountParent.insertBefore(slot, lastSlot ? lastSlot.nextSibling : block.nextSibling);
       return true;
     };
 
@@ -339,6 +338,7 @@ export function ThreadView({
   const scrollFrame = useRef<number | null>(null);
   const visualizationScrollFrame = useRef<number | null>(null);
   const pdfJumpCleanupRef = useRef<(() => void) | null>(null);
+  const pdfJumpPageRef = useRef<number | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [currentMessageIndex, setCurrentMessageIndex] = useState(0);
@@ -372,6 +372,7 @@ export function ThreadView({
   const [pdfFurniture, setPdfFurniture] = useState<PdfPageFurniture[]>([]);
   const [pdfTokenCount, setPdfTokenCount] = useState<number | null>(null);
   const [pdfTokenCountError, setPdfTokenCountError] = useState(false);
+  const [printAllPdfPages, setPrintAllPdfPages] = useState(false);
   const pdfNavigationRef = useRef<HTMLDivElement>(null);
   const children = useMemo(() => childThreads(chat, node.id), [chat, node.id]);
   const messages = useMemo(() => messagesForNode(node), [node]);
@@ -446,6 +447,8 @@ export function ThreadView({
   }, [node.messages.length, waiting]);
 
   useEffect(() => {
+    pdfJumpCleanupRef.current?.();
+    pdfJumpPageRef.current = null;
     setEditingMessageId(null);
     setEditValue("");
     setCopyState(null);
@@ -556,21 +559,6 @@ export function ThreadView({
     const markdown = article?.querySelector<HTMLElement>(".markdown-message");
     if (!markdown || !pdfFurniture.length) return;
 
-    const topLevel = Array.from(markdown.children).filter(
-      (element): element is HTMLElement =>
-        element instanceof HTMLElement &&
-        !element.classList.contains("inline-annotation-slot") &&
-        !element.classList.contains("elaboration-links"),
-    );
-    const markers = topLevel
-      .map((element, index) => {
-        const marker = element.querySelector<HTMLElement>("[data-pdf-page]");
-        const page = Number(marker?.dataset.pdfPage);
-        return Number.isInteger(page) ? { index, page } : null;
-      })
-      .filter(
-        (marker): marker is { index: number; page: number } => marker !== null,
-      );
     const furnitureByPage = new Map(
       pdfFurniture.map((page) => [page.page, page]),
     );
@@ -602,12 +590,26 @@ export function ThreadView({
       styled.push(element);
     };
 
-    markers.forEach((marker, markerIndex) => {
-      const pageFurniture = furnitureByPage.get(marker.page);
+    const activePages = Array.from(
+      markdown.querySelectorAll<HTMLElement>(
+        ":scope > .pdf-virtual-page > [data-pdf-page-content='true']",
+      ),
+    );
+    activePages.forEach((pageContent) => {
+      const shell = pageContent.closest<HTMLElement>("[data-pdf-page-shell]");
+      const page = Number(shell?.dataset.pdfPageShell);
+      const pageFurniture = furnitureByPage.get(page);
       if (!pageFurniture) return;
-      const end = markers[markerIndex + 1]?.index ?? topLevel.length;
-      const pageBlocks = topLevel
-        .slice(marker.index + 1, end)
+      const blocks = Array.from(pageContent.children).filter(
+        (element): element is HTMLElement =>
+          element instanceof HTMLElement &&
+          !element.classList.contains("inline-annotation-slot"),
+      );
+      const markerIndex = blocks.findIndex((element) =>
+        Boolean(element.querySelector<HTMLElement>("[data-pdf-page]")),
+      );
+      const pageBlocks = blocks
+        .slice(Math.max(0, markerIndex + 1))
         .filter((element) => element.tagName !== "HR");
       pageFurniture.headers.forEach((item, index) => {
         const element = pageBlocks[index];
@@ -640,7 +642,14 @@ export function ThreadView({
         element.removeAttribute("aria-label");
       });
     };
-  }, [messages, node.id, pdfFurniture, pdfSource?.documentId]);
+  }, [
+    currentPdfPage,
+    messages,
+    node.id,
+    pdfFurniture,
+    pdfSource?.documentId,
+    printAllPdfPages,
+  ]);
 
   useEffect(() => {
     if (!pdfTocOpen) return;
@@ -758,16 +767,17 @@ export function ThreadView({
       if (frame !== null) return;
       frame = window.requestAnimationFrame(() => {
         frame = null;
-        const markerTop = container.getBoundingClientRect().top + 24;
-        const markers = Array.from(
-          container.querySelectorAll<HTMLElement>("[data-pdf-page]"),
+        if (pdfJumpPageRef.current !== null) return;
+        const bounds = container.getBoundingClientRect();
+        const elementAtReadingLine = document.elementFromPoint(
+          bounds.left + Math.min(bounds.width - 1, Math.max(1, bounds.width / 2)),
+          bounds.top + Math.min(28, Math.max(1, bounds.height - 1)),
         );
-        let page = pdfPageStart;
-        for (const marker of markers) {
-          const candidate = Number(marker.dataset.pdfPage);
-          if (marker.getBoundingClientRect().top <= markerTop) page = candidate;
-          else break;
-        }
+        const visiblePage = elementAtReadingLine?.closest<HTMLElement>(
+          "[data-pdf-page-shell]",
+        );
+        let page = Number(visiblePage?.dataset.pdfPageShell);
+        if (!Number.isInteger(page)) page = pdfPageStart;
         if (
           container.scrollTop + container.clientHeight >=
           container.scrollHeight - 4
@@ -808,19 +818,36 @@ export function ThreadView({
       const article = renderedMessageArticles(container).find(
         (candidate) => candidate.dataset.messageId === scrollRequest.anchor.sourceMessageId,
       );
-      const markdown = article?.querySelector<HTMLElement>(".markdown-message");
-      const block = Array.from(markdown?.children ?? []).filter(
-        (element) => !element.classList.contains("inline-annotation-slot"),
-      )[scrollRequest.anchor.blockIndex] as HTMLElement | undefined;
+      const block = article?.querySelector<HTMLElement>(
+        `[data-markdown-block-index="${scrollRequest.anchor.blockIndex}"]`,
+      );
+      if (!block && article) {
+        const pageShell = Array.from(
+          article.querySelectorAll<HTMLElement>("[data-pdf-page-shell]"),
+        ).find((candidate) => {
+          const start = Number(candidate.dataset.blockStart);
+          const end = Number(candidate.dataset.blockEnd);
+          return (
+            Number.isInteger(start) &&
+            Number.isInteger(end) &&
+            scrollRequest.anchor.blockIndex >= start &&
+            scrollRequest.anchor.blockIndex <= end
+          );
+        });
+        const page = Number(pageShell?.dataset.pdfPageShell);
+        if (Number.isInteger(page)) {
+          setCurrentPdfPage((current) => (current === page ? current : page));
+        }
+      }
       const target = block ?? article;
-      if (target) {
+      if (target && (block || !article?.querySelector("[data-pdf-page-shell]"))) {
         target.scrollIntoView({ behavior: "auto", block: "center" });
         onScrollRequestHandled?.(scrollRequest.id);
         scrollFrame.current = null;
         return;
       }
       attempts += 1;
-      if (attempts < 6) scrollFrame.current = window.requestAnimationFrame(scrollToAnchor);
+      if (attempts < 60) scrollFrame.current = window.requestAnimationFrame(scrollToAnchor);
       else scrollFrame.current = null;
     };
     scrollFrame.current = window.requestAnimationFrame(scrollToAnchor);
@@ -910,32 +937,45 @@ export function ThreadView({
       messagesRef.current ? renderedMessageArticles(messagesRef.current) : [],
     ).find((candidate) => candidate.dataset.messageId === messageId);
     if (!article) return;
+    const isVirtualizedPdfMessage =
+      Boolean(pdfSource) &&
+      messages.some((message) => message.id === messageId && message.role === "source");
 
-    document
-      .querySelectorAll<HTMLElement>('[data-print-target="true"]')
-      .forEach((candidate) => candidate.removeAttribute("data-print-target"));
-    article.dataset.printTarget = "true";
-    document.body.dataset.printingMessage = "true";
+    const openPrintDialog = () => {
+      document
+        .querySelectorAll<HTMLElement>('[data-print-target="true"]')
+        .forEach((candidate) => candidate.removeAttribute("data-print-target"));
+      article.dataset.printTarget = "true";
+      document.body.dataset.printingMessage = "true";
 
-    let cleanupTimer: number | null = null;
-    const cleanup = () => {
-      article.removeAttribute("data-print-target");
-      delete document.body.dataset.printingMessage;
-      window.removeEventListener("afterprint", cleanup);
-      if (cleanupTimer !== null) window.clearTimeout(cleanupTimer);
-    };
-    window.addEventListener("afterprint", cleanup, { once: true });
+      let cleanupTimer: number | null = null;
+      const cleanup = () => {
+        article.removeAttribute("data-print-target");
+        delete document.body.dataset.printingMessage;
+        window.removeEventListener("afterprint", cleanup);
+        if (cleanupTimer !== null) window.clearTimeout(cleanupTimer);
+        if (isVirtualizedPdfMessage) setPrintAllPdfPages(false);
+      };
+      window.addEventListener("afterprint", cleanup, { once: true });
 
-    try {
-      window.print();
-      // `afterprint` is widely supported; this also prevents stale print state
-      // in browsers that return from print without dispatching it.
-      if (article.dataset.printTarget === "true") {
-        cleanupTimer = window.setTimeout(cleanup, 60_000);
+      try {
+        window.print();
+        // `afterprint` is widely supported; this also prevents stale print state
+        // in browsers that return from print without dispatching it.
+        if (article.dataset.printTarget === "true") {
+          cleanupTimer = window.setTimeout(cleanup, 60_000);
+        }
+      } catch {
+        cleanup();
       }
-    } catch {
-      cleanup();
+    };
+
+    if (!isVirtualizedPdfMessage) {
+      openPrintDialog();
+      return;
     }
+    setPrintAllPdfPages(true);
+    window.requestAnimationFrame(() => window.requestAnimationFrame(openPrintDialog));
   };
 
   const jumpToMessage = (index: number) => {
@@ -948,11 +988,17 @@ export function ThreadView({
 
   const jumpToPdfPage = (requestedPage: number) => {
     const page = Math.min(pdfPageEnd, Math.max(pdfPageStart, requestedPage));
+    pdfJumpPageRef.current = page;
+    setCurrentPdfPage(page);
+    setPdfPageInput(String(page));
     const container = messagesRef.current;
     const target = container?.querySelector<HTMLElement>(
-      `[data-pdf-page="${page}"]`,
+      `[data-pdf-page-shell="${page}"]`,
     );
-    if (!container || !target) return;
+    if (!container || !target) {
+      pdfJumpPageRef.current = null;
+      return;
+    }
 
     // Smooth-scrolling through a large imported PDF intersects every lazy
     // image on the way. As those images decode, their newly known heights move
@@ -991,6 +1037,7 @@ export function ThreadView({
     const cleanup = () => {
       if (disposed) return;
       disposed = true;
+      pdfJumpPageRef.current = null;
       resizeObserver.disconnect();
       article.removeEventListener("load", scheduleAlign, true);
       container.removeEventListener("wheel", cleanup);
@@ -1013,8 +1060,6 @@ export function ThreadView({
     pdfJumpCleanupRef.current = cleanup;
     scheduleAlign();
 
-    setCurrentPdfPage(page);
-    setPdfPageInput(String(page));
   };
 
   const activePdfTocIndex = pdfToc.reduce((bestIndex, item, index) => {
@@ -1227,6 +1272,10 @@ export function ThreadView({
             visualizationsByMessage.get(message.id) ?? EMPTY_VISUALIZATIONS;
           const inlineElaborations =
             inlineElaborationsByMessage.get(message.id) ?? EMPTY_INLINE_ELABORATIONS;
+          const virtualizePdfSource =
+            Boolean(pdfSource) &&
+            message.role === "source" &&
+            node.id === chat.rootId;
           return (
             <article
               className={`message message--${message.role} ${message.error ? "message--error" : ""}`}
@@ -1609,6 +1658,16 @@ export function ThreadView({
                     message.role === "source" &&
                     node.id === chat.rootId &&
                     chat.source?.kind === "pdf"
+                  }
+                  pdfVirtualization={
+                    virtualizePdfSource
+                      ? {
+                          currentPage: currentPdfPage,
+                          pageStart: pdfPageStart,
+                          buffer: 10,
+                          renderAll: printAllPdfPages,
+                        }
+                      : undefined
                   }
                   linkedAnchors={linkedAnchors}
                   definitions={definitions}
