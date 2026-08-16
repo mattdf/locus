@@ -1,6 +1,32 @@
 import assert from "node:assert/strict";
 import katex from "katex";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import remarkParse from "remark-parse";
+import { unified } from "unified";
+import { visit } from "unist-util-visit";
 import { normalizeMathDelimiters } from "../../src/lib/markdown.ts";
+
+function assertMarkdownMathRenders(source: string): number {
+  const normalized = normalizeMathDelimiters(source, true);
+  const tree = unified()
+    .use(remarkParse)
+    .use(remarkGfm)
+    .use(remarkMath)
+    .parse(normalized);
+  let count = 0;
+  visit(tree, (node) => {
+    if (node.type !== "math" && node.type !== "inlineMath") return;
+    count += 1;
+    assert.doesNotThrow(() =>
+      katex.renderToString(node.value, {
+        displayMode: node.type === "math",
+        strict: false,
+      }),
+    );
+  });
+  return count;
+}
 
 assert.equal(
   normalizeMathDelimiters(String.raw`Outside \(x+1\), existing $y+1$, and display \[z+1\].`),
@@ -94,6 +120,43 @@ assert.match(repairedAlignedDisplays[1], /\\tag\{18\.19\}/);
 repairedAlignedDisplays.forEach((equation) => {
   assert.doesNotThrow(() => katex.renderToString(equation, { displayMode: true, strict: false }));
 });
+
+const adjacentDisplayMath = String.raw`Here and below $a_j$ and $b_j$ are constants.
+
+$$
+S(\mu)(u) = a_2 \int_0^\infty \cos(2\pi r u) \Sigma(\mu)(r) \, dr,$$
+$$L(\mu)(u) = \sqrt{u} \int_0^\infty \sqrt{r} \Sigma(\mu)(r) K(ru) \, dr.
+$$
+
+$$
+H : L^2(\mathbb{R}) \to L^2(\mathbb{R}) \quad \text{with}$$
+$$\|Hf\|_2 = \|f\|_2.
+$$
+
+$$
+A = B,$$ $$C = D.
+$$`;
+assert.equal(assertMarkdownMathRenders(adjacentDisplayMath), 8);
+assert.equal(
+  normalizeMathDelimiters(
+    normalizeMathDelimiters(adjacentDisplayMath, true),
+    true,
+  ),
+  normalizeMathDelimiters(adjacentDisplayMath, true),
+  "adjacent display repair must be idempotent",
+);
+
+const adjacentDisplaysInCode = [
+  "```tex",
+  "$$A$$",
+  "$$B$$ $$C$$",
+  "```",
+].join("\n");
+assert.equal(
+  normalizeMathDelimiters(adjacentDisplaysInCode, true),
+  adjacentDisplaysInCode,
+  "adjacent display delimiters inside code fences must be untouched",
+);
 
 const taggedMathInCode = [
   "```tex",

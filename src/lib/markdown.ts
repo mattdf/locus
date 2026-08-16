@@ -143,6 +143,101 @@ function normalizeCopiedInlineMath(markdown: string): string {
   );
 }
 
+/**
+ * remark-math treats consecutive display blocks as one block unless Markdown
+ * gives them a blank-line boundary. OCR commonly emits either `$$\n$$` or
+ * `$$ $$` between two equations, which leaves a literal `$` inside the math
+ * node and makes KaTeX fail with “Can't use function '$' in math mode”.
+ *
+ * Normalize only outside fenced code. This changes delimiter whitespace, not
+ * equation contents, and is idempotent once the blank line exists.
+ */
+function separateAdjacentDisplayBlocks(markdown: string): string {
+  const lines = markdown.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean) ?? [];
+  const output: string[] = [];
+  let prose: string[] = [];
+  let fence: { marker: "`" | "~"; length: number } | null = null;
+
+  const flushProse = () => {
+    if (prose.length === 0) return;
+    let source = prose.join("");
+    let previous: string;
+    do {
+      previous = source;
+      source = source.replace(
+        /([^$\r\n])\$\$([ \t]*(?:\r?\n[ \t]*)?)\$\$([^$\r\n])/g,
+        (match, before: string, gap: string, after: string, offset: number) => {
+          // Two delimiter pairs separated by at most one line break are a
+          // closing display followed by an opening display. Put both fences
+          // on their own lines so remark-math cannot absorb the second pair.
+          const newline = gap.includes("\r\n") ? "\r\n" : "\n";
+          const lineStart = source.lastIndexOf("\n", offset) + 1;
+          const currentIndent = source.slice(lineStart).match(/^[ \t]*/)?.[0] ?? "";
+          const nextIndent = gap.match(/\r?\n([ \t]*)$/)?.[1] ?? currentIndent;
+          return [
+            before,
+            newline,
+            `${currentIndent}$$`,
+            newline,
+            newline,
+            `${nextIndent}$$`,
+            newline,
+            nextIndent,
+            after,
+          ].join("");
+        },
+      );
+    } while (source !== previous);
+
+    const separatedLines = source.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean) ?? [];
+    for (let index = 0; index < separatedLines.length; index += 1) {
+      const line = separatedLines[index];
+      output.push(line);
+      const ending = line.match(/\r?\n$/)?.[0] ?? "";
+      const content = line.slice(0, line.length - ending.length);
+      const nextContent = separatedLines[index + 1]?.replace(/\r?\n$/, "") ?? "";
+      if (
+        ending &&
+        /^[ \t]*\$\$[ \t]*$/.test(content) &&
+        /^[ \t]*\$\$[ \t]*$/.test(nextContent)
+      ) {
+        output.push(ending);
+      }
+    }
+    prose = [];
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const content = line.replace(/\r?\n$/, "");
+    const fenceMarker = /^ {0,3}(`{3,}|~{3,})/.exec(content)?.[1];
+
+    if (fence) {
+      output.push(line);
+      if (
+        fenceMarker?.[0] === fence.marker &&
+        fenceMarker.length >= fence.length
+      ) {
+        fence = null;
+      }
+      continue;
+    }
+    if (fenceMarker) {
+      flushProse();
+      fence = {
+        marker: fenceMarker[0] as "`" | "~",
+        length: fenceMarker.length,
+      };
+      output.push(line);
+      continue;
+    }
+    prose.push(line);
+  }
+
+  flushProse();
+  return output.join("");
+}
+
 interface LatexTag {
   start: number;
   end: number;
@@ -310,6 +405,7 @@ function repairMultipleDisplayTags(display: string): string {
 }
 
 function repairDisplayMath(markdown: string): string {
+  markdown = separateAdjacentDisplayBlocks(markdown);
   const lines = markdown.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean) ?? [];
   const output: string[] = [];
   let fence: { marker: "`" | "~"; length: number } | null = null;
