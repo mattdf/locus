@@ -68,6 +68,48 @@ function renderedMessageArticles(container: HTMLElement): HTMLElement[] {
   );
 }
 
+function pdfPageAtReadingLine(
+  container: HTMLElement,
+  readingLine: number,
+): number | null {
+  const shells = container.querySelectorAll<HTMLElement>("[data-pdf-page-shell]");
+  if (!shells.length) return null;
+
+  // Every PDF page keeps a lightweight shell while its Markdown is
+  // virtualized. Binary-search those shells instead of relying exclusively on
+  // elementFromPoint(), which can temporarily return the scrolling container
+  // itself during fast mobile momentum scrolling or a drawer layout change.
+  let low = 0;
+  let high = shells.length - 1;
+  let candidateIndex = shells.length - 1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const bounds = shells[middle].getBoundingClientRect();
+    if (bounds.bottom > readingLine) {
+      candidateIndex = middle;
+      high = middle - 1;
+    } else {
+      low = middle + 1;
+    }
+  }
+
+  let candidate = shells[candidateIndex];
+  const candidateBounds = candidate.getBoundingClientRect();
+  if (candidateBounds.top > readingLine && candidateIndex > 0) {
+    const previous = shells[candidateIndex - 1];
+    const previousBounds = previous.getBoundingClientRect();
+    if (
+      readingLine - previousBounds.bottom <=
+      candidateBounds.top - readingLine
+    ) {
+      candidate = previous;
+    }
+  }
+
+  const page = Number(candidate.dataset.pdfPageShell);
+  return Number.isInteger(page) ? page : null;
+}
+
 interface ThreadViewProps {
   chat: ChatTree;
   node: ThreadNode;
@@ -769,15 +811,36 @@ export function ThreadView({
         frame = null;
         if (pdfJumpPageRef.current !== null) return;
         const bounds = container.getBoundingClientRect();
+        // On mobile the main pane remains mounted but is display:none while a
+        // focused thread occupies the screen. Do not interpret that temporary
+        // zero-sized viewport as page 1 and unmount the real reading window.
+        if (
+          container.clientWidth <= 0 ||
+          container.clientHeight <= 0 ||
+          bounds.width <= 0 ||
+          bounds.height <= 0
+        ) {
+          return;
+        }
+        const readingLine =
+          bounds.top + Math.min(28, Math.max(1, bounds.height - 1));
         const elementAtReadingLine = document.elementFromPoint(
           bounds.left + Math.min(bounds.width - 1, Math.max(1, bounds.width / 2)),
-          bounds.top + Math.min(28, Math.max(1, bounds.height - 1)),
+          readingLine,
         );
-        const visiblePage = elementAtReadingLine?.closest<HTMLElement>(
-          "[data-pdf-page-shell]",
-        );
+        const visiblePage =
+          elementAtReadingLine instanceof Node && container.contains(elementAtReadingLine)
+            ? elementAtReadingLine.closest<HTMLElement>("[data-pdf-page-shell]")
+            : null;
         let page = Number(visiblePage?.dataset.pdfPageShell);
-        if (!Number.isInteger(page)) page = pdfPageStart;
+        if (!Number.isInteger(page)) {
+          page = pdfPageAtReadingLine(container, readingLine) ?? Number.NaN;
+        }
+        // A transient hit-test/layout failure must retain the current page.
+        // Falling back to the first page empties the virtual window around the
+        // user's actual scroll position and is what caused the persistent
+        // blank view.
+        if (!Number.isInteger(page)) return;
         if (
           container.scrollTop + container.clientHeight >=
           container.scrollHeight - 4
