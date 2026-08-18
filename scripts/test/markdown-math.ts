@@ -39,6 +39,61 @@ assert.equal(
 );
 
 assert.equal(
+  normalizeMathDelimiters(String.raw`The metric tensor (g_{\mu\nu}) was omitted.`),
+  String.raw`The metric tensor $g_{\mu\nu}$ was omitted.`,
+);
+assert.equal(
+  normalizeMathDelimiters(String.raw`For the nested expression (F_{\mu}(x)), continue.`),
+  String.raw`For the nested expression $F_{\mu}(x)$, continue.`,
+);
+assert.equal(
+  normalizeMathDelimiters(String.raw`Plain prose (with no TeX command) stays prose.`),
+  String.raw`Plain prose (with no TeX command) stays prose.`,
+);
+assert.equal(
+  normalizeMathDelimiters(String.raw`Keep [the link](docs/\alpha) unchanged.`),
+  String.raw`Keep [the link](docs/\alpha) unchanged.`,
+);
+assert.equal(
+  normalizeMathDelimiters(String.raw`Keep the path (C:\Users\matt) unchanged.`),
+  String.raw`Keep the path (C:\Users\matt) unchanged.`,
+);
+assert.equal(
+  normalizeMathDelimiters(String.raw`Keep <span title="(\alpha)">HTML</span> unchanged.`),
+  String.raw`Keep <span title="(\alpha)">HTML</span> unchanged.`,
+);
+assert.equal(
+  normalizeMathDelimiters("Code: `" + String.raw`(g_{\mu\nu})` + "`."),
+  "Code: `" + String.raw`(g_{\mu\nu})` + "`.",
+);
+assert.equal(
+  normalizeMathDelimiters(String.raw`Malformed (g_{\mu) remains prose.`),
+  String.raw`Malformed (g_{\mu) remains prose.`,
+);
+const parenthesizedCommandInsideDisplay = String.raw`$$
+I_s(\mu) = \iint |x-y|^{-s} \, d\mu x \, d\mu y.
+$$`;
+assert.equal(
+  normalizeMathDelimiters(parenthesizedCommandInsideDisplay, true),
+  parenthesizedCommandInsideDisplay,
+  "parenthesized TeX inside existing display math must not gain inline delimiters",
+);
+const malformedDelimiterBeforeParenthesizedMath = String.raw`Earlier malformed $$ marker.
+
+$$
+I_s(\mu) = \int k_s * \mu \, d\mu.
+$$
+
+The metric tensor (g_{\mu\nu}) is nondegenerate.`;
+const recoveredAfterMalformedDelimiter = normalizeMathDelimiters(
+  malformedDelimiterBeforeParenthesizedMath,
+  true,
+);
+assert.match(recoveredAfterMalformedDelimiter, /I_s\(\\mu\)/);
+assert.doesNotMatch(recoveredAfterMalformedDelimiter, /I_s\$\\mu\$/);
+assert.match(recoveredAfterMalformedDelimiter, /\$g_\{\\mu\\nu\}\$/);
+
+assert.equal(
   normalizeMathDelimiters(String.raw`$$
 f(\(x\)) = x
 $$`),

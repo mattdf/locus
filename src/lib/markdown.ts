@@ -134,13 +134,208 @@ function mapMarkdownProse(
   return output.join("");
 }
 
+interface ParenthesizedLatexRange {
+  start: number;
+  end: number;
+}
+
+function balancedLatexBraces(source: string): boolean {
+  let depth = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    if (escapedAt(source, index)) continue;
+    if (source[index] === "{") depth += 1;
+    else if (source[index] === "}") {
+      depth -= 1;
+      if (depth < 0) return false;
+    }
+  }
+  return depth === 0;
+}
+
+function looksLikeNonLatexPath(source: string): boolean {
+  return (
+    /(?:^|[\s(])[a-z]:\\/i.test(source) ||
+    /(?:^|[\s(])\\\\[^\\\s]+\\/.test(source) ||
+    /(?:https?|file):/i.test(source)
+  );
+}
+
+/**
+ * OCR frequently leaves inline math in ordinary parentheses, for example
+ * `(g_{\\mu\\nu})`. Recover only balanced, single-line parenthetical spans
+ * containing a named TeX command. The caller runs this on prose segments, so
+ * existing math and code have already been excluded.
+ */
+function wrapParenthesizedLatex(source: string): string {
+  const stack: Array<{ start: number; protected: boolean }> = [];
+  const candidates: ParenthesizedLatexRange[] = [];
+  let inHtmlTag = false;
+  let htmlQuote: "\"" | "'" | null = null;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === "\n" || character === "\r") {
+      stack.length = 0;
+      inHtmlTag = false;
+      htmlQuote = null;
+      continue;
+    }
+
+    // Existing TeX inline delimiters are converted after this scan. Treat the
+    // complete region as protected now so ordinary function parentheses
+    // inside `\(...\)` are never mistaken for missing delimiters themselves.
+    if (
+      character === "\\" &&
+      source[index + 1] === "(" &&
+      !escapedAt(source, index)
+    ) {
+      let closing = index + 2;
+      let foundClosing = false;
+      while (closing < source.length && source[closing] !== "\n") {
+        if (
+          source[closing] === "\\" &&
+          source[closing + 1] === ")" &&
+          !escapedAt(source, closing)
+        ) {
+          index = closing + 1;
+          foundClosing = true;
+          break;
+        }
+        closing += 1;
+      }
+      if (foundClosing) continue;
+    }
+
+    if (inHtmlTag) {
+      if (htmlQuote) {
+        if (character === htmlQuote && !escapedAt(source, index)) htmlQuote = null;
+      } else if (character === "\"" || character === "'") {
+        htmlQuote = character;
+      } else if (character === ">") {
+        inHtmlTag = false;
+      }
+      continue;
+    }
+    if (
+      character === "<" &&
+      /[A-Za-z!/?]/.test(source[index + 1] ?? "")
+    ) {
+      inHtmlTag = true;
+      continue;
+    }
+
+    if (character === "(" && !escapedAt(source, index)) {
+      const parentProtected = stack.some((entry) => entry.protected);
+      stack.push({
+        start: index,
+        protected: parentProtected || source[index - 1] === "]",
+      });
+      continue;
+    }
+    if (character !== ")" || escapedAt(source, index) || stack.length === 0) {
+      continue;
+    }
+
+    const opening = stack.pop()!;
+    if (opening.protected) continue;
+    const content = source.slice(opening.start + 1, index);
+    if (
+      /\\[A-Za-z@]+\*?/.test(content) &&
+      balancedLatexBraces(content) &&
+      !looksLikeNonLatexPath(content)
+    ) {
+      candidates.push({ start: opening.start, end: index });
+    }
+  }
+
+  if (!candidates.length) return source;
+  const selected: ParenthesizedLatexRange[] = [];
+  candidates
+    .sort((left, right) => left.start - right.start || right.end - left.end)
+    .forEach((candidate) => {
+      if (
+        selected.some(
+          (range) => range.start <= candidate.start && range.end >= candidate.end,
+        )
+      ) {
+        return;
+      }
+      selected.push(candidate);
+    });
+
+  const output: string[] = [];
+  let cursor = 0;
+  selected.forEach((range) => {
+    output.push(
+      source.slice(cursor, range.start),
+      `\\(${source.slice(range.start + 1, range.end)}\\)`,
+    );
+    cursor = range.end + 1;
+  });
+  output.push(source.slice(cursor));
+  return output.join("");
+}
+
 function normalizeCopiedInlineMath(markdown: string): string {
-  return mapMarkdownProse(markdown, (source) =>
-    source.replace(
+  const lines = markdown.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean) ?? [];
+  const output: string[] = [];
+  let fence: { marker: "`" | "~"; length: number } | null = null;
+  const normalizeLine = (line: string) =>
+    mapMarkdownProse(line, (source) =>
+      wrapParenthesizedLatex(source).replace(
         /\\\((.*?)\\\)/g,
         (_match, equation: string) => `$${equation}$`,
       ),
-  );
+    );
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const content = line.replace(/\r?\n$/, "");
+    const fenceMarker = /^ {0,3}(`{3,}|~{3,})/.exec(content)?.[1];
+    if (fence) {
+      output.push(line);
+      if (
+        fenceMarker?.[0] === fence.marker &&
+        fenceMarker.length >= fence.length
+      ) {
+        fence = null;
+      }
+      continue;
+    }
+    if (fenceMarker) {
+      fence = {
+        marker: fenceMarker[0] as "`" | "~",
+        length: fenceMarker.length,
+      };
+      output.push(line);
+      continue;
+    }
+
+    if (/^[ \t]*\$\$[ \t]*$/.test(content)) {
+      let closingIndex = -1;
+      let boundaryIndex = lines.length;
+      for (let candidate = index + 1; candidate < boundaryIndex; candidate += 1) {
+        const candidateContent = lines[candidate].replace(/\r?\n$/, "");
+        if (/^[ \t]*\$\$[ \t]*$/.test(candidateContent)) {
+          closingIndex = candidate;
+          break;
+        }
+        // A blank line terminates an ambiguous OCR region. Never let one
+        // unmatched delimiter change how the rest of a book is classified.
+        if (!candidateContent.trim()) {
+          boundaryIndex = candidate;
+          break;
+        }
+      }
+      const protectedEnd = closingIndex >= 0 ? closingIndex : boundaryIndex - 1;
+      output.push(...lines.slice(index, Math.max(index, protectedEnd) + 1));
+      index = Math.max(index, protectedEnd);
+      continue;
+    }
+
+    output.push(normalizeLine(line));
+  }
+  return output.join("");
 }
 
 /**
@@ -495,7 +690,7 @@ export function normalizeMathDelimiters(
   if (!recoverCopiedChatGptMath) {
     return repairDisplayMath(
       mapMarkdownProse(markdown, (source) =>
-        source
+        wrapParenthesizedLatex(source)
         .replace(/\\\[([\s\S]*?)\\\]/g, (_match, equation: string) =>
           `$$\n${equation.trim()}\n$$`,
         )
@@ -510,12 +705,13 @@ export function normalizeMathDelimiters(
       `${leading}$$\n${cleanCopiedDisplayMath(equation)}\n$$`,
   );
 
-  return repairDisplayMath(
-    withDisplayMath
-      .split(/(\$\$[\s\S]*?\$\$)/g)
-      .map((part) => (part.startsWith("$$") ? part : normalizeCopiedInlineMath(part)))
-      .join(""),
-  );
+  // Repair display boundaries before scanning prose. A global `$$…$$` split
+  // is unsafe for OCR because one malformed delimiter shifts every later
+  // pair, allowing inline recovery to inject `$` inside valid display math.
+  // mapMarkdownProse instead protects recognized math/code regions and errs
+  // on the side of leaving ambiguous text unchanged.
+  const repairedDisplayMath = repairDisplayMath(withDisplayMath);
+  return repairDisplayMath(normalizeCopiedInlineMath(repairedDisplayMath));
 }
 
 export function markdownBlockquote(source: string): string {
