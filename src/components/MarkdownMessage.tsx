@@ -64,6 +64,14 @@ const MARKDOWN_COMPONENTS: Components = {
 
 const PDF_MARKDOWN_COMPONENTS: Components = {
   ...MARKDOWN_COMPONENTS,
+  img: ({ node, ...props }) => {
+    void node;
+    // Only the current PDF page window is mounted. Load its images now so
+    // they establish their height before the reader reaches the page; lazy
+    // images without intrinsic dimensions otherwise expand underneath the
+    // scroll anchor and can move the viewport by several pages.
+    return <img {...props} loading="eager" decoding="async" />;
+  },
   strong: ({ node, children, ...props }) => {
     void node;
     const text = Array.isArray(children) ? children.join("") : String(children ?? "");

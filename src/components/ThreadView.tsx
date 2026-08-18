@@ -1077,6 +1077,7 @@ export function ThreadView({
     let frame: number | null = null;
     let timer: number | null = null;
     let disposed = false;
+    let expectedScrollTop = container.scrollTop;
     const article = target.closest<HTMLElement>("article") ?? target;
     const align = () => {
       frame = null;
@@ -1088,7 +1089,8 @@ export function ThreadView({
       if (Math.abs(delta) > 1) {
         const behavior = container.style.scrollBehavior;
         container.style.scrollBehavior = "auto";
-        container.scrollTop += delta;
+        expectedScrollTop = container.scrollTop + delta;
+        container.scrollTop = expectedScrollTop;
         container.style.scrollBehavior = behavior;
       }
     };
@@ -1097,6 +1099,13 @@ export function ThreadView({
       frame = window.requestAnimationFrame(align);
     };
     const resizeObserver = new ResizeObserver(scheduleAlign);
+    const cancelOnReaderScroll = () => {
+      // Ignore the scroll event produced by our own alignment. Any other
+      // scroll—including dragging a scrollbar or momentum continuing after a
+      // gesture—belongs to the reader and must release the destination pin.
+      if (Math.abs(container.scrollTop - expectedScrollTop) <= 1) return;
+      cleanup();
+    };
     const cleanup = () => {
       if (disposed) return;
       disposed = true;
@@ -1107,6 +1116,7 @@ export function ThreadView({
       container.removeEventListener("touchstart", cleanup);
       container.removeEventListener("pointerdown", cleanup);
       container.removeEventListener("keydown", cleanup);
+      container.removeEventListener("scroll", cancelOnReaderScroll);
       if (frame !== null) window.cancelAnimationFrame(frame);
       if (timer !== null) window.clearTimeout(timer);
       if (pdfJumpCleanupRef.current === cleanup) {
@@ -1119,6 +1129,7 @@ export function ThreadView({
     container.addEventListener("touchstart", cleanup, { passive: true, once: true });
     container.addEventListener("pointerdown", cleanup, { passive: true, once: true });
     container.addEventListener("keydown", cleanup, { once: true });
+    container.addEventListener("scroll", cancelOnReaderScroll, { passive: true });
     timer = window.setTimeout(cleanup, 2_500);
     pdfJumpCleanupRef.current = cleanup;
     scheduleAlign();
