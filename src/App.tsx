@@ -412,6 +412,25 @@ function readViewLocation(): ViewLocation {
   };
 }
 
+function readPdfPageAnchor(): number | null {
+  const match = /^#page(\d+)$/.exec(window.location.hash);
+  if (!match) return null;
+  const page = Number(match[1]);
+  return Number.isSafeInteger(page) && page > 0 ? page : null;
+}
+
+function replacePdfPageAnchor(page: number): void {
+  if (!Number.isSafeInteger(page) || page < 1) return;
+  const hash = `#page${page}`;
+  if (window.location.hash === hash) return;
+  const url = `${window.location.pathname}${window.location.search}${hash}`;
+  window.history.replaceState(
+    { ...(window.history.state ?? {}), pdfPage: page },
+    "",
+    url,
+  );
+}
+
 function viewUrl(chat: ChatTree | null, nodeId: string | null, maximized: boolean): string {
   const params = new URLSearchParams();
   if (chat) {
@@ -7135,6 +7154,8 @@ export default function App({
           <ThreadView
             chat={activeChat}
             node={leftPaneNode}
+            initialPdfPage={leftPaneIsRoot ? readPdfPageAnchor() ?? undefined : undefined}
+            onPdfPageChange={leftPaneIsRoot ? replacePdfPageAnchor : undefined}
             provider={chatProviderKind}
             modelOptions={providerModels}
             onSelect={handlePassageSelection}

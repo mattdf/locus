@@ -115,6 +115,8 @@ interface ThreadViewProps {
   node: ThreadNode;
   side?: boolean;
   readOnly?: boolean;
+  initialPdfPage?: number;
+  onPdfPageChange?: (page: number) => void;
   onSelect: (selection: SelectionDraft) => void;
   onOpenElaboration: (childId: string) => void;
   onOpenDefinition: (
@@ -330,6 +332,8 @@ export function ThreadView({
   node,
   side,
   readOnly = false,
+  initialPdfPage,
+  onPdfPageChange,
   onSelect,
   onOpenElaboration,
   onOpenDefinition,
@@ -405,8 +409,12 @@ export function ThreadView({
       : null;
   const pdfPageStart = pdfSource?.pageStart ?? 1;
   const pdfPageEnd = pdfSource?.pageEnd ?? pdfSource?.pageCount ?? 1;
-  const [currentPdfPage, setCurrentPdfPage] = useState(pdfPageStart);
-  const [pdfPageInput, setPdfPageInput] = useState(String(pdfPageStart));
+  const boundedInitialPdfPage =
+    Number.isSafeInteger(initialPdfPage) && initialPdfPage !== undefined
+      ? Math.min(pdfPageEnd, Math.max(pdfPageStart, initialPdfPage))
+      : pdfPageStart;
+  const [currentPdfPage, setCurrentPdfPage] = useState(boundedInitialPdfPage);
+  const [pdfPageInput, setPdfPageInput] = useState(String(boundedInitialPdfPage));
   const [pdfToc, setPdfToc] = useState<PdfTocEntry[]>([]);
   const [pdfTocOpen, setPdfTocOpen] = useState(false);
   const [pdfTocLoading, setPdfTocLoading] = useState(false);
@@ -418,6 +426,10 @@ export function ThreadView({
   const [pdfTokenCountError, setPdfTokenCountError] = useState(false);
   const [printAllPdfPages, setPrintAllPdfPages] = useState(false);
   currentPdfPageRef.current = currentPdfPage;
+  const pdfDocumentRef = useRef(pdfSource?.documentId ?? null);
+  const pendingPdfRestoreRef = useRef<number | null>(
+    pdfSource ? boundedInitialPdfPage : null,
+  );
   const pdfNavigationRef = useRef<HTMLDivElement>(null);
   const children = useMemo(() => childThreads(chat, node.id), [chat, node.id]);
   const messages = useMemo(() => messagesForNode(node), [node]);
@@ -504,8 +516,18 @@ export function ThreadView({
   }, [node.id]);
 
   useEffect(() => {
-    setCurrentPdfPage(pdfPageStart);
-    setPdfPageInput(String(pdfPageStart));
+    const nextDocumentId = pdfSource?.documentId ?? null;
+    const restoredPage =
+      Number.isSafeInteger(initialPdfPage) && initialPdfPage !== undefined
+        ? Math.min(pdfPageEnd, Math.max(pdfPageStart, initialPdfPage))
+        : pdfPageStart;
+    if (pdfDocumentRef.current !== nextDocumentId) {
+      pdfDocumentRef.current = nextDocumentId;
+      pendingPdfRestoreRef.current = pdfSource ? restoredPage : null;
+    }
+    currentPdfPageRef.current = restoredPage;
+    setCurrentPdfPage(restoredPage);
+    setPdfPageInput(String(restoredPage));
     setPdfToc([]);
     setPdfTocOpen(false);
     setPdfTocError(null);
@@ -904,7 +926,28 @@ export function ThreadView({
 
   useEffect(() => {
     setPdfPageInput(String(currentPdfPage));
-  }, [currentPdfPage]);
+    if (pdfSource) onPdfPageChange?.(currentPdfPage);
+  }, [currentPdfPage, onPdfPageChange, pdfSource?.documentId]);
+
+  useLayoutEffect(() => {
+    const page = pendingPdfRestoreRef.current;
+    if (!pdfSource || page === null || currentPdfPage !== page) return;
+    const container = messagesRef.current;
+    const target = container?.querySelector<HTMLElement>(
+      `[data-pdf-page-shell="${page}"]`,
+    );
+    if (!container || !target) return;
+    pendingPdfRestoreRef.current = null;
+    const delta =
+      target.getBoundingClientRect().top -
+      container.getBoundingClientRect().top -
+      18;
+    if (Math.abs(delta) < 1) return;
+    const previousScrollBehavior = container.style.scrollBehavior;
+    container.style.scrollBehavior = "auto";
+    container.scrollTop += delta;
+    container.style.scrollBehavior = previousScrollBehavior;
+  }, [currentPdfPage, pdfSource?.documentId]);
 
   useEffect(() => {
     if (!scrollRequest || scrollRequest.anchor.sourceNodeId !== node.id) return;

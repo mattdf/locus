@@ -142,6 +142,7 @@ function PdfVirtualPage({
   return (
     <section
       ref={pageRef}
+      id={`page${page.page}`}
       className={`pdf-virtual-page${active ? " pdf-virtual-page--active" : ""}`}
       data-pdf-page-shell={page.page}
       data-pdf-page-active={active ? "true" : "false"}
