@@ -1,6 +1,7 @@
 node_modules/
 dist/
 build/
+tmp/
 data/chats.json
 data/openai-api-key.txt
 data/openrouter-api-key.txt

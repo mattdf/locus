@@ -259,4 +259,67 @@ assert.equal(
   "display math inside code fences must not be rewritten",
 );
 
+const invalidNestedInlineMathDisplay = String.raw`$$
+$T$ is invertible $\iff T$ is injective $\iff T$ is surjective.
+$$`;
+const repairedNestedInlineMathDisplay = normalizeMathDelimiters(
+  invalidNestedInlineMathDisplay,
+  true,
+);
+assert.doesNotMatch(repairedNestedInlineMathDisplay, /^\$\$/);
+assert.equal(assertMarkdownMathRenders(invalidNestedInlineMathDisplay), 3);
+
+const numberedNestedDisplay = String.raw`$$
+7.15 $$\langle T^*v,v\rangle=\overline{\langle Tv,v\rangle}.$$
+$$`;
+const repairedNumberedDisplay = normalizeMathDelimiters(numberedNestedDisplay, true);
+assert.match(repairedNumberedDisplay, /^7\.15\s+\$\$/s);
+assert.equal(assertMarkdownMathRenders(numberedNestedDisplay), 1);
+assert.equal(
+  normalizeMathDelimiters(repairedNumberedDisplay, true),
+  repairedNumberedDisplay,
+  "nested display repair must be idempotent",
+);
+
+const displayImmediatelyFollowedByProse = String.raw`$$\rho(x,y)=x_1y_1$$
+is symmetric and satisfies $q=q_\rho$.`;
+assert.equal(assertMarkdownMathRenders(displayImmediatelyFollowedByProse), 2);
+
+const tableMathWithVerticalBars = String.raw`| property | eigenvalues |
+| --- | --- |
+| unitary | $\{\lambda\in\mathbf C: |\lambda|=1\}$ |
+| restriction | $T|_U$ |
+| modulus | $|z|$ |`;
+const repairedTableMath = normalizeMathDelimiters(tableMathWithVerticalBars, true);
+assert.match(repairedTableMath, /\\vert\{\}\\lambda\\vert\{\}/);
+assert.match(repairedTableMath, /T\\vert\{\}_U/);
+assert.match(repairedTableMath, /\\vert\{\}z\\vert\{\}/);
+assert.equal(assertMarkdownMathRenders(tableMathWithVerticalBars), 3);
+const repairedTableTree = unified()
+  .use(remarkParse)
+  .use(remarkGfm)
+  .use(remarkMath)
+  .parse(repairedTableMath);
+let repairedTableRows = 0;
+visit(repairedTableTree, "tableRow", (node: any) => {
+  repairedTableRows += 1;
+  assert.equal(node.children.length, 2, "math bars must not create extra GFM cells");
+});
+assert.equal(repairedTableRows, 4);
+
+const protectedBrokenShapes = [
+  "```tex",
+  "$$",
+  "$T$ remains literal inside code.",
+  "$$",
+  "5.25 $$x=y$$",
+  "| $|z|$ |",
+  "```",
+].join("\n");
+assert.equal(
+  normalizeMathDelimiters(protectedBrokenShapes, true),
+  protectedBrokenShapes,
+  "nested displays and table pipes inside fenced code must remain untouched",
+);
+
 console.log("Markdown math normalization checks passed");

@@ -55,6 +55,13 @@ function escapedAt(source: string, index: number): boolean {
   return slashes % 2 === 1;
 }
 
+function containsUnescapedDollar(source: string): boolean {
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === "$" && !escapedAt(source, index)) return true;
+  }
+  return false;
+}
+
 function closingDollar(
   source: string,
   start: number,
@@ -560,6 +567,249 @@ function separateAdjacentDisplayBlocks(markdown: string): string {
   return output.join("");
 }
 
+/**
+ * The OCR layout API occasionally marks mixed prose/inline-math as an
+ * equation. Older imports consequently contain an invalid outer display such
+ * as `$$\n$T$ is invertible ...\n$$`. Remove only outer display fences whose
+ * body contains another unescaped dollar delimiter. A valid TeX display never
+ * contains nested dollar math, so this repair is unambiguous.
+ */
+function unwrapInvalidNestedDisplayBlocks(markdown: string): string {
+  const lines = markdown.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean) ?? [];
+  const output: string[] = [];
+  let fence: { marker: "`" | "~"; length: number } | null = null;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const content = lines[index].replace(/\r?\n$/, "");
+    const fenceMarker = /^ {0,3}(`{3,}|~{3,})/.exec(content)?.[1];
+    if (fence) {
+      output.push(lines[index]);
+      if (
+        fenceMarker?.[0] === fence.marker &&
+        fenceMarker.length >= fence.length
+      ) {
+        fence = null;
+      }
+      continue;
+    }
+    if (fenceMarker) {
+      fence = {
+        marker: fenceMarker[0] as "`" | "~",
+        length: fenceMarker.length,
+      };
+      output.push(lines[index]);
+      continue;
+    }
+
+    if (/^[ \t]*\$\$[ \t]*$/.test(content)) {
+      let closingIndex = index + 1;
+      let ambiguousBoundary = false;
+      while (closingIndex < lines.length) {
+        const closing = lines[closingIndex].replace(/\r?\n$/, "");
+        if (/^[ \t]*\$\$[ \t]*$/.test(closing)) break;
+        if (!closing.trim()) {
+          ambiguousBoundary = true;
+          break;
+        }
+        // OCR also emits adjacent displays as `formula$$` followed by
+        // `$$formula`. A lone same-line delimiter is a boundary, not evidence
+        // that this entire multi-equation region is one nested wrapper.
+        if (closing.includes("$$") && !inlineDisplayPair(closing, 0)) {
+          ambiguousBoundary = true;
+          break;
+        }
+        // A Markdown code fence cannot legally occur inside a TeX display.
+        // Treat it as a boundary instead of allowing a malformed `$` to make
+        // us unwrap unrelated content later in the document.
+        if (/^ {0,3}(`{3,}|~{3,})/.test(closing)) {
+          closingIndex = lines.length;
+          break;
+        }
+        closingIndex += 1;
+      }
+      if (!ambiguousBoundary && closingIndex < lines.length) {
+        const body = lines.slice(index + 1, closingIndex).join("");
+        if (containsUnescapedDollar(body)) {
+          output.push(...lines.slice(index + 1, closingIndex));
+          index = closingIndex;
+          continue;
+        }
+      }
+    }
+
+    output.push(lines[index]);
+  }
+  return output.join("");
+}
+
+function inlineDisplayPair(
+  source: string,
+  start: number,
+): { opening: number; closing: number } | null {
+  for (let cursor = start; cursor < source.length - 1; cursor += 1) {
+    if (source[cursor] === "`") {
+      let runLength = 1;
+      while (source[cursor + runLength] === "`") runLength += 1;
+      const closing = closingInlineCode(source, cursor, runLength);
+      if (closing >= 0) {
+        cursor = closing + runLength - 1;
+        continue;
+      }
+    }
+    if (!source.startsWith("$$", cursor) || escapedAt(source, cursor)) continue;
+    for (let closing = cursor + 2; closing < source.length - 1; closing += 1) {
+      if (!source.startsWith("$$", closing) || escapedAt(source, closing)) continue;
+      if (source.slice(cursor + 2, closing).trim()) {
+        return { opening: cursor, closing };
+      }
+      cursor = closing + 1;
+      break;
+    }
+  }
+  return null;
+}
+
+/**
+ * remark-math requires display delimiters to form their own block. Mistral
+ * sometimes emits `7.15 $$equation$$` or a one-line `$$equation$$` followed
+ * immediately by prose. Canonicalize those paired delimiters to fenced display
+ * blocks while leaving inline code and fenced code byte-for-byte intact.
+ */
+function canonicalizeInlineDisplayBlocks(markdown: string): string {
+  const lines = markdown.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean) ?? [];
+  const output: string[] = [];
+  let fence: { marker: "`" | "~"; length: number } | null = null;
+
+  const pushBlank = (ending: string) => {
+    if (output.length === 0 || output.at(-1)?.trim()) output.push(ending || "\n");
+  };
+
+  for (const line of lines) {
+    const ending = line.match(/\r?\n$/)?.[0] ?? "";
+    const content = line.slice(0, line.length - ending.length);
+    const fenceMarker = /^ {0,3}(`{3,}|~{3,})/.exec(content)?.[1];
+    if (fence) {
+      output.push(line);
+      if (
+        fenceMarker?.[0] === fence.marker &&
+        fenceMarker.length >= fence.length
+      ) {
+        fence = null;
+      }
+      continue;
+    }
+    if (fenceMarker) {
+      fence = {
+        marker: fenceMarker[0] as "`" | "~",
+        length: fenceMarker.length,
+      };
+      output.push(line);
+      continue;
+    }
+    // Display math is not valid inside a GFM table cell. Leave such rows to
+    // the table-specific inline-math protection below.
+    if (/^[ \t]*\|.*\|[ \t]*$/.test(content)) {
+      output.push(line);
+      continue;
+    }
+
+    const firstPair = inlineDisplayPair(content, 0);
+    if (!firstPair) {
+      output.push(line);
+      continue;
+    }
+
+    const indent = content.match(/^[ \t]*/)?.[0] ?? "";
+    let cursor = 0;
+    let pair: { opening: number; closing: number } | null = firstPair;
+    while (pair) {
+      const prefix = content.slice(cursor, pair.opening).trim();
+      if (prefix) {
+        output.push(`${indent}${prefix}${ending || "\n"}`);
+        pushBlank(ending);
+      }
+      const body = content.slice(pair.opening + 2, pair.closing).trim();
+      output.push(`${indent}$$${ending || "\n"}`);
+      output.push(`${indent}${body}${ending || "\n"}`);
+      output.push(`${indent}$$${ending || "\n"}`);
+      cursor = pair.closing + 2;
+      pair = inlineDisplayPair(content, cursor);
+      // A display block must be separated from subsequent prose/list items.
+      // Always add that boundary; an existing following blank line merely
+      // remains an additional harmless Markdown blank and the transform stays
+      // idempotent once the display is canonicalized.
+      pushBlank(ending);
+    }
+    const suffix = content.slice(cursor).trim();
+    if (suffix) output.push(`${indent}${suffix}${ending}`);
+  }
+  return output.join("");
+}
+
+/**
+ * An unescaped `|` inside `$...$` is TeX, but remark-gfm sees it first and
+ * treats it as a table-cell separator. On actual table rows only, spell such
+ * bars as `\vert`, which preserves their mathematical meaning and prevents
+ * GFM from splitting the expression. Structural table pipes and code are not
+ * touched.
+ */
+function protectMathPipesInGfmTables(markdown: string): string {
+  const lines = markdown.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean) ?? [];
+  const output: string[] = [];
+  let fence: { marker: "`" | "~"; length: number } | null = null;
+
+  for (const line of lines) {
+    const ending = line.match(/\r?\n$/)?.[0] ?? "";
+    const content = line.slice(0, line.length - ending.length);
+    const fenceMarker = /^ {0,3}(`{3,}|~{3,})/.exec(content)?.[1];
+    if (fence) {
+      output.push(line);
+      if (
+        fenceMarker?.[0] === fence.marker &&
+        fenceMarker.length >= fence.length
+      ) {
+        fence = null;
+      }
+      continue;
+    }
+    if (fenceMarker) {
+      fence = {
+        marker: fenceMarker[0] as "`" | "~",
+        length: fenceMarker.length,
+      };
+      output.push(line);
+      continue;
+    }
+    if (!/^[ \t]*\|.*\|[ \t]*$/.test(content)) {
+      output.push(line);
+      continue;
+    }
+
+    const replacements: string[] = [];
+    let cursor = 0;
+    for (let index = 0; index < content.length; index += 1) {
+      if (content[index] !== "$" || escapedAt(content, index)) continue;
+      if (content[index + 1] === "$" || content[index - 1] === "$") continue;
+      const closing = closingDollar(content, index + 1, "$");
+      if (closing < 0) continue;
+      const body = content.slice(index + 1, closing);
+      let repaired = "";
+      for (let bodyIndex = 0; bodyIndex < body.length; bodyIndex += 1) {
+        repaired +=
+          body[bodyIndex] === "|" && !escapedAt(body, bodyIndex)
+            ? "\\vert{}"
+            : body[bodyIndex];
+      }
+      replacements.push(content.slice(cursor, index + 1), repaired, "$");
+      cursor = closing + 1;
+      index = closing;
+    }
+    replacements.push(content.slice(cursor));
+    output.push(replacements.join("") + ending);
+  }
+  return output.join("");
+}
+
 interface LatexTag {
   start: number;
   end: number;
@@ -727,7 +977,13 @@ function repairMultipleDisplayTags(display: string): string {
 }
 
 function repairDisplayMath(markdown: string): string {
-  markdown = separateAdjacentDisplayBlocks(markdown);
+  markdown = protectMathPipesInGfmTables(
+    separateAdjacentDisplayBlocks(
+      canonicalizeInlineDisplayBlocks(
+        unwrapInvalidNestedDisplayBlocks(markdown),
+      ),
+    ),
+  );
   const lines = markdown.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean) ?? [];
   const output: string[] = [];
   let fence: { marker: "`" | "~"; length: number } | null = null;
