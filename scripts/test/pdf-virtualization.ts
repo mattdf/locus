@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { createPdfMarkdownPages, pdfPageForBlock } from "../../src/lib/pdfVirtualization";
+import {
+  createPdfMarkdownPages,
+  pdfPageForBlock,
+  stabilizePdfActiveRange,
+} from "../../src/lib/pdfVirtualization";
 import { createMarkdownDocumentIndex } from "../../src/lib/sourceEditing";
 
 const source = `Introductory material
@@ -45,5 +49,26 @@ assert.equal(
 );
 assert.equal(pdfPageForBlock(pages, pages[1].startBlockIndex), 13);
 assert.equal(pdfPageForBlock(pages, pages[2].endBlockIndex), 14);
+
+const page365Window = stabilizePdfActiveRange(
+  { start: 355, end: 375 },
+  366,
+  10,
+);
+assert.deepEqual(
+  page365Window,
+  { start: 355, end: 376 },
+  "crossing one page boundary must not evict a page above the viewport",
+);
+assert.deepEqual(
+  stabilizePdfActiveRange(page365Window, 371, 10),
+  { start: 361, end: 381 },
+  "the retained window should eventually trim old pages in a batch",
+);
+assert.deepEqual(
+  stabilizePdfActiveRange(page365Window, 120, 10),
+  { start: 110, end: 130 },
+  "a distant page jump should reset the active window around its target",
+);
 
 console.log("PDF page virtualization invariants passed");

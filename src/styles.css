@@ -2094,6 +2094,10 @@ a:focus-visible {
   max-width: 100%;
   scroll-margin-top: 18px;
   contain: layout style;
+  /* Page-height compensation is handled by the virtualizer. Browser-chosen
+     anchors inside a large KaTeX display can otherwise fight that correction
+     and repeatedly snap the reader back across a page boundary. */
+  overflow-anchor: none;
 }
 
 .pdf-virtual-page:not(.pdf-virtual-page--active) {

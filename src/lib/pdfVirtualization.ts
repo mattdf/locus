@@ -8,6 +8,43 @@ export interface PdfMarkdownPage {
   estimatedHeight: number;
 }
 
+export interface PdfActiveRange {
+  start: number;
+  end: number;
+}
+
+/**
+ * Keeps the mounted PDF page window stable while the reader crosses nearby
+ * page boundaries. Pages are added ahead of the reader immediately, but old
+ * pages are retained for half a buffer before being evicted in a batch. This
+ * prevents small shell/rendered-height differences from making the page
+ * detector toggle the virtual window backward and forward at one boundary.
+ */
+export function stabilizePdfActiveRange(
+  previous: PdfActiveRange,
+  currentPage: number,
+  buffer: number,
+  reset = false,
+): PdfActiveRange {
+  if (
+    reset ||
+    currentPage < previous.start ||
+    currentPage > previous.end
+  ) {
+    return {
+      start: currentPage - buffer,
+      end: currentPage + buffer,
+    };
+  }
+
+  const retention = Math.max(2, Math.ceil(buffer / 2));
+  let start = Math.min(previous.start, currentPage - buffer);
+  let end = Math.max(previous.end, currentPage + buffer);
+  if (currentPage - start > buffer + retention) start = currentPage - buffer;
+  if (end - currentPage > buffer + retention) end = currentPage + buffer;
+  return { start, end };
+}
+
 const PAGE_MARKER = /^\s*(?:\*\*|__)?Page\s+(\d+)(?:\*\*|__)?\s*$/i;
 const THEMATIC_BREAK = /^\s{0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})\s*$/;
 

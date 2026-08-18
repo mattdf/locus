@@ -18,7 +18,11 @@ import {
   containingOriginalMarkdownSection,
   createMarkdownDocumentIndex,
 } from "../lib/sourceEditing";
-import { createPdfMarkdownPages, type PdfMarkdownPage } from "../lib/pdfVirtualization";
+import {
+  createPdfMarkdownPages,
+  stabilizePdfActiveRange,
+  type PdfMarkdownPage,
+} from "../lib/pdfVirtualization";
 import type {
   AnnotationTarget,
   HighlightAnchor,
@@ -119,7 +123,7 @@ function PdfVirtualPage({
   page: PdfMarkdownPage;
   active: boolean;
   cachedHeight?: number;
-  onHeight: (page: number, height: number) => void;
+  onHeight: (page: number, height: number, element: HTMLElement) => void;
 }) {
   const pageRef = useRef<HTMLElement>(null);
   useLayoutEffect(() => {
@@ -127,7 +131,7 @@ function PdfVirtualPage({
     if (!element || !active) return;
     const measure = () => {
       const height = Math.ceil(element.getBoundingClientRect().height);
-      if (height > 0) onHeight(page.page, height);
+      if (height > 0) onHeight(page.page, height, element);
     };
     const observer = new ResizeObserver(measure);
     observer.observe(element);
@@ -176,13 +180,83 @@ const VirtualizedPdfMarkdownBody = memo(function VirtualizedPdfMarkdownBody({
   renderAll: boolean;
 }) {
   const heightsRef = useRef(new Map<number, number>());
-  const recordHeight = useCallback((page: number, height: number) => {
-    if (Math.abs((heightsRef.current.get(page) ?? 0) - height) < 2) return;
-    heightsRef.current.set(page, height);
-  }, []);
+  const pageMap = useMemo(
+    () => new Map(pages.map((page) => [page.page, page])),
+    [pages],
+  );
+  const pagesRef = useRef(pageMap);
+  const currentPageRef = useRef(currentPage);
+  const renderAllRef = useRef(renderAll);
+  const bufferRef = useRef(buffer);
+  const activeRangeRef = useRef({
+    start: currentPage - buffer,
+    end: currentPage + buffer,
+  });
+  pagesRef.current = pageMap;
+  currentPageRef.current = currentPage;
+
+  const previousRange = activeRangeRef.current;
+  const resetWindow = renderAllRef.current || bufferRef.current !== buffer;
+  renderAllRef.current = renderAll;
+  bufferRef.current = buffer;
+  if (renderAll) {
+    activeRangeRef.current = {
+      start: pages[0]?.page ?? currentPage,
+      end: pages.at(-1)?.page ?? currentPage,
+    };
+  } else if (
+    resetWindow ||
+    currentPage < previousRange.start ||
+    currentPage > previousRange.end
+  ) {
+    activeRangeRef.current = stabilizePdfActiveRange(
+      previousRange,
+      currentPage,
+      buffer,
+      true,
+    );
+  } else {
+    // Do not evict a page on every page-number transition. That creates a
+    // feedback loop when the evicted shell and its rendered Markdown differ
+    // slightly in height: 365 -> 366 changes layout -> detector sees 365 ->
+    // the window changes back. Retain a small hysteresis band and trim only
+    // after the reader is several pages beyond an edge.
+    activeRangeRef.current = stabilizePdfActiveRange(
+      previousRange,
+      currentPage,
+      buffer,
+    );
+  }
+
+  const recordHeight = useCallback(
+    (page: number, height: number, element: HTMLElement) => {
+      const definition = pagesRef.current.get(page);
+      const previousHeight =
+        heightsRef.current.get(page) ?? definition?.estimatedHeight ?? height;
+      const delta = height - previousHeight;
+      if (Math.abs(delta) < 2) return;
+      heightsRef.current.set(page, height);
+
+      // Mounting a real page in place of its estimated shell—or a later KaTeX
+      // reflow—must not move the content currently being read. Compensate for
+      // measured height changes above it before the next paint.
+      if (page >= currentPageRef.current) return;
+      const scroller = element.closest<HTMLElement>(".thread-messages");
+      if (!scroller) return;
+      const previousScrollBehavior = scroller.style.scrollBehavior;
+      scroller.style.scrollBehavior = "auto";
+      scroller.scrollTop += delta;
+      scroller.style.scrollBehavior = previousScrollBehavior;
+    },
+    [],
+  );
+
+  const activeRange = activeRangeRef.current;
 
   return pages.map((page) => {
-    const active = renderAll || Math.abs(page.page - currentPage) <= buffer;
+    const active =
+      renderAll ||
+      (page.page >= activeRange.start && page.page <= activeRange.end);
     return (
       <PdfVirtualPage
         key={page.page}

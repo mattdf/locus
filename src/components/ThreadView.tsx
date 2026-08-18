@@ -381,6 +381,8 @@ export function ThreadView({
   const visualizationScrollFrame = useRef<number | null>(null);
   const pdfJumpCleanupRef = useRef<(() => void) | null>(null);
   const pdfJumpPageRef = useRef<number | null>(null);
+  const currentPdfPageRef = useRef(1);
+  const pdfViewportAnchorRef = useRef<{ page: number; top: number } | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [currentMessageIndex, setCurrentMessageIndex] = useState(0);
@@ -415,6 +417,7 @@ export function ThreadView({
   const [pdfTokenCount, setPdfTokenCount] = useState<number | null>(null);
   const [pdfTokenCountError, setPdfTokenCountError] = useState(false);
   const [printAllPdfPages, setPrintAllPdfPages] = useState(false);
+  currentPdfPageRef.current = currentPdfPage;
   const pdfNavigationRef = useRef<HTMLDivElement>(null);
   const children = useMemo(() => childThreads(chat, node.id), [chat, node.id]);
   const messages = useMemo(() => messagesForNode(node), [node]);
@@ -491,6 +494,7 @@ export function ThreadView({
   useEffect(() => {
     pdfJumpCleanupRef.current?.();
     pdfJumpPageRef.current = null;
+    pdfViewportAnchorRef.current = null;
     setEditingMessageId(null);
     setEditValue("");
     setCopyState(null);
@@ -847,7 +851,20 @@ export function ThreadView({
         ) {
           page = pdfPageEnd;
         }
-        setCurrentPdfPage((current) => (current === page ? current : page));
+        if (currentPdfPageRef.current === page) return;
+        const anchorShell =
+          visiblePage ??
+          container.querySelector<HTMLElement>(
+            `[data-pdf-page-shell="${page}"]`,
+          );
+        if (anchorShell) {
+          pdfViewportAnchorRef.current = {
+            page,
+            top: anchorShell.getBoundingClientRect().top,
+          };
+        }
+        currentPdfPageRef.current = page;
+        setCurrentPdfPage(page);
       });
     };
     const resizeObserver = new ResizeObserver(syncCurrentPage);
@@ -867,6 +884,23 @@ export function ThreadView({
     pdfPageStart,
     pdfSource?.documentId,
   ]);
+
+  useLayoutEffect(() => {
+    const anchor = pdfViewportAnchorRef.current;
+    pdfViewportAnchorRef.current = null;
+    if (!anchor || pdfJumpPageRef.current !== null) return;
+    const container = messagesRef.current;
+    const shell = container?.querySelector<HTMLElement>(
+      `[data-pdf-page-shell="${anchor.page}"]`,
+    );
+    if (!container || !shell) return;
+    const delta = shell.getBoundingClientRect().top - anchor.top;
+    if (Math.abs(delta) < 1) return;
+    const previousScrollBehavior = container.style.scrollBehavior;
+    container.style.scrollBehavior = "auto";
+    container.scrollTop += delta;
+    container.style.scrollBehavior = previousScrollBehavior;
+  }, [currentPdfPage]);
 
   useEffect(() => {
     setPdfPageInput(String(currentPdfPage));
