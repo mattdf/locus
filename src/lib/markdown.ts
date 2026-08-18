@@ -276,6 +276,133 @@ function wrapParenthesizedLatex(source: string): string {
   return output.join("");
 }
 
+function unmatchedInlineDollar(line: string): number {
+  let candidate = -1;
+  for (let cursor = 0; cursor < line.length; cursor += 1) {
+    if (line[cursor] === "`" && !escapedAt(line, cursor)) {
+      let runLength = 1;
+      while (line[cursor + runLength] === "`") runLength += 1;
+      const closing = closingInlineCode(line, cursor, runLength);
+      if (closing >= 0) {
+        cursor = closing + runLength - 1;
+        continue;
+      }
+    }
+    if (line[cursor] !== "$" || escapedAt(line, cursor)) continue;
+    if (line[cursor + 1] === "$" || line[cursor - 1] === "$") {
+      cursor += line[cursor + 1] === "$" ? 1 : 0;
+      continue;
+    }
+    const closing = closingDollar(line, cursor + 1, "$");
+    if (closing >= 0) {
+      cursor = closing;
+      continue;
+    }
+    candidate = cursor;
+  }
+  return candidate;
+}
+
+function looksLikeInlineMathFragment(source: string): boolean {
+  const value = source.trim();
+  if (value.length < 2 || /^\d+(?:[.,]\d+)?$/.test(value)) return false;
+  return (
+    /\\(?:[A-Za-z@]+\*?|[{}])/.test(value) ||
+    /[_^=<>]|[≤≥≠∈∉⊂⊆→↦∞]/u.test(value)
+  );
+}
+
+/**
+ * PDF OCR can split one inline expression across physical pages. In the
+ * combined Markdown the opening `$` then precedes a page marker while the
+ * continuation begins with the `$` that originally closed the expression.
+ *
+ * Repair only the unambiguous form: the unmatched opener is on the previous
+ * page's final content line, both fragments look mathematical, and the next
+ * page's leading fragment has its own same-line closing `$`. We add a closing
+ * delimiter before the page marker and reinterpret the existing next-page
+ * delimiter as an opener. Ambiguous page breaks remain byte-for-byte intact.
+ */
+function repairInlineMathAcrossPdfPageBreaks(markdown: string): string {
+  const lines = markdown.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean) ?? [];
+  const inFence: boolean[] = [];
+  let fence: { marker: "`" | "~"; length: number } | null = null;
+
+  lines.forEach((line, index) => {
+    const content = line.replace(/\r?\n$/, "");
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(content)?.[1];
+    inFence[index] = fence !== null;
+    if (fence) {
+      if (marker?.[0] === fence.marker && marker.length >= fence.length) {
+        fence = null;
+      }
+    } else if (marker) {
+      fence = { marker: marker[0] as "`" | "~", length: marker.length };
+      inFence[index] = true;
+    }
+  });
+
+  for (let markerIndex = 0; markerIndex < lines.length; markerIndex += 1) {
+    if (!/^[ \t]*---[ \t]*(?:\r?\n)?$/.test(lines[markerIndex])) continue;
+    let pageLabelIndex = markerIndex + 1;
+    while (pageLabelIndex < lines.length && !lines[pageLabelIndex].trim()) {
+      pageLabelIndex += 1;
+    }
+    if (!/^\*\*Page\s+\d+\*\*$/.test(lines[pageLabelIndex]?.trim() ?? "")) {
+      continue;
+    }
+
+    let previousIndex = markerIndex - 1;
+    while (previousIndex >= 0 && !lines[previousIndex].trim()) previousIndex -= 1;
+    if (previousIndex < 0 || inFence[previousIndex]) continue;
+    const previousEnding = lines[previousIndex].match(/\r?\n$/)?.[0] ?? "";
+    const previousContent = lines[previousIndex].slice(
+      0,
+      lines[previousIndex].length - previousEnding.length,
+    );
+    const opening = unmatchedInlineDollar(previousContent);
+    if (
+      opening < 0 ||
+      !looksLikeInlineMathFragment(previousContent.slice(opening + 1))
+    ) {
+      continue;
+    }
+
+    let nextIndex = pageLabelIndex + 1;
+    let nonemptyLines = 0;
+    let continuationFound = false;
+    while (nextIndex < lines.length && nonemptyLines < 8) {
+      const nextContent = lines[nextIndex].replace(/\r?\n$/, "");
+      const trimmed = nextContent.trim();
+      if (/^---$/.test(trimmed) || /^\*\*Page\s+\d+\*\*$/.test(trimmed)) break;
+      if (trimmed) {
+        nonemptyLines += 1;
+        if (trimmed.startsWith("$") && !trimmed.startsWith("$$")) {
+          const closing = closingDollar(trimmed, 1, "$");
+          if (
+            closing > 1 &&
+            looksLikeInlineMathFragment(trimmed.slice(1, closing))
+          ) {
+            continuationFound = true;
+          }
+          break;
+        }
+      }
+      nextIndex += 1;
+    }
+    if (!continuationFound) continue;
+
+    const trailingWhitespace = previousContent.match(/[ \t]*$/)?.[0] ?? "";
+    lines[previousIndex] =
+      previousContent.slice(0, previousContent.length - trailingWhitespace.length) +
+      "$" +
+      trailingWhitespace +
+      previousEnding;
+  }
+
+  return lines.join("");
+}
+
 function normalizeCopiedInlineMath(markdown: string): string {
   const lines = markdown.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean) ?? [];
   const output: string[] = [];
@@ -699,7 +826,9 @@ export function normalizeMathDelimiters(
     );
   }
 
-  const withDisplayMath = normalizeLegacyPdfMarkup(markdown).replace(
+  const withDisplayMath = repairInlineMathAcrossPdfPageBreaks(
+    normalizeLegacyPdfMarkup(markdown),
+  ).replace(
     /(^|\n)[ \t]*\\?\[[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\\?\][ \t]*(?=\r?\n|$)/g,
     (_match, leading: string, equation: string) =>
       `${leading}$$\n${cleanCopiedDisplayMath(equation)}\n$$`,

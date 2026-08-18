@@ -93,6 +93,41 @@ assert.match(recoveredAfterMalformedDelimiter, /I_s\(\\mu\)/);
 assert.doesNotMatch(recoveredAfterMalformedDelimiter, /I_s\$\\mu\$/);
 assert.match(recoveredAfterMalformedDelimiter, /\$g_\{\\mu\\nu\}\$/);
 
+const inlineMathSplitAcrossPdfPages = String.raw`The set $A = \{x :
+
+---
+
+**Page 28**
+
+20
+
+Measure theoretic preliminaries
+
+$\int |x-y|^{-s}\,d\mu x < M$ has positive measure.`;
+const repairedPageSplit = normalizeMathDelimiters(
+  inlineMathSplitAcrossPdfPages,
+  true,
+);
+assert.match(repairedPageSplit, /The set \$A = \\\{x :\$/);
+assert.equal(assertMarkdownMathRenders(inlineMathSplitAcrossPdfPages), 2);
+assert.equal(
+  normalizeMathDelimiters(repairedPageSplit, true),
+  repairedPageSplit,
+  "page-split inline math repair must be idempotent",
+);
+const ambiguousPageSplit = String.raw`This costs $5
+
+---
+
+**Page 2**
+
+$10 per copy.`;
+assert.equal(
+  normalizeMathDelimiters(ambiguousPageSplit, true),
+  ambiguousPageSplit,
+  "currency split across pages must remain prose",
+);
+
 assert.equal(
   normalizeMathDelimiters(String.raw`$$
 f(\(x\)) = x
