@@ -274,6 +274,36 @@ export async function readState(): Promise<WorkspaceState> {
   }
 }
 
+function chatIndexEntry(chat: ChatTree): ChatTree {
+  return {
+    id: chat.id,
+    title: chat.title,
+    pinned: chat.pinned,
+    categoryId: chat.categoryId,
+    branchCount: Math.max(0, Object.keys(chat.nodes ?? {}).length - 1),
+    source: chat.source,
+    rootId: chat.rootId,
+    nodes: {},
+    createdAt: chat.createdAt,
+    updatedAt: chat.updatedAt,
+  };
+}
+
+/** The browser library index deliberately excludes messages and annotations. */
+export async function readStateIndex(): Promise<WorkspaceState> {
+  const state = await readState();
+  return {
+    ...state,
+    activeChatId: null,
+    chats: state.chats.map(chatIndexEntry),
+  };
+}
+
+export async function readStoredChat(chatId: string): Promise<ChatTree | null> {
+  const state = await readState();
+  return state.chats.find((chat) => chat.id === chatId) ?? null;
+}
+
 export async function writeState(state: WorkspaceState): Promise<void> {
   await mkdir(DATA_DIR, { recursive: true });
   const temporaryFile = `${DATA_FILE}.${process.pid}.tmp`;
@@ -300,7 +330,20 @@ export function syncState(input: LocalStateSyncInput): Promise<void> {
         if (expected !== actual) throw new LocalStateConflictError(chatId);
       }
 
-      for (const chat of input.upsertChats ?? []) currentChats.set(chat.id, chat);
+      for (const chat of input.upsertChats ?? []) {
+        const existing = currentChats.get(chat.id);
+        if (!chat.nodes?.[chat.rootId]) {
+          if (!existing) throw new Error("Invalid chat tree");
+          currentChats.set(chat.id, {
+            ...existing,
+            ...chat,
+            nodes: existing.nodes,
+            branchCount: undefined,
+          });
+          continue;
+        }
+        currentChats.set(chat.id, { ...chat, branchCount: undefined });
+      }
       for (const chatId of input.deleteChatIds ?? []) currentChats.delete(chatId);
 
       const next = normalizeState({

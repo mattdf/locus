@@ -390,6 +390,71 @@ interface HostedWorkspaceResponse {
   revision: number;
 }
 
+function isChatLoaded(chat: ChatTree | null | undefined): boolean {
+  return Boolean(chat?.rootId && chat.nodes?.[chat.rootId]);
+}
+
+function chatWithIndexMetadata(chat: ChatTree, indexEntry: ChatTree): ChatTree {
+  return {
+    ...chat,
+    title: indexEntry.title,
+    pinned: indexEntry.pinned,
+    categoryId: indexEntry.categoryId,
+    createdAt: indexEntry.createdAt,
+    updatedAt: indexEntry.updatedAt,
+    branchCount: undefined,
+  };
+}
+
+async function fetchWorkspaceIndex(
+  mode: "local" | "hosted",
+): Promise<HostedWorkspaceResponse> {
+  const response = await fetch(
+    mode === "hosted" ? "/api/workspace/index" : "/api/state/index",
+    { credentials: "same-origin", cache: "no-store" },
+  );
+  if (!response.ok) throw new Error("Could not load your workspace");
+  return (await response.json()) as HostedWorkspaceResponse;
+}
+
+async function fetchWorkspaceChat(
+  mode: "local" | "hosted",
+  chatId: string,
+): Promise<ChatTree> {
+  const prefix = mode === "hosted" ? "/api/workspace/chats/" : "/api/state/chats/";
+  const response = await fetch(`${prefix}${encodeURIComponent(chatId)}`, {
+    credentials: "same-origin",
+    cache: "no-store",
+  });
+  const payload = (await response.json().catch(() => ({}))) as {
+    chat?: ChatTree;
+    error?: string;
+  };
+  if (!response.ok || !payload.chat || !isChatLoaded(payload.chat)) {
+    throw new Error(payload.error || "Could not load this chat");
+  }
+  return payload.chat;
+}
+
+function mergeLoadedChatsIntoIndex(
+  indexState: WorkspaceState,
+  loadedState: WorkspaceState | null,
+  requiredChat?: ChatTree,
+): WorkspaceState {
+  const loaded = new Map<string, ChatTree>();
+  for (const chat of loadedState?.chats ?? []) {
+    if (isChatLoaded(chat)) loaded.set(chat.id, chat);
+  }
+  if (requiredChat) loaded.set(requiredChat.id, requiredChat);
+  return {
+    ...indexState,
+    chats: indexState.chats.map((entry) => {
+      const full = loaded.get(entry.id);
+      return full ? chatWithIndexMetadata(full, entry) : entry;
+    }),
+  };
+}
+
 interface WorkspaceConflictState {
   chatId: string;
   localChat: ChatTree;
@@ -1975,6 +2040,7 @@ export default function App({
   >([]);
   const [workspaceSearchPending, setWorkspaceSearchPending] = useState(false);
   const [workspaceSearchError, setWorkspaceSearchError] = useState("");
+  const [loadingChatIds, setLoadingChatIds] = useState<Set<string>>(() => new Set());
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [selection, setSelection] = useState<SelectionDraft | null>(null);
   const [annotationMenu, setAnnotationMenu] = useState<AnnotationMenuState | null>(null);
@@ -2059,6 +2125,8 @@ export default function App({
   const workspaceRef = useRef(workspace);
   const lastSavedWorkspaceRef = useRef<WorkspaceState | null>(null);
   const hostedRevisionRef = useRef(0);
+  const chatLoadPromisesRef = useRef(new Map<string, Promise<ChatTree>>());
+  const locationLoadSequenceRef = useRef(0);
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const saveRetryTimerRef = useRef<number | null>(null);
   const saveRetryCountRef = useRef(0);
@@ -2072,6 +2140,64 @@ export default function App({
   const managedProviderAppliedRef = useRef(false);
   workspaceRef.current = workspace;
   activeNodeIdRef.current = activeNodeId;
+
+  async function ensureChatLoaded(chatId: string): Promise<ChatTree> {
+    const existing = workspaceRef.current.chats.find((chat) => chat.id === chatId);
+    if (!existing) throw new Error("Chat not found");
+    if (isChatLoaded(existing)) return existing;
+
+    const pending = chatLoadPromisesRef.current.get(chatId);
+    if (pending) return pending;
+
+    const request = fetchWorkspaceChat(runtime.mode, chatId)
+      .then((remoteChat) => {
+        const current = workspaceRef.current;
+        const currentIndexEntry = current.chats.find((chat) => chat.id === chatId);
+        if (!currentIndexEntry) throw new Error("Chat no longer exists");
+        if (isChatLoaded(currentIndexEntry)) return currentIndexEntry;
+
+        const loadedChat = chatWithIndexMetadata(remoteChat, currentIndexEntry);
+        const next: WorkspaceState = {
+          ...current,
+          chats: current.chats.map((chat) =>
+            chat.id === chatId ? loadedChat : chat,
+          ),
+        };
+
+        const baseline = lastSavedWorkspaceRef.current;
+        if (baseline) {
+          const baselineIndexEntry = baseline.chats.find((chat) => chat.id === chatId);
+          if (baselineIndexEntry) {
+            const baselineChat =
+              baselineIndexEntry === currentIndexEntry
+                ? loadedChat
+                : chatWithIndexMetadata(remoteChat, baselineIndexEntry);
+            lastSavedWorkspaceRef.current = {
+              ...baseline,
+              chats: baseline.chats.map((chat) =>
+                chat.id === chatId ? baselineChat : chat,
+              ),
+            };
+          }
+        }
+
+        workspaceRef.current = next;
+        setWorkspace(next);
+        return loadedChat;
+      })
+      .finally(() => {
+        chatLoadPromisesRef.current.delete(chatId);
+        setLoadingChatIds((current) => {
+          if (!current.has(chatId)) return current;
+          const next = new Set(current);
+          next.delete(chatId);
+          return next;
+        });
+      });
+    chatLoadPromisesRef.current.set(chatId, request);
+    setLoadingChatIds((current) => new Set(current).add(chatId));
+    return request;
+  }
 
   useEffect(
     () => () => {
@@ -2369,25 +2495,27 @@ export default function App({
 
   useEffect(() => {
     setLoadError("");
-    const endpoint = runtime.mode === "hosted" ? "/api/workspace" : "/api/state";
-    fetch(endpoint, { credentials: "same-origin", cache: "no-store" })
-      .then(async (response) => {
-        if (!response.ok) throw new Error("Could not load your workspace");
-        return runtime.mode === "hosted"
-          ? ((await response.json()) as HostedWorkspaceResponse)
-          : ({ state: (await response.json()) as WorkspaceState, revision: 0 } satisfies HostedWorkspaceResponse);
-      })
+    fetchWorkspaceIndex(runtime.mode)
       .then(async ({ state, revision }) => {
         const requestedView = readViewLocation();
-        const chat = requestedView.chatId
+        const chatIndexEntry = requestedView.chatId
           ? state.chats.find((item) => item.id === requestedView.chatId) ?? null
+          : null;
+        const chat = chatIndexEntry
+          ? chatWithIndexMetadata(
+              await fetchWorkspaceChat(runtime.mode, chatIndexEntry.id),
+              chatIndexEntry,
+            )
           : null;
         const requestedNode =
           chat && requestedView.nodeId && chat.nodes[requestedView.nodeId]
             ? requestedView.nodeId
             : chat?.rootId ?? null;
-        const nextState = {
+        const nextState: WorkspaceState = {
           ...state,
+          chats: chat
+            ? state.chats.map((item) => (item.id === chat.id ? chat : item))
+            : state.chats,
           activeChatId: chat?.id ?? null,
           settings: {
             ...state.settings,
@@ -2452,12 +2580,26 @@ export default function App({
 
   useEffect(() => {
     if (!loaded) return;
-    const applyLocation = () => {
+    const applyLocation = async () => {
+      const sequence = ++locationLoadSequenceRef.current;
       const requestedView = readViewLocation();
-      const state = workspaceRef.current;
-      const chat = requestedView.chatId
+      let state = workspaceRef.current;
+      const chatIndexEntry = requestedView.chatId
         ? state.chats.find((item) => item.id === requestedView.chatId) ?? null
         : null;
+      let chat = chatIndexEntry;
+      if (chatIndexEntry && !isChatLoaded(chatIndexEntry)) {
+        try {
+          chat = await ensureChatLoaded(chatIndexEntry.id);
+          state = workspaceRef.current;
+        } catch (error) {
+          if (sequence === locationLoadSequenceRef.current) {
+            window.alert(error instanceof Error ? error.message : "Could not load this chat");
+          }
+          return;
+        }
+      }
+      if (sequence !== locationLoadSequenceRef.current) return;
       const nodeId =
         chat && requestedView.nodeId && chat.nodes[requestedView.nodeId]
           ? requestedView.nodeId
@@ -2486,8 +2628,9 @@ export default function App({
       setChatMenuOpen(false);
       setBranchMenuOpen(null);
     };
-    window.addEventListener("popstate", applyLocation);
-    return () => window.removeEventListener("popstate", applyLocation);
+    const onPopState = () => void applyLocation();
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
   }, [loaded]);
 
   useEffect(() => {
@@ -2695,14 +2838,20 @@ export default function App({
                 chatId?: string;
               };
               if (response.status === 409 && result.chatId) {
-                const remoteResponse = await fetch("/api/state", { cache: "no-store" });
-                const remoteState = (await remoteResponse.json()) as WorkspaceState;
+                const [remoteIndex, remoteChat] = await Promise.all([
+                  fetchWorkspaceIndex("local"),
+                  fetchWorkspaceChat("local", result.chatId),
+                ]);
                 const localChat = target.chats.find((chat) => chat.id === result.chatId);
-                if (remoteResponse.ok && localChat) {
+                if (localChat) {
                   setWorkspaceConflict({
                     chatId: result.chatId,
                     localChat,
-                    remoteState,
+                    remoteState: mergeLoadedChatsIntoIndex(
+                      remoteIndex.state,
+                      lastSavedWorkspaceRef.current,
+                      remoteChat,
+                    ),
                     remoteRevision: 0,
                   });
                   throw new WorkspaceSaveConflictError(result.error ?? "Save conflict");
@@ -2735,17 +2884,20 @@ export default function App({
             );
           }
           if (response.status === 409 && result.chatId) {
-            const remoteResponse = await fetch("/api/workspace", {
-              credentials: "same-origin",
-              cache: "no-store",
-            });
-            const remote = (await remoteResponse.json()) as HostedWorkspaceResponse;
+            const [remote, remoteChat] = await Promise.all([
+              fetchWorkspaceIndex("hosted"),
+              fetchWorkspaceChat("hosted", result.chatId),
+            ]);
             const localChat = target.chats.find((chat) => chat.id === result.chatId);
-            if (remoteResponse.ok && localChat) {
+            if (localChat) {
               setWorkspaceConflict({
                 chatId: result.chatId,
                 localChat,
-                remoteState: remote.state,
+                remoteState: mergeLoadedChatsIntoIndex(
+                  remote.state,
+                  lastSavedWorkspaceRef.current,
+                  remoteChat,
+                ),
                 remoteRevision: remote.revision,
               });
               throw new WorkspaceSaveConflictError(result.error ?? "Save conflict");
@@ -3218,12 +3370,19 @@ export default function App({
     setSaveAttempt((attempt) => attempt + 1);
   };
 
-  const navigateToStudyLocation = (location: StudyToolsNavigation) => {
-    const chat = workspaceRef.current.chats.find(
+  const navigateToStudyLocation = async (location: StudyToolsNavigation) => {
+    let chat = workspaceRef.current.chats.find(
       (candidate) => candidate.id === location.chatId,
     );
-    const node = chat?.nodes[location.nodeId];
-    if (!chat || !node) return;
+    if (!chat) return;
+    try {
+      if (!isChatLoaded(chat)) chat = await ensureChatLoaded(chat.id);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Could not load this chat");
+      return;
+    }
+    const node = chat.nodes[location.nodeId];
+    if (!node) return;
     historyAction.current = "push";
     setWorkspace((current) => ({ ...current, activeChatId: chat.id }));
     setActiveNodeId(node.id);
@@ -3241,9 +3400,9 @@ export default function App({
     }
   };
 
-  const repairAnnotationManually = (item: AnnotationIntegrityItem) => {
+  const repairAnnotationManually = async (item: AnnotationIntegrityItem) => {
     setStudyToolsOpen(null);
-    navigateToStudyLocation({
+    await navigateToStudyLocation({
       chatId: item.chatId,
       nodeId: item.nodeId,
       anchor: item.anchor,
@@ -6060,32 +6219,65 @@ export default function App({
     setChatMenuOpen(false);
   };
 
-  const exportAllChats = () => {
-    downloadChatExport(makeChatExport(workspace, { type: "all" }), "locus-all-chats");
+  const loadChatsForExport = async (chatIds: string[]): Promise<WorkspaceState> => {
+    await Promise.all(chatIds.map((chatId) => ensureChatLoaded(chatId)));
+    return workspaceRef.current;
   };
 
-  const exportCategory = (category: ChatCategory) => {
-    downloadChatExport(
-      makeChatExport(workspace, {
-        type: "category",
-        categoryId: category.id,
-        name: category.name,
-      }),
-      `locus-${category.name}`,
-    );
-    setCategoryMenuId(null);
+  const exportAllChats = async () => {
+    try {
+      const completeWorkspace = await loadChatsForExport(
+        workspaceRef.current.chats.map((chat) => chat.id),
+      );
+      downloadChatExport(
+        makeChatExport(completeWorkspace, { type: "all" }),
+        "locus-all-chats",
+      );
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Could not load chats for export");
+    }
   };
 
-  const exportUncategorized = () => {
-    downloadChatExport(
-      makeChatExport(workspace, {
-        type: "category",
-        categoryId: null,
-        name: "Uncategorized",
-      }),
-      "locus-uncategorized",
-    );
-    setCategoryMenuId(null);
+  const exportCategory = async (category: ChatCategory) => {
+    try {
+      const completeWorkspace = await loadChatsForExport(
+        workspaceRef.current.chats
+          .filter((chat) => chat.categoryId === category.id)
+          .map((chat) => chat.id),
+      );
+      downloadChatExport(
+        makeChatExport(completeWorkspace, {
+          type: "category",
+          categoryId: category.id,
+          name: category.name,
+        }),
+        `locus-${category.name}`,
+      );
+      setCategoryMenuId(null);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Could not load chats for export");
+    }
+  };
+
+  const exportUncategorized = async () => {
+    try {
+      const completeWorkspace = await loadChatsForExport(
+        workspaceRef.current.chats
+          .filter((chat) => !chat.categoryId)
+          .map((chat) => chat.id),
+      );
+      downloadChatExport(
+        makeChatExport(completeWorkspace, {
+          type: "category",
+          categoryId: null,
+          name: "Uncategorized",
+        }),
+        "locus-uncategorized",
+      );
+      setCategoryMenuId(null);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Could not load chats for export");
+    }
   };
 
   const toggleCategoryCollapse = (categoryId: string) => {
@@ -6334,7 +6526,13 @@ export default function App({
     return { grouped, uncategorized };
   }, [filteredChats, workspace.categories]);
 
-  const openChat = (chat: ChatTree) => {
+  const openChat = async (chat: ChatTree) => {
+    try {
+      chat = await ensureChatLoaded(chat.id);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Could not load this chat");
+      return;
+    }
     historyAction.current = "push";
     setWorkspace((current) => ({ ...current, activeChatId: chat.id }));
     setActiveNodeId(chat.rootId);
@@ -6776,15 +6974,24 @@ export default function App({
     );
   };
   const renderChatRow = (chat: ChatTree) => {
-    const branchCount = Object.keys(chat.nodes).length - 1;
+    const branchCount = isChatLoaded(chat)
+      ? Math.max(0, Object.keys(chat.nodes).length - 1)
+      : Math.max(0, chat.branchCount ?? 0);
     return (
       <button
         type="button"
         className={`chat-row ${chat.id === activeChat?.id ? "active" : ""} ${chat.pinned ? "chat-row--pinned" : ""}`}
         key={chat.id}
-        onClick={() => openChat(chat)}
+        disabled={loadingChatIds.has(chat.id)}
+        onClick={() => void openChat(chat)}
       >
-        {chat.pinned ? <Pin size={15} /> : <BookOpenText size={15} />}
+        {loadingChatIds.has(chat.id) ? (
+          <LoaderCircle className="spin" size={15} />
+        ) : chat.pinned ? (
+          <Pin size={15} />
+        ) : (
+          <BookOpenText size={15} />
+        )}
         <span>
           <strong><InlineMath source={chat.title} /></strong>
           <small>
@@ -6793,7 +7000,7 @@ export default function App({
               : "Main thread only"}
           </small>
         </span>
-        {branchCount > 0 && <em>{treeDepth(chat)}</em>}
+        {branchCount > 0 && isChatLoaded(chat) && <em>{treeDepth(chat)}</em>}
       </button>
     );
   };

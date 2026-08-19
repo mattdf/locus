@@ -114,6 +114,58 @@ async function loadWithClient(
   return { state, revision: Number(workspace?.revision ?? 0) };
 }
 
+async function loadIndexWithClient(
+  client: Pick<PoolClient, "query">,
+  ownerUserId: string,
+): Promise<HostedWorkspaceSnapshot> {
+  const [workspaceResult, settingsResult, categoryResult, chatResult] = await Promise.all([
+    client.query<{ revision: string }>(
+      `select "revision" from "locus_workspace" where "ownerUserId" = $1`,
+      [ownerUserId],
+    ),
+    client.query<{ settings: WorkspaceState["settings"] }>(
+      `select "settings" from "locus_user_settings" where "ownerUserId" = $1`,
+      [ownerUserId],
+    ),
+    client.query<{ document: ChatCategory }>(
+      `select "document" from "locus_categories"
+       where "ownerUserId" = $1 order by "position" asc`,
+      [ownerUserId],
+    ),
+    client.query<{
+      document: Omit<ChatTree, "nodes">;
+      categoryId: string | null;
+      title: string;
+      pinned: boolean;
+      branchCount: number;
+    }>(
+      `select "document" - 'nodes' as "document",
+              "categoryId", "title", "pinned",
+              greatest(jsonb_object_length(coalesce("document" -> 'nodes', '{}'::jsonb)) - 1, 0)::int as "branchCount"
+         from "locus_chats"
+        where "ownerUserId" = $1 order by "updatedAt" desc`,
+      [ownerUserId],
+    ),
+  ]);
+  const fallback = emptyState();
+  const workspace = workspaceResult.rows[0];
+  const state = hostedSafeState({
+    version: 1,
+    categories: categoryResult.rows.map((row) => row.document),
+    chats: chatResult.rows.map((row) => ({
+      ...row.document,
+      title: row.title,
+      pinned: row.pinned,
+      categoryId: row.categoryId,
+      branchCount: row.branchCount,
+      nodes: {},
+    })),
+    activeChatId: null,
+    settings: settingsResult.rows[0]?.settings ?? fallback.settings,
+  });
+  return { state, revision: Number(workspace?.revision ?? 0) };
+}
+
 export async function readHostedWorkspace(ownerUserId: string): Promise<HostedWorkspaceSnapshot> {
   await getPool().query(
     `insert into "locus_workspace" ("ownerUserId") values ($1)
@@ -121,6 +173,28 @@ export async function readHostedWorkspace(ownerUserId: string): Promise<HostedWo
     [ownerUserId],
   );
   return loadWithClient(getPool(), ownerUserId);
+}
+
+export async function readHostedWorkspaceIndex(ownerUserId: string): Promise<HostedWorkspaceSnapshot> {
+  await getPool().query(
+    `insert into "locus_workspace" ("ownerUserId") values ($1)
+     on conflict ("ownerUserId") do nothing`,
+    [ownerUserId],
+  );
+  return loadIndexWithClient(getPool(), ownerUserId);
+}
+
+export async function readHostedChat(
+  ownerUserId: string,
+  chatId: string,
+): Promise<ChatTree | null> {
+  const result = await getPool().query<{ document: ChatTree }>(
+    `select "document" from "locus_chats"
+      where "ownerUserId" = $1 and "id" = $2`,
+    [ownerUserId, chatId],
+  );
+  const chat = result.rows[0]?.document;
+  return chat ? normalizeChatRevisions(chat) : null;
 }
 
 export async function syncHostedWorkspace(
@@ -223,12 +297,28 @@ export async function syncHostedWorkspace(
       );
       const categoryIds = new Set(categories.rows.map((row) => row.id));
       for (const rawChat of input.upsertChats) {
-        const chat = normalizeChatRevisions(rawChat);
+        let candidate = rawChat;
+        if (!rawChat.nodes?.[rawChat.rootId]) {
+          const existing = await client.query<{ document: ChatTree }>(
+            `select "document" from "locus_chats"
+              where "ownerUserId" = $1 and "id" = $2`,
+            [ownerUserId, rawChat.id],
+          );
+          const existingChat = existing.rows[0]?.document;
+          if (!existingChat) throw new Error("Invalid chat tree");
+          candidate = {
+            ...existingChat,
+            ...rawChat,
+            nodes: existingChat.nodes,
+            branchCount: undefined,
+          };
+        }
+        const chat = normalizeChatRevisions(candidate);
         if (!chat || !validId(chat.rootId) || !chat.nodes?.[chat.rootId]) {
           throw new Error("Invalid chat tree");
         }
         const categoryId = chat.categoryId && categoryIds.has(chat.categoryId) ? chat.categoryId : null;
-        const document = { ...chat, categoryId };
+        const document = { ...chat, categoryId, branchCount: undefined };
         await client.query(
           `insert into "locus_chats"
              ("ownerUserId", "id", "categoryId", "title", "pinned", "document", "createdAt", "updatedAt")

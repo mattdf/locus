@@ -56,12 +56,16 @@ import {
 } from "./provider-connections.ts";
 import {
   LocalStateConflictError,
+  readStateIndex,
+  readStoredChat,
   readState,
   syncState,
   writeState,
 } from "./storage.ts";
 import {
+  readHostedChat,
   readHostedWorkspace,
+  readHostedWorkspaceIndex,
   syncHostedWorkspace,
   validateWorkspaceSync,
   WorkspaceConflictError,
@@ -835,6 +839,37 @@ app.get("/api/state", async (_request, response, next) => {
   }
 });
 
+app.get("/api/state/index", async (_request, response, next) => {
+  try {
+    if (isHosted) {
+      response.status(404).json({ error: "Use the hosted workspace endpoint" });
+      return;
+    }
+    response.setHeader("Cache-Control", "no-store");
+    response.json({ state: await readStateIndex(), revision: 0 });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/state/chats/:chatId", async (request, response, next) => {
+  try {
+    if (isHosted) {
+      response.status(404).json({ error: "Use the hosted workspace endpoint" });
+      return;
+    }
+    const chat = await readStoredChat(request.params.chatId);
+    if (!chat) {
+      response.status(404).json({ error: "Chat not found" });
+      return;
+    }
+    response.setHeader("Cache-Control", "no-store");
+    response.json({ chat });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.put("/api/state", async (request, response, next) => {
   try {
     if (isHosted) {
@@ -882,6 +917,37 @@ app.get("/api/workspace", async (_request, response, next) => {
     }
     response.setHeader("Cache-Control", "no-store");
     response.json(await readHostedWorkspace(owner(response)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/workspace/index", async (_request, response, next) => {
+  try {
+    if (!isHosted) {
+      response.status(404).json({ error: "Hosted workspace storage is disabled" });
+      return;
+    }
+    response.setHeader("Cache-Control", "no-store");
+    response.json(await readHostedWorkspaceIndex(owner(response)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/workspace/chats/:chatId", async (request, response, next) => {
+  try {
+    if (!isHosted) {
+      response.status(404).json({ error: "Hosted workspace storage is disabled" });
+      return;
+    }
+    const chat = await readHostedChat(owner(response), request.params.chatId);
+    if (!chat) {
+      response.status(404).json({ error: "Chat not found" });
+      return;
+    }
+    response.setHeader("Cache-Control", "private, no-store");
+    response.json({ chat });
   } catch (error) {
     next(error);
   }

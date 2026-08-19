@@ -268,6 +268,8 @@ export interface ChatTree {
   title: string;
   pinned?: boolean;
   categoryId?: string | null;
+  /** Present on metadata-only workspace index entries. */
+  branchCount?: number;
   source?: PdfChatSource;
   rootId: string;
   nodes: Record<string, ThreadNode>;
