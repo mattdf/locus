@@ -64,10 +64,10 @@ def test_repairs_pages_and_reuses_completed_cache(
     (pages_dir / "page-0004.md").write_text("```ruby\nMath prose.\n```\n", encoding="utf-8")
     hq_path = result_dir / "book-hq.md"
     hq_path.write_text("unused combined source\n", encoding="utf-8")
-    calls: list[int] = []
+    calls: list[dict[str, Any]] = []
 
     def fake_repair(_settings: RepairSettings, payload: dict[str, Any]) -> dict[str, Any]:
-        calls.append(payload["pageNumber"])
+        calls.append(payload)
         markdown = payload["markdown"].replace("```ruby\n", "").replace("\n```", "")
         return {
             "markdown": markdown,
@@ -75,6 +75,19 @@ def test_repairs_pages_and_reuses_completed_cache(
             "editCount": int(markdown != payload["markdown"]),
             "mathNodeCount": 0,
             "summary": "Removed a false fence" if markdown != payload["markdown"] else "No changes",
+            "furniture": {
+                "headers": [
+                    {
+                        "content": "Page three.",
+                        "align": "left",
+                        "row": 0,
+                        "row_index": 0,
+                        "row_size": 1,
+                        "block_index": 0,
+                    }
+                ] if payload["pageNumber"] == 3 else [],
+                "footers": [],
+            },
             "model": "test-model",
         }
 
@@ -99,10 +112,13 @@ def test_repairs_pages_and_reuses_completed_cache(
         settings=settings,
         store=store,  # type: ignore[arg-type]
     )
-    assert calls == [3, 4]
+    assert [call["pageNumber"] for call in calls] == [3, 4]
+    assert all(len(call["contextPages"]) == 2 for call in calls)
     assert "**Page 3**" in output.read_text(encoding="utf-8")
     assert "```ruby" not in output.read_text(encoding="utf-8")
     assert store.progress[-1]["stage"] == "assembling"
+    layout = result_dir / f"repair-layout-{PROMPT_VERSION}.json"
+    assert '"page": 3' in layout.read_text(encoding="utf-8")
 
     calls.clear()
     cached = repair_document_markdown(
@@ -115,3 +131,54 @@ def test_repairs_pages_and_reuses_completed_cache(
     assert cached == output
     assert calls == []
     assert all(key[-1] == PROMPT_VERSION for key in store.pages)
+
+
+def test_repair_sends_two_pages_on_each_side(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    document_root = tmp_path / "document"
+    result_dir = document_root / "result" / "book"
+    pages_dir = result_dir / "pages-hq"
+    pages_dir.mkdir(parents=True)
+    for page in range(1, 10):
+        (pages_dir / f"page-{page:04d}.md").write_text(
+            f"Running title\n\nBody for page {page}.\n",
+            encoding="utf-8",
+        )
+    hq_path = result_dir / "book-hq.md"
+    hq_path.write_text("unused\n", encoding="utf-8")
+    windows: dict[int, list[int]] = {}
+
+    def fake_repair(_settings: RepairSettings, payload: dict[str, Any]) -> dict[str, Any]:
+        windows[payload["pageNumber"]] = [
+            page["pageNumber"] for page in payload["contextPages"]
+        ]
+        return {
+            "markdown": payload["markdown"],
+            "changed": False,
+            "editCount": 0,
+            "mathNodeCount": 0,
+            "summary": "No changes",
+            "furniture": {"headers": [], "footers": []},
+            "model": "test-model",
+        }
+
+    monkeypatch.setattr(
+        "pdf2markdown.markdown_repair._repair_with_retries",
+        fake_repair,
+    )
+    repair_document_markdown(
+        job={"job_id": "job", "document_id": "document", "user_id": "user"},
+        document_root=document_root,
+        hq_markdown_path=hq_path,
+        settings=RepairSettings(
+            service_url="http://repair.invalid/page",
+            admin_token="test-token",
+        ),
+        store=RepairStore(),  # type: ignore[arg-type]
+    )
+
+    assert windows[5] == [3, 4, 5, 6, 7]
+    assert windows[1] == [1, 2, 3]
+    assert windows[9] == [7, 8, 9]

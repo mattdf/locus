@@ -4,6 +4,8 @@ import path from "node:path";
 import { createPdfSearchPages } from "../../src/lib/pdfVirtualization.ts";
 import {
   applyExactRepairEdits,
+  inferRepeatedRunningFurniture,
+  validateRunningFurniture,
   validateAndNormalizeRepair,
 } from "../../server/pdf-repair.ts";
 
@@ -39,6 +41,81 @@ assert.throws(() => validateAndNormalizeRepair(
   "![figure](assets-hq/page-0001.png)",
   "![figure](https://example.test/changed.png)",
 ));
+
+const runningHeaderPage = [
+  "164",
+  "Chapter 4 Gravitation",
+  "First body paragraph.",
+  "Second body paragraph.",
+  "Third body paragraph.",
+  "Fourth body paragraph.",
+  "A footer mark",
+].join("\n\n");
+const furniture = validateRunningFurniture(runningHeaderPage, [
+  {
+    before: "164",
+    occurrence: 1,
+    kind: "header",
+    align: "left",
+    row: 0,
+    row_index: 0,
+    row_size: 2,
+    confidence: "high",
+  },
+  {
+    before: "Chapter 4 Gravitation",
+    occurrence: 1,
+    kind: "header",
+    align: "right",
+    row: 0,
+    row_index: 1,
+    row_size: 2,
+    confidence: "high",
+  },
+  {
+    before: "Third body paragraph.",
+    occurrence: 1,
+    kind: "header",
+    align: "left",
+    row: 1,
+    row_index: 0,
+    row_size: 1,
+    confidence: "high",
+  },
+]);
+assert.deepEqual(
+  furniture.headers.map((item) => [item.content, item.block_index]),
+  [["164", 0], ["Chapter 4 Gravitation", 1]],
+);
+
+const alternatingPages = [
+  { pageNumber: 180, markdown: "162\n\nChapter 4 Gravitation\n\nBody." },
+  { pageNumber: 181, markdown: "4.3 Lagrangian Formulation\n\n163\n\nBody." },
+  { pageNumber: 182, markdown: "164\n\nChapter 4 Gravitation\n\nBody." },
+  { pageNumber: 183, markdown: "4.4 Properties of Einstein's Equation\n\n165\n\nBody." },
+  { pageNumber: 184, markdown: "166\n\nChapter 4 Gravitation\n\nBody." },
+];
+const inferred = inferRepeatedRunningFurniture(
+  alternatingPages[2].markdown,
+  182,
+  alternatingPages,
+);
+assert.deepEqual(
+  inferred.map((item) => [item.before, item.align]),
+  [["164", "left"], ["Chapter 4 Gravitation", "right"]],
+);
+assert.equal(
+  inferRepeatedRunningFurniture(
+    "4.4 Properties of Einstein's Equation\n\nAn opening paragraph.",
+    183,
+    [
+      { pageNumber: 182, markdown: "Previous body." },
+      { pageNumber: 183, markdown: "4.4 Properties of Einstein's Equation\n\nAn opening paragraph." },
+      { pageNumber: 184, markdown: "Following body." },
+    ],
+  ).length,
+  0,
+);
 
 const workspacePath = path.resolve("data/chats.json");
 const workspace = JSON.parse(await readFile(workspacePath, "utf8")) as {

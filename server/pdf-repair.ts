@@ -27,7 +27,7 @@ import { calculateGenerationCost } from "./pricing.ts";
 import { createProviderClient } from "./providers.ts";
 
 const PROMPT_FILE = path.resolve("PDF_REPAIR_PROMPT.md");
-export const PDF_REPAIR_PROMPT_VERSION = "pdf-markdown-repair-v2";
+export const PDF_REPAIR_PROMPT_VERSION = "pdf-markdown-repair-v4";
 export const PDF_REPAIR_MODEL = process.env.PDF_REPAIR_MODEL?.trim() || "gpt-5.4-mini";
 const MAX_ATTEMPTS = Math.min(
   4,
@@ -53,8 +53,49 @@ interface RepairEdit {
   confidence: "high" | "medium" | "low";
 }
 
+export interface PdfRepairContextPage {
+  pageNumber: number;
+  markdown: string;
+  layoutCandidates?: PdfRepairLayoutCandidate[];
+}
+
+export interface PdfRepairLayoutCandidate {
+  content: string;
+  type: string;
+  align: "left" | "center" | "right";
+  verticalRegion: "top" | "bottom";
+  top: number;
+  bottom: number;
+}
+
+interface RepairFurnitureCandidate {
+  before: string;
+  occurrence: number;
+  kind: "header" | "footer";
+  align: "left" | "center" | "right";
+  row: number;
+  row_index: number;
+  row_size: number;
+  confidence: "high" | "medium" | "low";
+}
+
+export interface PdfRunningFurnitureItem {
+  content: string;
+  align: "left" | "center" | "right";
+  row: number;
+  row_index: number;
+  row_size: number;
+  block_index: number;
+}
+
+export interface PdfRunningFurniture {
+  headers: PdfRunningFurnitureItem[];
+  footers: PdfRunningFurnitureItem[];
+}
+
 interface RepairOutput {
   edits: RepairEdit[];
+  runningFurniture: RepairFurnitureCandidate[];
   summary: string;
 }
 
@@ -174,9 +215,36 @@ function outputSchema() {
           additionalProperties: false,
         },
       },
+      runningFurniture: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            before: { type: "string" },
+            occurrence: { type: "integer" },
+            kind: { type: "string", enum: ["header", "footer"] },
+            align: { type: "string", enum: ["left", "center", "right"] },
+            row: { type: "integer" },
+            row_index: { type: "integer" },
+            row_size: { type: "integer" },
+            confidence: { type: "string", enum: ["high", "medium", "low"] },
+          },
+          required: [
+            "before",
+            "occurrence",
+            "kind",
+            "align",
+            "row",
+            "row_index",
+            "row_size",
+            "confidence",
+          ],
+          additionalProperties: false,
+        },
+      },
       summary: { type: "string" },
     },
-    required: ["edits", "summary"],
+    required: ["edits", "runningFurniture", "summary"],
     additionalProperties: false,
   } as const;
 }
@@ -217,6 +285,177 @@ export function applyExactRepairEdits(source: string, edits: RepairEdit[]): stri
     cursor = replacement.end;
   }
   return output + source.slice(cursor);
+}
+
+interface MarkdownBoundaryBlock {
+  content: string;
+  start: number;
+  end: number;
+}
+
+function markdownBoundaryBlocks(source: string): MarkdownBoundaryBlock[] {
+  const blocks: MarkdownBoundaryBlock[] = [];
+  const expression = /(?:^|\n[ \t]*\n)([\s\S]*?)(?=\n[ \t]*\n|$)/g;
+  for (const match of source.matchAll(expression)) {
+    const raw = match[1] ?? "";
+    const leading = raw.length - raw.trimStart().length;
+    const content = raw.trim();
+    if (!content) continue;
+    const start = (match.index ?? 0) + match[0].indexOf(raw) + leading;
+    blocks.push({ content, start, end: start + content.length });
+  }
+  return blocks;
+}
+
+function safeFurnitureBlock(content: string): boolean {
+  if (!content || content.length > 500) return false;
+  if (/```|~~~|!\[[^\]]*\]\(|<img\b|^\s*\|/im.test(content)) return false;
+  if (/^\s*\$\$[\s\S]*\$\$\s*$/.test(content)) return false;
+  return true;
+}
+
+function occurrenceAt(source: string, block: MarkdownBoundaryBlock): number {
+  let occurrence = 0;
+  let cursor = 0;
+  while (cursor <= block.start) {
+    const found = source.indexOf(block.content, cursor);
+    if (found < 0 || found > block.start) break;
+    occurrence += 1;
+    if (found === block.start) return occurrence;
+    cursor = found + Math.max(1, block.content.length);
+  }
+  return Math.max(1, occurrence);
+}
+
+function printedPageNumber(content: string): number | null {
+  const match = /^(?:\*\*)?(\d{1,4})(?:\*\*)?$/.exec(content.trim());
+  return match ? Number(match[1]) : null;
+}
+
+function plausibleRunningTitle(content: string): boolean {
+  const normalized = content.replace(/[*_`#]/g, "").trim();
+  if (!safeFurnitureBlock(content) || normalized.length < 3 || normalized.length > 180) {
+    return false;
+  }
+  if (/\n|[.!?;:]$/.test(normalized)) return false;
+  const words = normalized.split(/\s+/);
+  return words.length >= 2 && words.length <= 20 && /\p{L}/u.test(normalized);
+}
+
+interface RunningHeaderPair {
+  pageNumber: number;
+  printedNumber: number;
+  blocks: [MarkdownBoundaryBlock, MarkdownBoundaryBlock];
+  title: string;
+}
+
+function runningHeaderPair(page: PdfRepairContextPage): RunningHeaderPair | null {
+  const blocks = markdownBoundaryBlocks(page.markdown).slice(0, 2);
+  if (blocks.length !== 2) return null;
+  const numbers = blocks.map((block) => printedPageNumber(block.content));
+  const numberIndex = numbers[0] !== null ? 0 : numbers[1] !== null ? 1 : -1;
+  if (numberIndex < 0 || numbers[1 - numberIndex] !== null) return null;
+  const title = blocks[1 - numberIndex].content;
+  if (!plausibleRunningTitle(title)) return null;
+  return {
+    pageNumber: page.pageNumber,
+    printedNumber: numbers[numberIndex]!,
+    blocks: blocks as [MarkdownBoundaryBlock, MarkdownBoundaryBlock],
+    title,
+  };
+}
+
+export function inferRepeatedRunningFurniture(
+  source: string,
+  pageNumber: number,
+  contextPages: PdfRepairContextPage[],
+): RepairFurnitureCandidate[] {
+  const pairs = contextPages
+    .map(runningHeaderPair)
+    .filter((pair): pair is RunningHeaderPair => pair !== null)
+    .sort((left, right) => left.pageNumber - right.pageNumber);
+  const current = pairs.find((pair) => pair.pageNumber === pageNumber);
+  if (!current || pairs.length < 3) return [];
+
+  const consecutive = pairs.every((pair, index) => {
+    if (index === 0) return true;
+    const previous = pairs[index - 1];
+    return (
+      pair.printedNumber - previous.printedNumber ===
+      pair.pageNumber - previous.pageNumber
+    );
+  });
+  if (!consecutive) return [];
+
+  const titleCounts = new Map<string, number>();
+  for (const pair of pairs) {
+    const title = pair.title.replace(/\s+/g, " ").trim().toLocaleLowerCase();
+    titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1);
+  }
+  if (Math.max(...titleCounts.values()) < 2) return [];
+
+  return current.blocks.map((block, index) => ({
+    before: block.content,
+    occurrence: occurrenceAt(source, block),
+    kind: "header" as const,
+    align: index === 0 ? "left" as const : "right" as const,
+    row: 0,
+    row_index: index,
+    row_size: 2,
+    confidence: "high" as const,
+  }));
+}
+
+export function validateRunningFurniture(
+  source: string,
+  candidates: RepairFurnitureCandidate[],
+): PdfRunningFurniture {
+  const blocks = markdownBoundaryBlocks(source);
+  const boundarySize = Math.min(4, blocks.length);
+  const headers = new Set(blocks.slice(0, boundarySize).map((block) => block.start));
+  const footers = new Set(blocks.slice(-boundarySize).map((block) => block.start));
+  const accepted: Array<RepairFurnitureCandidate & { start: number; block_index: number }> = [];
+
+  for (const candidate of candidates) {
+    if (candidate.confidence !== "high" || !safeFurnitureBlock(candidate.before)) continue;
+    if (
+      !Number.isSafeInteger(candidate.occurrence) || candidate.occurrence < 1 ||
+      !Number.isSafeInteger(candidate.row) || candidate.row < 0 || candidate.row > 8 ||
+      !Number.isSafeInteger(candidate.row_index) || candidate.row_index < 0 ||
+      !Number.isSafeInteger(candidate.row_size) || candidate.row_size < 1 ||
+      candidate.row_size > 8 || candidate.row_index >= candidate.row_size
+    ) continue;
+    const start = nthOccurrence(source, candidate.before, candidate.occurrence);
+    const block = blocks.find(
+      (item) => item.start === start && item.content === candidate.before,
+    );
+    if (!block) continue;
+    const allowed = candidate.kind === "header" ? headers : footers;
+    if (!allowed.has(start)) continue;
+    if (accepted.some((item) => item.start === start)) continue;
+    accepted.push({ ...candidate, start, block_index: blocks.indexOf(block) });
+  }
+
+  const mapItem = (
+    item: RepairFurnitureCandidate & { block_index: number },
+  ): PdfRunningFurnitureItem => ({
+    content: item.before,
+    align: item.align,
+    row: item.row,
+    row_index: item.row_index,
+    row_size: item.row_size,
+    block_index: item.block_index,
+  });
+  return {
+    headers: accepted
+      .filter((item) => item.kind === "header")
+      .sort((left, right) => left.start - right.start)
+      .map(mapItem),
+    footers: accepted
+      .filter((item) => item.kind === "footer")
+      .sort((left, right) => left.start - right.start)
+      .map(mapItem),
+  };
 }
 
 function destinations(markdown: string): string[] {
@@ -450,12 +689,15 @@ export async function repairPdfMarkdownPage(input: {
   markdown: string;
   previousMarkdown?: string;
   nextMarkdown?: string;
+  contextPages?: PdfRepairContextPage[];
+  layoutCandidates?: PdfRepairLayoutCandidate[];
 }): Promise<{
   markdown: string;
   changed: boolean;
   editCount: number;
   mathNodeCount: number;
   summary: string;
+  furniture: PdfRunningFurniture;
   model: string;
   promptVersion: string;
 }> {
@@ -485,6 +727,7 @@ export async function repairPdfMarkdownPage(input: {
     let validated: { markdown: string; mathNodeCount: number } | null = null;
     let editCount = 0;
     let summary = "";
+    let furniture: PdfRunningFurniture = { headers: [], footers: [] };
     let lastFailure = feedback.length
       ? `KaTeX validation failed:\n- ${feedback.join("\n- ")}`
       : "No parser failure was detected; inspect for other unambiguous OCR Markdown structure defects.";
@@ -499,9 +742,34 @@ export async function repairPdfMarkdownPage(input: {
           `PAGE_NUMBER: ${input.pageNumber}`,
           `SOURCE_SHA256: ${input.sourceSha256}`,
           `<VALIDATOR_FEEDBACK>\n${lastFailure}\n</VALIDATOR_FEEDBACK>`,
-          `<PREVIOUS_PAGE_READ_ONLY>\n${input.previousMarkdown ?? ""}\n</PREVIOUS_PAGE_READ_ONLY>`,
+          `<FIVE_PAGE_CONTEXT_READ_ONLY>\n${(
+            input.contextPages?.length
+              ? input.contextPages
+                  .filter((page) => page.pageNumber !== input.pageNumber)
+                  .map((page) => [
+                    `--- PDF PAGE ${page.pageNumber} ---`,
+                    page.markdown,
+                    page.layoutCandidates?.length
+                      ? `LAYOUT CANDIDATES: ${JSON.stringify(page.layoutCandidates)}`
+                      : "",
+                  ].filter(Boolean).join("\n"))
+                  .join("\n\n")
+              : [
+                  input.previousMarkdown
+                    ? `--- PREVIOUS PDF PAGE ---\n${input.previousMarkdown}`
+                    : "",
+                  input.nextMarkdown
+                    ? `--- NEXT PDF PAGE ---\n${input.nextMarkdown}`
+                    : "",
+                ].filter(Boolean).join("\n\n")
+          )}\n</FIVE_PAGE_CONTEXT_READ_ONLY>`,
+          `<CURRENT_PAGE_LAYOUT_CANDIDATES>\n${JSON.stringify(
+            input.layoutCandidates ??
+              input.contextPages?.find((page) => page.pageNumber === input.pageNumber)
+                ?.layoutCandidates ??
+              [],
+          )}\n</CURRENT_PAGE_LAYOUT_CANDIDATES>`,
           `<CURRENT_PAGE>\n${working}\n</CURRENT_PAGE>`,
-          `<NEXT_PAGE_READ_ONLY>\n${input.nextMarkdown ?? ""}\n</NEXT_PAGE_READ_ONLY>`,
         ].join("\n\n"),
         reasoning: { effort: "low" },
         max_output_tokens: MAX_OUTPUT_TOKENS,
@@ -524,7 +792,11 @@ export async function repairPdfMarkdownPage(input: {
       }
       try {
         const parsed = JSON.parse(response.output_text) as RepairOutput;
-        if (!Array.isArray(parsed.edits) || typeof parsed.summary !== "string") {
+        if (
+          !Array.isArray(parsed.edits) ||
+          !Array.isArray(parsed.runningFurniture) ||
+          typeof parsed.summary !== "string"
+        ) {
           throw new PdfRepairError("The repair model returned an invalid edit set");
         }
         const acceptedEdits = parsed.edits.filter((edit) => edit.confidence === "high");
@@ -534,6 +806,19 @@ export async function repairPdfMarkdownPage(input: {
         summary = parsed.summary;
         try {
           validated = validateAndNormalizeRepair(input.markdown, candidate);
+          const repeatedFurniture = inferRepeatedRunningFurniture(
+            validated.markdown,
+            input.pageNumber,
+            input.contextPages ?? [],
+          );
+          furniture = validateRunningFurniture(
+            validated.markdown,
+            // A consecutive printed-page sequence plus an alternating title
+            // is stronger alignment evidence than a coordinate-free model
+            // guess. Put that narrow deterministic result first; exact-block
+            // deduplication still lets the model supply every other case.
+            [...repeatedFurniture, ...parsed.runningFurniture],
+          );
           working = validated.markdown;
           break;
         } catch (error) {
@@ -572,6 +857,7 @@ export async function repairPdfMarkdownPage(input: {
       editCount,
       mathNodeCount: validated.mathNodeCount,
       summary,
+      furniture,
       model: PDF_REPAIR_MODEL,
       promptVersion: PDF_REPAIR_PROMPT_VERSION,
     };

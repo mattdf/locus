@@ -185,6 +185,30 @@ function isChat(value: unknown): value is ChatTree {
           Number.isSafeInteger(value.source.processedPageCount)
         ) &&
         (
+          value.source.pageFurniture === undefined ||
+          (
+            Array.isArray(value.source.pageFurniture) &&
+            value.source.pageFurniture.every((page) =>
+              isRecord(page) &&
+              Number.isSafeInteger(page.page) &&
+              Array.isArray(page.headers) &&
+              Array.isArray(page.footers) &&
+              [...page.headers, ...page.footers].every((item) =>
+                isRecord(item) &&
+                typeof item.content === "string" &&
+                ["left", "center", "right"].includes(String(item.align)) &&
+                Number.isSafeInteger(item.row) &&
+                Number.isSafeInteger(item.row_index) &&
+                Number.isSafeInteger(item.row_size) &&
+                (
+                  item.block_index === undefined || item.block_index === null ||
+                  Number.isSafeInteger(item.block_index)
+                )
+              )
+            )
+          )
+        ) &&
+        (
           value.source.status === "importing" ||
           value.source.status === "ready" ||
           value.source.status === "error"

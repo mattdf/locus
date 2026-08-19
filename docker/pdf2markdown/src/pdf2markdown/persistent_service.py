@@ -42,8 +42,8 @@ from .mistral_images import (
     upgrade_document_images,
 )
 from .mistral_ocr import DEFAULT_MODEL, process_pdf, read_api_key
-from .markdown_repair import RepairSettings, repair_document_markdown
-from .page_furniture import document_furniture
+from .markdown_repair import PROMPT_VERSION, RepairSettings, repair_document_markdown
+from .page_furniture import document_furniture, merge_document_furniture
 from .persistent_store import (
     PersistentStore,
     QuotaExceededError,
@@ -1416,10 +1416,18 @@ def create_app(
                 status_code=500,
                 detail="OCR layout result is unreadable",
             ) from exc
-        return document_furniture(
+        ocr_furniture = document_furniture(
             response,
             page_number_offset=int(document.get("page_start") or 1) - 1,
         )
+        model_layout_path = result_root / f"repair-layout-{PROMPT_VERSION}.json"
+        model_furniture = None
+        if model_layout_path.is_file():
+            try:
+                model_furniture = json.loads(model_layout_path.read_text("utf-8"))
+            except (OSError, json.JSONDecodeError):
+                model_furniture = None
+        return merge_document_furniture(ocr_furniture, model_furniture)
 
     @application.get(
         "/v1/documents/{document_id}/{asset_collection}/{asset_path:path}",

@@ -174,6 +174,7 @@ import type {
   ProviderModelOption,
   PromptProfilePurpose,
   PdfChatSource,
+  PdfPageFurniture,
   ReasoningEffort,
   SelectionDraft,
   SelectionAction,
@@ -3045,12 +3046,23 @@ export default function App({
           }
           if (job.status !== "completed") return;
 
-          const markdownResponse = await fetch(
-            `/api/pdf-documents/${encodeURIComponent(item.documentId)}/markdown`,
-            { cache: "no-store", credentials: "same-origin" },
-          );
+          const [markdownResponse, layoutResponse] = await Promise.all([
+            fetch(
+              `/api/pdf-documents/${encodeURIComponent(item.documentId)}/markdown`,
+              { cache: "no-store", credentials: "same-origin" },
+            ),
+            fetch(
+              `/api/pdf-documents/${encodeURIComponent(item.documentId)}/layout`,
+              { cache: "no-store", credentials: "same-origin" },
+            ).catch(() => null),
+          ]);
           const markdown = await markdownResponse.text();
           if (!markdownResponse.ok) return;
+          const layout = layoutResponse?.ok
+            ? await layoutResponse.json().catch(() => null) as
+                | { pages?: PdfPageFurniture[] }
+                | null
+            : null;
           const updatedAt = timestamp();
           setWorkspace((current) => ({
             ...current,
@@ -3063,7 +3075,14 @@ export default function App({
               const root = chat.nodes[chat.rootId];
               return {
                 ...chat,
-                source: { ...chat.source, status: "ready", error: undefined },
+                source: {
+                  ...chat.source,
+                  status: "ready",
+                  error: undefined,
+                  pageFurniture: Array.isArray(layout?.pages)
+                    ? layout.pages
+                    : chat.source.pageFurniture,
+                },
                 updatedAt,
                 nodes: {
                   ...chat.nodes,

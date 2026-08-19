@@ -649,8 +649,9 @@ export function ThreadView({
   }, [pdfMarkdown, pdfSource?.documentId]);
 
   useEffect(() => {
-    setPdfFurniture([]);
+    setPdfFurniture(pdfSource?.pageFurniture ?? []);
     if (!pdfSource) return;
+    if (pdfSource.pageFurniture !== undefined) return;
     const controller = new AbortController();
     void fetch(
       `/api/pdf-documents/${encodeURIComponent(pdfSource.documentId)}/layout`,
@@ -671,7 +672,7 @@ export function ThreadView({
         // fully usable when an older worker does not expose them.
       });
     return () => controller.abort();
-  }, [pdfSource?.documentId]);
+  }, [pdfSource?.documentId, pdfSource?.pageFurniture]);
 
   useLayoutEffect(() => {
     const sourceMessage = pdfSource
@@ -738,7 +739,10 @@ export function ThreadView({
         .slice(Math.max(0, markerIndex + 1))
         .filter((element) => element.tagName !== "HR");
       pageFurniture.headers.forEach((item, index) => {
-        const element = pageBlocks[index];
+        const element =
+          item.block_index !== undefined && item.block_index !== null
+            ? pageBlocks[item.block_index]
+            : pageBlocks[index];
         if (element) applyFurniture(element, "header", item);
       });
       const footerStart = Math.max(
@@ -746,7 +750,10 @@ export function ThreadView({
         pageBlocks.length - pageFurniture.footers.length,
       );
       pageFurniture.footers.forEach((item, index) => {
-        const element = pageBlocks[footerStart + index];
+        const element =
+          item.block_index !== undefined && item.block_index !== null
+            ? pageBlocks[item.block_index]
+            : pageBlocks[footerStart + index];
         if (element) applyFurniture(element, "footer", item);
       });
     });

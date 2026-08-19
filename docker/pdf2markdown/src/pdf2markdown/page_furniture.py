@@ -19,6 +19,18 @@ def _content_is_present(markdown: str, content: str) -> bool:
     return _normalized_text(content) in _normalized_text(markdown)
 
 
+def _markdown_blocks(markdown: str) -> list[str]:
+    return [block.strip() for block in re.split(r"\n[ \t]*\n", markdown) if block.strip()]
+
+
+def _content_block_index(markdown: str, content: str) -> int | None:
+    target = _normalized_text(content)
+    for index, block in enumerate(_markdown_blocks(markdown)):
+        if block == content.strip() or _normalized_text(block) == target:
+            return index
+    return None
+
+
 def _alignment(block: dict[str, Any], page_width: float) -> str:
     left = float(block.get("top_left_x") or 0)
     right = float(block.get("bottom_right_x") or left)
@@ -35,6 +47,7 @@ def _alignment(block: dict[str, Any], page_width: float) -> str:
 def _group_rows(
     blocks: list[dict[str, Any]],
     *,
+    markdown: str,
     page_height: float,
     page_width: float,
 ) -> list[dict[str, Any]]:
@@ -71,6 +84,10 @@ def _group_rows(
                     "row": row_index,
                     "row_index": item_index,
                     "row_size": len(row),
+                    "block_index": _content_block_index(
+                        markdown,
+                        str(block.get("content") or ""),
+                    ),
                 }
             )
     return result
@@ -103,11 +120,13 @@ def page_furniture(
 
     headers = _group_rows(
         by_type["header"],
+        markdown=markdown,
         page_height=page_height,
         page_width=page_width,
     )
     footers = _group_rows(
         by_type["footer"],
+        markdown=markdown,
         page_height=page_height,
         page_width=page_width,
     )
@@ -117,6 +136,91 @@ def page_furniture(
         "page": page_number,
         "headers": headers,
         "footers": footers,
+    }
+
+
+def boundary_layout_candidates(page: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return compact OCR geometry for blocks near the top/bottom page edges."""
+
+    dimensions = page.get("dimensions") or {}
+    page_width = float(dimensions.get("width") or 0)
+    page_height = float(dimensions.get("height") or 0)
+    if page_height <= 0:
+        return []
+    candidates: list[dict[str, Any]] = []
+    for block in page.get("blocks") or []:
+        content = str(block.get("content") or "").strip()
+        if not content:
+            continue
+        top = float(block.get("top_left_y") or 0)
+        bottom = float(block.get("bottom_right_y") or top)
+        center = (top + bottom) / 2
+        if center <= page_height * 0.20:
+            region = "top"
+        elif center >= page_height * 0.80:
+            region = "bottom"
+        else:
+            continue
+        candidates.append(
+            {
+                "content": content[:2000],
+                "type": str(block.get("type") or "unknown")[:80],
+                "align": _alignment(block, page_width),
+                "verticalRegion": region,
+                "top": round(top / page_height, 5),
+                "bottom": round(bottom / page_height, 5),
+            }
+        )
+    return candidates[:24]
+
+
+def merge_document_furniture(
+    ocr: dict[str, Any],
+    model: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Merge model-classified furniture with OCR-native semantic blocks."""
+
+    if not model:
+        return ocr
+    pages: dict[int, dict[str, Any]] = {
+        int(page["page"]): {
+            "page": int(page["page"]),
+            "headers": list(page.get("headers") or []),
+            "footers": list(page.get("footers") or []),
+        }
+        for page in ocr.get("pages") or []
+    }
+    for classified in model.get("pages") or []:
+        page_number = int(classified.get("page") or 0)
+        if page_number < 1:
+            continue
+        target = pages.setdefault(
+            page_number,
+            {"page": page_number, "headers": [], "footers": []},
+        )
+        for key in ("headers", "footers"):
+            existing = {
+                _normalized_text(str(item.get("content") or ""))
+                for item in target[key]
+            }
+            for item in classified.get(key) or []:
+                normalized = _normalized_text(str(item.get("content") or ""))
+                if not normalized or normalized in existing:
+                    continue
+                target[key].append(item)
+                existing.add(normalized)
+            target[key].sort(
+                key=lambda item: (
+                    int(item.get("block_index"))
+                    if item.get("block_index") is not None
+                    else 1_000_000,
+                    int(item.get("row") or 0),
+                    int(item.get("row_index") or 0),
+                )
+            )
+    return {
+        "page_count": int(ocr.get("page_count") or model.get("page_count") or 0),
+        "pages": [pages[number] for number in sorted(pages)],
     }
 
 

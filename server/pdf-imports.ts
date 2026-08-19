@@ -89,6 +89,7 @@ export interface PdfPageFurnitureItem {
   row: number;
   row_index: number;
   row_size: number;
+  block_index?: number | null;
 }
 
 export interface PdfPageFurniture {

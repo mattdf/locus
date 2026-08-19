@@ -1,4 +1,9 @@
-from pdf2markdown.page_furniture import document_furniture, page_furniture
+from pdf2markdown.page_furniture import (
+    boundary_layout_candidates,
+    document_furniture,
+    merge_document_furniture,
+    page_furniture,
+)
 
 
 def test_page_furniture_preserves_alignment_and_shared_rows():
@@ -56,6 +61,7 @@ def test_page_furniture_preserves_alignment_and_shared_rows():
             "row": 0,
             "row_index": 0,
             "row_size": 1,
+            "block_index": 3,
         }
     ]
 
@@ -118,3 +124,103 @@ def test_document_furniture_applies_page_range_offset():
     assert result["page_count"] == 1
     assert result["pages"][0]["page"] == 100
     assert result["pages"][0]["headers"][0]["align"] == "right"
+    assert result["pages"][0]["headers"][0]["block_index"] == 0
+
+
+def test_boundary_layout_candidates_keep_only_page_edges():
+    page = {
+        "dimensions": {"width": 800, "height": 1000},
+        "blocks": [
+            {
+                "type": "text",
+                "content": "164",
+                "top_left_x": 40,
+                "top_left_y": 20,
+                "bottom_right_x": 70,
+                "bottom_right_y": 40,
+            },
+            {
+                "type": "text",
+                "content": "Body paragraph",
+                "top_left_x": 80,
+                "top_left_y": 300,
+                "bottom_right_x": 720,
+                "bottom_right_y": 340,
+            },
+            {
+                "type": "text",
+                "content": "CAMBRIDGE UNIVERSITY PRESS",
+                "top_left_x": 300,
+                "top_left_y": 960,
+                "bottom_right_x": 500,
+                "bottom_right_y": 980,
+            },
+        ],
+    }
+
+    candidates = boundary_layout_candidates(page)
+
+    assert [item["content"] for item in candidates] == [
+        "164",
+        "CAMBRIDGE UNIVERSITY PRESS",
+    ]
+    assert candidates[0]["verticalRegion"] == "top"
+    assert candidates[0]["align"] == "left"
+    assert candidates[1]["verticalRegion"] == "bottom"
+    assert candidates[1]["align"] == "center"
+
+
+def test_model_furniture_augments_ocr_furniture_without_duplicates():
+    ocr = {
+        "page_count": 1,
+        "pages": [
+            {
+                "page": 181,
+                "headers": [
+                    {
+                        "content": "164",
+                        "align": "left",
+                        "row": 0,
+                        "row_index": 0,
+                        "row_size": 2,
+                        "block_index": 0,
+                    }
+                ],
+                "footers": [],
+            }
+        ],
+    }
+    model = {
+        "page_count": 1,
+        "pages": [
+            {
+                "page": 181,
+                "headers": [
+                    {
+                        "content": "164",
+                        "align": "left",
+                        "row": 0,
+                        "row_index": 0,
+                        "row_size": 2,
+                        "block_index": 0,
+                    },
+                    {
+                        "content": "Chapter 4 Gravitation",
+                        "align": "right",
+                        "row": 0,
+                        "row_index": 1,
+                        "row_size": 2,
+                        "block_index": 1,
+                    },
+                ],
+                "footers": [],
+            }
+        ],
+    }
+
+    result = merge_document_furniture(ocr, model)
+
+    assert [item["content"] for item in result["pages"][0]["headers"]] == [
+        "164",
+        "Chapter 4 Gravitation",
+    ]

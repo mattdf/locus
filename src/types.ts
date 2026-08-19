@@ -239,6 +239,8 @@ export interface PdfChatSource {
   pageStart?: number;
   pageEnd?: number;
   processedPageCount?: number;
+  /** Portable running-header/footer metadata captured by the formatter. */
+  pageFurniture?: PdfPageFurniture[];
   status: "importing" | "ready" | "error";
   error?: string;
 }
@@ -255,6 +257,7 @@ export interface PdfPageFurnitureItem {
   row: number;
   row_index: number;
   row_size: number;
+  block_index?: number | null;
 }
 
 export interface PdfPageFurniture {

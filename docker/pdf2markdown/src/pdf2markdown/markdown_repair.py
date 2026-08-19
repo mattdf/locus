@@ -14,10 +14,11 @@ from pathlib import Path
 from typing import Any
 
 from .markdown_pages import format_markdown_page
+from .page_furniture import boundary_layout_candidates
 from .persistent_store import PersistentStore
 
 
-PROMPT_VERSION = "pdf-markdown-repair-v2"
+PROMPT_VERSION = "pdf-markdown-repair-v4"
 PAGE_FILE_PATTERN = re.compile(r"^page-(\d+)\.md$")
 
 
@@ -40,6 +41,7 @@ class RepairSettings:
     admin_token: str
     timeout_seconds: int = 300
     neighbour_characters: int = 8000
+    context_page_radius: int = 2
 
 
 def _sha256_text(value: str) -> str:
@@ -117,6 +119,31 @@ def _atomic_write(path: Path, content: str) -> None:
     os.replace(temporary, path)
 
 
+def _context_excerpt(markdown: str, limit: int) -> str:
+    """Keep both page edges; running furniture lives at either boundary."""
+
+    if len(markdown) <= limit:
+        return markdown
+    edge = max(1, limit // 2)
+    return (
+        markdown[:edge].rstrip()
+        + "\n\n[... middle of page omitted ...]\n\n"
+        + markdown[-edge:].lstrip()
+    )
+
+
+def _load_ocr_pages(result_root: Path) -> list[dict[str, Any]]:
+    response_path = result_root / "response.json"
+    if not response_path.is_file():
+        return []
+    try:
+        response = json.loads(response_path.read_text("utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    pages = response.get("pages") if isinstance(response, dict) else None
+    return pages if isinstance(pages, list) else []
+
+
 def repair_document_markdown(
     *,
     job: dict[str, Any],
@@ -156,11 +183,18 @@ def repair_document_markdown(
     )
 
     source_markdown = [path.read_text(encoding="utf-8") for _, path in pages]
+    ocr_pages = _load_ocr_pages(hq_markdown_path.parent)
+    layout_by_position = [
+        boundary_layout_candidates(page) if isinstance(page, dict) else []
+        for page in ocr_pages
+    ]
+    model_layout_pages: list[dict[str, Any]] = []
     for position, ((page_number, source_path), markdown) in enumerate(
         zip(pages, source_markdown, strict=True)
     ):
         source_sha256 = _sha256_text(markdown)
         output_path = repaired_pages_dir / source_path.name
+        layout_path = repaired_pages_dir / f"{source_path.stem}.layout.json"
         result_relpath = output_path.relative_to(document_root).as_posix()
         cached = store.get_repair_page(
             document_id=job["document_id"],
@@ -175,6 +209,10 @@ def repair_document_markdown(
         ):
             repaired = output_path.read_text(encoding="utf-8")
             changed = bool(cached.get("changed"))
+            try:
+                furniture = json.loads(layout_path.read_text("utf-8"))
+            except (OSError, json.JSONDecodeError):
+                furniture = {"headers": [], "footers": []}
             report_pages.append(
                 {
                     "page": page_number,
@@ -203,6 +241,29 @@ def repair_document_markdown(
                         "pageNumber": page_number,
                         "sourceSha256": source_sha256,
                         "markdown": markdown,
+                        "contextPages": [
+                            {
+                                "pageNumber": pages[context_position][0],
+                                "markdown": _context_excerpt(
+                                    source_markdown[context_position],
+                                    settings.neighbour_characters,
+                                ),
+                                "layoutCandidates": (
+                                    layout_by_position[context_position]
+                                    if context_position < len(layout_by_position)
+                                    else []
+                                ),
+                            }
+                            for context_position in range(
+                                max(0, position - settings.context_page_radius),
+                                min(total, position + settings.context_page_radius + 1),
+                            )
+                        ],
+                        "layoutCandidates": (
+                            layout_by_position[position]
+                            if position < len(layout_by_position)
+                            else []
+                        ),
                         "previousMarkdown": (
                             source_markdown[position - 1][
                                 -settings.neighbour_characters :
@@ -221,7 +282,17 @@ def repair_document_markdown(
                 )
                 repaired = str(result["markdown"])
                 changed = bool(result.get("changed"))
+                raw_furniture = result.get("furniture")
+                furniture = (
+                    raw_furniture
+                    if isinstance(raw_furniture, dict)
+                    else {"headers": [], "footers": []}
+                )
                 _atomic_write(output_path, repaired)
+                _atomic_write(
+                    layout_path,
+                    json.dumps(furniture, ensure_ascii=False, indent=2),
+                )
                 store.finish_repair_page(
                     document_id=job["document_id"],
                     page_number=page_number,
@@ -258,7 +329,12 @@ def repair_document_markdown(
                 # Publish the immutable HQ page and record it for review.
                 repaired = markdown
                 changed = False
+                furniture = {"headers": [], "footers": []}
                 _atomic_write(output_path, repaired)
+                _atomic_write(
+                    layout_path,
+                    json.dumps(furniture, ensure_ascii=False, indent=2),
+                )
                 failed_pages += 1
                 report_pages.append(
                     {
@@ -271,6 +347,14 @@ def repair_document_markdown(
 
         if changed:
             changed_pages += 1
+        if furniture.get("headers") or furniture.get("footers"):
+            model_layout_pages.append(
+                {
+                    "page": page_number,
+                    "headers": list(furniture.get("headers") or []),
+                    "footers": list(furniture.get("footers") or []),
+                }
+            )
         combined.append(format_markdown_page(page_number, repaired))
         store.set_job_progress(
             job["job_id"],
@@ -293,6 +377,14 @@ def repair_document_markdown(
     )
     output_path = hq_markdown_path.parent / f"source-{PROMPT_VERSION}.md"
     _atomic_write(output_path, "\n\n".join(combined))
+    _atomic_write(
+        hq_markdown_path.parent / f"repair-layout-{PROMPT_VERSION}.json",
+        json.dumps(
+            {"page_count": total, "pages": model_layout_pages},
+            ensure_ascii=False,
+            indent=2,
+        ),
+    )
     report = {
         "prompt_version": PROMPT_VERSION,
         "source_markdown": hq_markdown_path.name,

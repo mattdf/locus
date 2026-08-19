@@ -224,6 +224,29 @@ app.use(express.json({ limit: isHosted ? "32mb" : "100mb" }));
 app.post("/api/internal/pdf-repair/page", async (request, response) => {
   if (!requirePdfRepairInternalToken(request, response)) return;
   const body = request.body ?? {};
+  const validLayoutCandidates = (value: unknown): boolean =>
+    value === undefined || (
+      Array.isArray(value) && value.length <= 24 && value.every((candidate) =>
+        candidate && typeof candidate === "object" &&
+        typeof candidate.content === "string" && candidate.content.length <= 2_000 &&
+        typeof candidate.type === "string" && candidate.type.length <= 80 &&
+        ["left", "center", "right"].includes(candidate.align) &&
+        ["top", "bottom"].includes(candidate.verticalRegion) &&
+        typeof candidate.top === "number" && Number.isFinite(candidate.top) &&
+        typeof candidate.bottom === "number" && Number.isFinite(candidate.bottom)
+      )
+    );
+  const validContextPages = body.contextPages === undefined || (
+    Array.isArray(body.contextPages) && body.contextPages.length <= 5 &&
+    body.contextPages.every((page: unknown) =>
+      page && typeof page === "object" &&
+      Number.isSafeInteger((page as { pageNumber?: unknown }).pageNumber) &&
+      Number((page as { pageNumber?: unknown }).pageNumber) >= 1 &&
+      typeof (page as { markdown?: unknown }).markdown === "string" &&
+      String((page as { markdown?: unknown }).markdown).length <= 20_000 &&
+      validLayoutCandidates((page as { layoutCandidates?: unknown }).layoutCandidates)
+    )
+  );
   if (
     typeof body.ownerUserId !== "string" || !body.ownerUserId.trim() ||
     typeof body.jobId !== "string" || !body.jobId.trim() ||
@@ -232,7 +255,8 @@ app.post("/api/internal/pdf-repair/page", async (request, response) => {
     typeof body.sourceSha256 !== "string" || !/^[a-f0-9]{64}$/i.test(body.sourceSha256) ||
     typeof body.markdown !== "string" || body.markdown.length > 2_000_000 ||
     (body.previousMarkdown !== undefined && typeof body.previousMarkdown !== "string") ||
-    (body.nextMarkdown !== undefined && typeof body.nextMarkdown !== "string")
+    (body.nextMarkdown !== undefined && typeof body.nextMarkdown !== "string") ||
+    !validContextPages || !validLayoutCandidates(body.layoutCandidates)
   ) {
     response.status(400).json({ error: "Invalid PDF repair page request" });
     return;
@@ -248,6 +272,23 @@ app.post("/api/internal/pdf-repair/page", async (request, response) => {
       markdown: body.markdown,
       previousMarkdown: body.previousMarkdown?.slice(-8_000),
       nextMarkdown: body.nextMarkdown?.slice(0, 8_000),
+      contextPages: body.contextPages?.map((page: {
+        pageNumber: number;
+        markdown: string;
+        layoutCandidates?: Array<{
+          content: string;
+          type: string;
+          align: "left" | "center" | "right";
+          verticalRegion: "top" | "bottom";
+          top: number;
+          bottom: number;
+        }>;
+      }) => ({
+        pageNumber: page.pageNumber,
+        markdown: page.markdown,
+        layoutCandidates: page.layoutCandidates,
+      })),
+      layoutCandidates: body.layoutCandidates,
     }));
   } catch (error) {
     const resolved = pdfRepairHttpError(error);
