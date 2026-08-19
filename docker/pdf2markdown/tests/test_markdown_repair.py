@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -112,7 +114,7 @@ def test_repairs_pages_and_reuses_completed_cache(
         settings=settings,
         store=store,  # type: ignore[arg-type]
     )
-    assert [call["pageNumber"] for call in calls] == [3, 4]
+    assert sorted(call["pageNumber"] for call in calls) == [3, 4]
     assert all(len(call["contextPages"]) == 2 for call in calls)
     assert "**Page 3**" in output.read_text(encoding="utf-8")
     assert "```ruby" not in output.read_text(encoding="utf-8")
@@ -182,3 +184,77 @@ def test_repair_sends_two_pages_on_each_side(
     assert windows[5] == [3, 4, 5, 6, 7]
     assert windows[1] == [1, 2, 3]
     assert windows[9] == [7, 8, 9]
+
+
+def test_repairs_pages_concurrently_but_assembles_in_page_order(
+    tmp_path: Path,
+    monkeypatch: Any,
+) -> None:
+    document_root = tmp_path / "document"
+    result_dir = document_root / "result" / "book"
+    pages_dir = result_dir / "pages-hq"
+    pages_dir.mkdir(parents=True)
+    for page in range(1, 13):
+        (pages_dir / f"page-{page:04d}.md").write_text(
+            f"Body for page {page}.\n",
+            encoding="utf-8",
+        )
+    hq_path = result_dir / "book-hq.md"
+    hq_path.write_text("unused\n", encoding="utf-8")
+
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+
+    def fake_repair(_settings: RepairSettings, payload: dict[str, Any]) -> dict[str, Any]:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        try:
+            # Deliberately vary latency so futures complete out of page order.
+            time.sleep(0.004 * (4 - (payload["pageNumber"] % 4)))
+            return {
+                "markdown": payload["markdown"],
+                "changed": False,
+                "editCount": 0,
+                "mathNodeCount": 0,
+                "summary": "No changes",
+                "furniture": {"headers": [], "footers": []},
+                "model": "test-model",
+            }
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setattr(
+        "pdf2markdown.markdown_repair._repair_with_retries",
+        fake_repair,
+    )
+    store = RepairStore()
+    output = repair_document_markdown(
+        job={
+            "job_id": "job-concurrent",
+            "document_id": "document-concurrent",
+            "user_id": "user-one",
+        },
+        document_root=document_root,
+        hq_markdown_path=hq_path,
+        settings=RepairSettings(
+            service_url="http://repair.invalid/page",
+            admin_token="test-token",
+            max_concurrency=4,
+        ),
+        store=store,  # type: ignore[arg-type]
+    )
+
+    assert max_active == 4
+    rendered = output.read_text(encoding="utf-8")
+    positions = [rendered.index(f"**Page {page}**") for page in range(1, 13)]
+    assert positions == sorted(positions)
+    repair_progress = [
+        item["current"]
+        for item in store.progress
+        if item["stage"] == "repair"
+    ]
+    assert repair_progress == list(range(13))

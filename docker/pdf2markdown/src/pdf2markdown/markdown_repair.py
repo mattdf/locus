@@ -9,6 +9,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,18 @@ class RepairSettings:
     timeout_seconds: int = 300
     neighbour_characters: int = 8000
     context_page_radius: int = 2
+    max_concurrency: int = 4
+
+
+@dataclass(frozen=True)
+class PageRepairResult:
+    position: int
+    page_number: int
+    repaired: str
+    changed: bool
+    furniture: dict[str, Any]
+    report: dict[str, Any]
+    review_required: bool = False
 
 
 def _sha256_text(value: str) -> str:
@@ -169,17 +182,14 @@ def repair_document_markdown(
 
     repaired_pages_dir = hq_markdown_path.parent / f"pages-repaired-{PROMPT_VERSION}"
     repaired_pages_dir.mkdir(parents=True, exist_ok=True)
-    report_pages: list[dict[str, Any]] = []
-    combined: list[str] = []
-    changed_pages = 0
-    failed_pages = 0
     total = len(pages)
+    concurrency = max(1, min(settings.max_concurrency, total))
     store.set_job_progress(
         job["job_id"],
         stage="repair",
         current=0,
         total=total,
-        message=f"Formatting page 1 of {total}",
+        message=f"Formatting 0 of {total} pages ({concurrency} at a time)",
     )
 
     source_markdown = [path.read_text(encoding="utf-8") for _, path in pages]
@@ -188,10 +198,9 @@ def repair_document_markdown(
         boundary_layout_candidates(page) if isinstance(page, dict) else []
         for page in ocr_pages
     ]
-    model_layout_pages: list[dict[str, Any]] = []
-    for position, ((page_number, source_path), markdown) in enumerate(
-        zip(pages, source_markdown, strict=True)
-    ):
+    def repair_page(position: int) -> PageRepairResult:
+        page_number, source_path = pages[position]
+        markdown = source_markdown[position]
         source_sha256 = _sha256_text(markdown)
         output_path = repaired_pages_dir / source_path.name
         layout_path = repaired_pages_dir / f"{source_path.stem}.layout.json"
@@ -213,16 +222,16 @@ def repair_document_markdown(
                 furniture = json.loads(layout_path.read_text("utf-8"))
             except (OSError, json.JSONDecodeError):
                 furniture = {"headers": [], "footers": []}
-            report_pages.append(
-                {
-                    "page": page_number,
-                    "status": "cached",
-                    "changed": changed,
-                    "edit_count": int(cached.get("edit_count") or 0),
-                    "math_node_count": int(cached.get("math_node_count") or 0),
-                    "summary": cached.get("summary") or "",
-                }
-            )
+            if not isinstance(furniture, dict):
+                furniture = {"headers": [], "footers": []}
+            report = {
+                "page": page_number,
+                "status": "cached",
+                "changed": changed,
+                "edit_count": int(cached.get("edit_count") or 0),
+                "math_node_count": int(cached.get("math_node_count") or 0),
+                "summary": cached.get("summary") or "",
+            }
         else:
             store.start_repair_page(
                 job_id=job["job_id"],
@@ -305,16 +314,14 @@ def repair_document_markdown(
                     result_relpath=result_relpath,
                     summary=str(result.get("summary") or ""),
                 )
-                report_pages.append(
-                    {
-                        "page": page_number,
-                        "status": "completed",
-                        "changed": changed,
-                        "edit_count": int(result.get("editCount") or 0),
-                        "math_node_count": int(result.get("mathNodeCount") or 0),
-                        "summary": str(result.get("summary") or ""),
-                    }
-                )
+                report = {
+                    "page": page_number,
+                    "status": "completed",
+                    "changed": changed,
+                    "edit_count": int(result.get("editCount") or 0),
+                    "math_node_count": int(result.get("mathNodeCount") or 0),
+                    "summary": str(result.get("summary") or ""),
+                }
             except RepairServiceError as exc:
                 store.fail_repair_page(
                     document_id=job["document_id"],
@@ -335,38 +342,83 @@ def repair_document_markdown(
                     layout_path,
                     json.dumps(furniture, ensure_ascii=False, indent=2),
                 )
-                failed_pages += 1
-                report_pages.append(
-                    {
-                        "page": page_number,
-                        "status": "review_required",
-                        "changed": False,
-                        "error": str(exc),
-                    }
+                report = {
+                    "page": page_number,
+                    "status": "review_required",
+                    "changed": False,
+                    "error": str(exc),
+                }
+                return PageRepairResult(
+                    position=position,
+                    page_number=page_number,
+                    repaired=repaired,
+                    changed=False,
+                    furniture=furniture,
+                    report=report,
+                    review_required=True,
                 )
 
-        if changed:
-            changed_pages += 1
-        if furniture.get("headers") or furniture.get("footers"):
-            model_layout_pages.append(
-                {
-                    "page": page_number,
-                    "headers": list(furniture.get("headers") or []),
-                    "footers": list(furniture.get("footers") or []),
-                }
-            )
-        combined.append(format_markdown_page(page_number, repaired))
-        store.set_job_progress(
-            job["job_id"],
-            stage="repair",
-            current=position + 1,
-            total=total,
-            message=(
-                f"Formatting page {position + 2} of {total}"
-                if position + 1 < total
-                else "Assembling repaired Markdown"
-            ),
+        return PageRepairResult(
+            position=position,
+            page_number=page_number,
+            repaired=repaired,
+            changed=changed,
+            furniture=furniture,
+            report=report,
         )
+
+    ordered_results: list[PageRepairResult | None] = [None] * total
+    completed = 0
+    with ThreadPoolExecutor(
+        max_workers=concurrency,
+        thread_name_prefix=f"pdf-repair-{str(job['job_id'])[:8]}",
+    ) as executor:
+        futures = {
+            executor.submit(repair_page, position): position
+            for position in range(total)
+        }
+        try:
+            for future in as_completed(futures):
+                result = future.result()
+                ordered_results[result.position] = result
+                completed += 1
+                store.set_job_progress(
+                    job["job_id"],
+                    stage="repair",
+                    current=completed,
+                    total=total,
+                    message=(
+                        f"Formatting {completed} of {total} pages "
+                        f"({concurrency} at a time)"
+                        if completed < total
+                        else "Assembling repaired Markdown"
+                    ),
+                )
+        except Exception:
+            for future in futures:
+                future.cancel()
+            raise
+
+    results = [result for result in ordered_results if result is not None]
+    if len(results) != total:
+        raise RuntimeError("PDF formatter did not produce every page")
+
+    report_pages = [result.report for result in results]
+    changed_pages = sum(result.changed for result in results)
+    failed_pages = sum(result.review_required for result in results)
+    model_layout_pages = [
+        {
+            "page": result.page_number,
+            "headers": list(result.furniture.get("headers") or []),
+            "footers": list(result.furniture.get("footers") or []),
+        }
+        for result in results
+        if result.furniture.get("headers") or result.furniture.get("footers")
+    ]
+    combined = [
+        format_markdown_page(result.page_number, result.repaired)
+        for result in results
+    ]
 
     store.set_job_progress(
         job["job_id"],

@@ -177,6 +177,7 @@ class PersistentSettings:
     repair_service_url: str = ""
     repair_admin_token: str = field(default="", repr=False)
     repair_timeout_seconds: int = 300
+    repair_max_concurrency: int = 4
 
     @classmethod
     def from_environment(cls) -> "PersistentSettings":
@@ -233,6 +234,10 @@ class PersistentSettings:
             ).strip(),
             repair_timeout_seconds=_positive_int(
                 "PDF_REPAIR_TIMEOUT_SECONDS", 300
+            ),
+            repair_max_concurrency=min(
+                16,
+                _positive_int("PDF_REPAIR_MAX_CONCURRENCY", 4),
             ),
         )
 
@@ -402,6 +407,7 @@ def process_persistent_job(
         service_url=settings.repair_service_url,
         admin_token=settings.repair_admin_token,
         timeout_seconds=settings.repair_timeout_seconds,
+        max_concurrency=settings.repair_max_concurrency,
     )
 
     existing_hq = job.get("hq_markdown_relpath")

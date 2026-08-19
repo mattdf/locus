@@ -53,6 +53,10 @@ usage records in the `locus_pdf2markdown_data` Docker volume. It accepts multipl
 and processes four jobs concurrently by default. Change that with
 `PDF2MARKDOWN_MAX_CONCURRENT_JOBS`.
 
+Within each PDF, the Markdown formatter processes four pages concurrently by
+default while preserving page order in the finished document. Configure that
+bounded pool with `PDF_REPAIR_MAX_CONCURRENCY` (maximum 16).
+
 The app connects to the local worker at `http://127.0.0.1:8091`. Override
 `PDF2MARKDOWN_SERVICE_URL`, `PDF2MARKDOWN_API_TOKEN`, and
 `PDF2MARKDOWN_ADMIN_TOKEN` only when running a customized worker configuration. The Mistral key

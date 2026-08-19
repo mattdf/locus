@@ -41,6 +41,10 @@ const UPSTREAM_TIMEOUT_MS = Math.max(
   10_000,
   Number(process.env.PDF_REPAIR_UPSTREAM_TIMEOUT_SECONDS ?? 90) * 1_000,
 );
+const MAX_CONCURRENT_REPAIR_REQUESTS = Math.min(
+  32,
+  Math.max(1, Number(process.env.PDF_REPAIR_MAX_CONCURRENT_REQUESTS ?? 8)),
+);
 const INTERNAL_TOKEN =
   process.env.PDF2MARKDOWN_ADMIN_TOKEN?.trim() ||
   (isHosted ? "" : "locus-local-pdf-admin");
@@ -51,6 +55,26 @@ interface RepairEdit {
   occurrence: number;
   reason: string;
   confidence: "high" | "medium" | "low";
+}
+
+let activeRepairRequests = 0;
+const repairSlotWaiters: Array<(release: () => void) => void> = [];
+
+function releaseRepairSlot(): void {
+  const next = repairSlotWaiters.shift();
+  if (next) {
+    next(releaseRepairSlot);
+    return;
+  }
+  activeRepairRequests = Math.max(0, activeRepairRequests - 1);
+}
+
+function acquireRepairSlot(): Promise<() => void> {
+  if (activeRepairRequests < MAX_CONCURRENT_REPAIR_REQUESTS) {
+    activeRepairRequests += 1;
+    return Promise.resolve(releaseRepairSlot);
+  }
+  return new Promise((resolve) => repairSlotWaiters.push(resolve));
 }
 
 export interface PdfRepairContextPage {
@@ -680,7 +704,7 @@ export async function pdfRepairPreflight(ownerUserId: string): Promise<{
   };
 }
 
-export async function repairPdfMarkdownPage(input: {
+interface PdfRepairPageInput {
   ownerUserId: string;
   jobId: string;
   documentId: string;
@@ -691,7 +715,9 @@ export async function repairPdfMarkdownPage(input: {
   nextMarkdown?: string;
   contextPages?: PdfRepairContextPage[];
   layoutCandidates?: PdfRepairLayoutCandidate[];
-}): Promise<{
+}
+
+interface PdfRepairPageResult {
   markdown: string;
   changed: boolean;
   editCount: number;
@@ -700,7 +726,11 @@ export async function repairPdfMarkdownPage(input: {
   furniture: PdfRunningFurniture;
   model: string;
   promptVersion: string;
-}> {
+}
+
+async function repairPdfMarkdownPageUnlocked(
+  input: PdfRepairPageInput,
+): Promise<PdfRepairPageResult> {
   const { credential, policy } = await repairCredential(input.ownerUserId);
   if (credential.source === "managed") enforceRepairCap(policy);
   const generationId = `pdf-repair:${input.jobId}:${input.pageNumber}:${randomUUID()}`;
@@ -874,6 +904,17 @@ export async function repairPdfMarkdownPage(input: {
       await releaseManagedGeneration(input.ownerUserId, generationId).catch(() => undefined);
     }
     throw error;
+  }
+}
+
+export async function repairPdfMarkdownPage(
+  input: PdfRepairPageInput,
+): Promise<PdfRepairPageResult> {
+  const release = await acquireRepairSlot();
+  try {
+    return await repairPdfMarkdownPageUnlocked(input);
+  } finally {
+    release();
   }
 }
 

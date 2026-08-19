@@ -27,6 +27,7 @@ services:
       PDF2MARKDOWN_DEFAULT_KEY_MONTHLY_PAGE_CAP: ${PDF2MARKDOWN_DEFAULT_KEY_MONTHLY_PAGE_CAP:-}
       PDF_REPAIR_SERVICE_URL: ${PDF_REPAIR_SERVICE_URL:-http://host.docker.internal:8787/api/internal/pdf-repair/page}
       PDF_REPAIR_TIMEOUT_SECONDS: ${PDF_REPAIR_TIMEOUT_SECONDS:-300}
+      PDF_REPAIR_MAX_CONCURRENCY: ${PDF_REPAIR_MAX_CONCURRENCY:-4}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
