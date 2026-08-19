@@ -25,6 +25,10 @@ services:
       PDF2MARKDOWN_MAX_QUEUED_JOBS: ${PDF2MARKDOWN_MAX_QUEUED_JOBS:-100}
       PDF2MARKDOWN_DEFAULT_USER_MONTHLY_PAGE_CAP: ${PDF2MARKDOWN_DEFAULT_USER_MONTHLY_PAGE_CAP:-}
       PDF2MARKDOWN_DEFAULT_KEY_MONTHLY_PAGE_CAP: ${PDF2MARKDOWN_DEFAULT_KEY_MONTHLY_PAGE_CAP:-}
+      PDF_REPAIR_SERVICE_URL: ${PDF_REPAIR_SERVICE_URL:-http://host.docker.internal:8787/api/internal/pdf-repair/page}
+      PDF_REPAIR_TIMEOUT_SECONDS: ${PDF_REPAIR_TIMEOUT_SECONDS:-300}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - locus_pdf2markdown_data:/data/pdf2markdown
     read_only: true

@@ -5935,7 +5935,7 @@ export default function App({
         : "";
     const sourceMessage = makeMessage(
       "source",
-      `# Importing ${title}\n\nConverting${pageSelection} from **${source.filename}** to Markdown. This job continues on the server if you refresh or close this page.`,
+      `# Importing ${title}\n\nConverting${pageSelection} from **${source.filename}** to Markdown, then checking its formatting.`,
     );
     const root: ThreadNode = {
       id: rootId,

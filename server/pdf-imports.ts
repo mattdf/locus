@@ -41,6 +41,10 @@ export interface PdfImportJob {
   chat_id: string;
   document_id: string;
   status: "queued" | "running" | "completed" | "failed";
+  stage: "queued" | "ocr" | "images" | "repair" | "assembling" | "completed" | "failed";
+  progress_current: number;
+  progress_total: number;
+  progress_message: string | null;
   reserved_pages: number;
   error: string | null;
   created_at: string;

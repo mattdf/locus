@@ -10,6 +10,7 @@ import {
   Copy,
   ExternalLink,
   ListTree,
+  LoaderCircle,
   MessageSquareText,
   Pencil,
   Printer,
@@ -2111,6 +2112,21 @@ export function ThreadView({
                 </div>
               ) : message.pending && !message.content ? (
                 <ThinkingIndicator startedAt={message.createdAt} />
+              ) : message.role === "source" &&
+                node.id === chat.rootId &&
+                chat.source?.kind === "pdf" &&
+                chat.source.status === "importing" ? (
+                <div className="pdf-import-progress" role="status" aria-live="polite">
+                  <LoaderCircle size={22} aria-hidden="true" />
+                  <div>
+                    <strong>Converting {chat.source.filename}</strong>
+                    <p>
+                      Extracting pages, recovering figures, then checking Markdown and LaTeX
+                      formatting. This job continues on the server if you leave or refresh.
+                    </p>
+                  </div>
+                  <span className="pdf-import-progress__track" aria-hidden="true"><i /></span>
+                </div>
               ) : (
                 <>
                 <MarkdownMessage

@@ -1,6 +1,7 @@
 import {
   ChevronLeft,
   DollarSign,
+  FileText,
   KeyRound,
   Link2,
   LoaderCircle,
@@ -35,6 +36,10 @@ interface ManagedUser {
   lifetimeCostUsd: number;
   monthlyTokens: number;
   unpricedEvents: number;
+  pdfRepairManagedEnabled: boolean;
+  pdfRepairMonthlyLimitUsd: number | null;
+  pdfRepairMonthlyCostUsd: number;
+  pdfRepairMonthlyTokens: number;
 }
 
 interface UsersResponse {
@@ -78,6 +83,9 @@ export function AdminAccountsModal({
   const [replacementPassword, setReplacementPassword] = useState("");
   const [limitTarget, setLimitTarget] = useState<ManagedUser | null>(null);
   const [monthlyLimitDraft, setMonthlyLimitDraft] = useState("");
+  const [repairTarget, setRepairTarget] = useState<ManagedUser | null>(null);
+  const [repairManagedDraft, setRepairManagedDraft] = useState(true);
+  const [repairLimitDraft, setRepairLimitDraft] = useState("");
   const [activeTab, setActiveTab] = useState<"accounts" | "access">("accounts");
 
   const loadUsers = useCallback(async () => {
@@ -125,6 +133,8 @@ export function AdminAccountsModal({
       disabled?: boolean;
       role?: "admin" | "user";
       managedMonthlyLimitUsd?: number | null;
+      pdfRepairManagedEnabled?: boolean;
+      pdfRepairMonthlyLimitUsd?: number | null;
     },
   ): Promise<boolean> => {
     setBusy(user.id);
@@ -143,6 +153,28 @@ export function AdminAccountsModal({
       return false;
     } finally {
       setBusy(null);
+    }
+  };
+
+  const saveRepairPolicy = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!repairTarget) return;
+    const monthlyLimitUsd = repairLimitDraft.trim() === ""
+      ? null
+      : Number(repairLimitDraft);
+    if (
+      monthlyLimitUsd !== null &&
+      (!Number.isFinite(monthlyLimitUsd) || monthlyLimitUsd < 0 || monthlyLimitUsd > 10_000_000)
+    ) {
+      setError("Enter a PDF formatting limit between $0 and $10,000,000, or leave it blank for unlimited.");
+      return;
+    }
+    if (await updateAccount(repairTarget, {
+      pdfRepairManagedEnabled: repairManagedDraft,
+      pdfRepairMonthlyLimitUsd: monthlyLimitUsd,
+    })) {
+      setRepairTarget(null);
+      setRepairLimitDraft("");
     }
   };
 
@@ -206,6 +238,10 @@ export function AdminAccountsModal({
       if (limitTarget?.id === user.id) {
         setLimitTarget(null);
         setMonthlyLimitDraft("");
+      }
+      if (repairTarget?.id === user.id) {
+        setRepairTarget(null);
+        setRepairLimitDraft("");
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Could not delete account");
@@ -388,6 +424,24 @@ export function AdminAccountsModal({
                             <DollarSign size={12} /> Budget
                           </button>
                         )}
+                        <button
+                          type="button"
+                          disabled={userBusy || busy !== null}
+                          onClick={() => {
+                            setRepairTarget(user);
+                            setRepairManagedDraft(user.pdfRepairManagedEnabled);
+                            setRepairLimitDraft(
+                              user.pdfRepairMonthlyLimitUsd === null
+                                ? ""
+                                : String(user.pdfRepairMonthlyLimitUsd),
+                            );
+                            setLimitTarget(null);
+                            setPasswordTarget(null);
+                            setReplacementPassword("");
+                          }}
+                        >
+                          <FileText size={12} /> PDF formatting
+                        </button>
                         {!ownAccount && (
                           <>
                             <button
@@ -506,6 +560,61 @@ export function AdminAccountsModal({
                 </button>
                 <button className="primary-button" type="submit" disabled={busy !== null || replacementPassword.length < 12}>
                   Set password
+                </button>
+              </footer>
+            </form>
+          )}
+
+          {repairTarget && (
+            <form className="admin-budget-editor admin-budget-editor--repair" onSubmit={saveRepairPolicy}>
+              <div>
+                <FileText size={14} />
+                <span>
+                  <strong>PDF formatting model</strong>
+                  <small>
+                    {repairTarget.email} has used {formatUsd(repairTarget.pdfRepairMonthlyCostUsd)}
+                    {" "}and {formatTokens(repairTarget.pdfRepairMonthlyTokens)} tokens on
+                    administrator-funded PDF repair this UTC month.
+                  </small>
+                </span>
+              </div>
+              <label className="admin-repair-toggle">
+                <span>Use administrator OpenAI key</span>
+                <input
+                  type="checkbox"
+                  checked={repairManagedDraft}
+                  onChange={(event) => setRepairManagedDraft(event.target.checked)}
+                />
+              </label>
+              <label>
+                <span>Monthly formatting limit (USD)</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={10_000_000}
+                  step="0.01"
+                  inputMode="decimal"
+                  aria-label={`Monthly PDF formatting limit for ${repairTarget.email}`}
+                  placeholder="Unlimited"
+                  value={repairLimitDraft}
+                  onChange={(event) => setRepairLimitDraft(event.target.value)}
+                />
+              </label>
+              {!repairManagedDraft && (
+                <p>This user must configure a personal OpenAI key before importing PDFs.</p>
+              )}
+              <footer>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRepairTarget(null);
+                    setRepairLimitDraft("");
+                  }}
+                >
+                  Cancel
+                </button>
+                <button className="primary-button" type="submit" disabled={busy !== null}>
+                  Save PDF policy
                 </button>
               </footer>
             </form>

@@ -144,7 +144,13 @@ class PersistentStore:
                     document_id TEXT NOT NULL REFERENCES documents(document_id),
                     api_key_id TEXT NOT NULL REFERENCES api_keys(key_id),
                     status TEXT NOT NULL,
+                    stage TEXT NOT NULL DEFAULT 'queued',
                     reserved_pages INTEGER NOT NULL,
+                    progress_current INTEGER NOT NULL DEFAULT 0,
+                    progress_total INTEGER NOT NULL DEFAULT 0,
+                    progress_message TEXT,
+                    ocr_markdown_relpath TEXT,
+                    hq_markdown_relpath TEXT,
                     error TEXT,
                     created_at TEXT NOT NULL,
                     started_at TEXT,
@@ -167,6 +173,26 @@ class PersistentStore:
                     updated_at TEXT NOT NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS repair_pages (
+                    repair_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+                    document_id TEXT NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
+                    page_number INTEGER NOT NULL,
+                    source_sha256 TEXT NOT NULL,
+                    prompt_version TEXT NOT NULL,
+                    model TEXT,
+                    status TEXT NOT NULL,
+                    changed INTEGER NOT NULL DEFAULT 0,
+                    edit_count INTEGER NOT NULL DEFAULT 0,
+                    math_node_count INTEGER NOT NULL DEFAULT 0,
+                    result_relpath TEXT,
+                    summary TEXT,
+                    error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(document_id, page_number, source_sha256, prompt_version)
+                );
+
                 CREATE INDEX IF NOT EXISTS jobs_user_created_idx
                     ON jobs(user_id, created_at);
                 CREATE INDEX IF NOT EXISTS jobs_status_idx
@@ -177,6 +203,8 @@ class PersistentStore:
                     ON usage_events(user_id, period);
                 CREATE INDEX IF NOT EXISTS usage_key_period_idx
                     ON usage_events(api_key_id, period);
+                CREATE INDEX IF NOT EXISTS repair_pages_job_status_idx
+                    ON repair_pages(job_id, status, page_number);
                 """
             )
             usage_columns = {
@@ -217,6 +245,23 @@ class PersistentStore:
                     "UPDATE documents SET page_end = page_count "
                     "WHERE page_end IS NULL"
                 )
+            job_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
+            }
+            job_additions = {
+                "stage": "TEXT NOT NULL DEFAULT 'queued'",
+                "progress_current": "INTEGER NOT NULL DEFAULT 0",
+                "progress_total": "INTEGER NOT NULL DEFAULT 0",
+                "progress_message": "TEXT",
+                "ocr_markdown_relpath": "TEXT",
+                "hq_markdown_relpath": "TEXT",
+            }
+            for column, declaration in job_additions.items():
+                if column not in job_columns:
+                    connection.execute(
+                        f"ALTER TABLE jobs ADD COLUMN {column} {declaration}"
+                    )
             now = utc_now()
             connection.execute("BEGIN IMMEDIATE")
             try:
@@ -609,8 +654,8 @@ class PersistentStore:
                     """
                     INSERT INTO jobs (
                         job_id, user_id, chat_id, document_id, api_key_id,
-                        status, reserved_pages, created_at
-                    ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)
+                        status, stage, reserved_pages, progress_total, created_at
+                    ) VALUES (?, ?, ?, ?, ?, 'queued', 'queued', ?, ?, ?)
                     """,
                     (
                         job_id,
@@ -618,6 +663,7 @@ class PersistentStore:
                         chat_id,
                         document_id,
                         api_key_id,
+                        selected_page_count,
                         selected_page_count,
                         now,
                     ),
@@ -642,7 +688,9 @@ class PersistentStore:
                 changed = connection.execute(
                     """
                     UPDATE jobs
-                    SET status = 'running', started_at = ?
+                    SET status = 'running',
+                        stage = CASE WHEN stage = 'queued' THEN 'ocr' ELSE stage END,
+                        started_at = COALESCE(started_at, ?)
                     WHERE job_id = ? AND status = 'queued'
                     """,
                     (utc_now(), job_id),
@@ -665,6 +713,166 @@ class PersistentStore:
             except Exception:
                 connection.rollback()
                 raise
+
+    def set_job_progress(
+        self,
+        job_id: str,
+        *,
+        stage: str,
+        current: int | None = None,
+        total: int | None = None,
+        message: str | None = None,
+        ocr_markdown_relpath: str | None = None,
+        hq_markdown_relpath: str | None = None,
+    ) -> None:
+        with self.connection() as connection:
+            connection.execute(
+                """
+                UPDATE jobs
+                SET stage = ?,
+                    progress_current = COALESCE(?, progress_current),
+                    progress_total = COALESCE(?, progress_total),
+                    progress_message = ?,
+                    ocr_markdown_relpath = COALESCE(?, ocr_markdown_relpath),
+                    hq_markdown_relpath = COALESCE(?, hq_markdown_relpath)
+                WHERE job_id = ?
+                """,
+                (
+                    stage,
+                    current,
+                    total,
+                    message,
+                    ocr_markdown_relpath,
+                    hq_markdown_relpath,
+                    job_id,
+                ),
+            )
+
+    def get_repair_page(
+        self,
+        *,
+        document_id: str,
+        page_number: int,
+        source_sha256: str,
+        prompt_version: str,
+    ) -> dict[str, Any] | None:
+        with self.connection() as connection:
+            return _row(
+                connection.execute(
+                    """
+                    SELECT * FROM repair_pages
+                    WHERE document_id = ? AND page_number = ?
+                      AND source_sha256 = ? AND prompt_version = ?
+                    """,
+                    (
+                        document_id,
+                        page_number,
+                        source_sha256,
+                        prompt_version,
+                    ),
+                ).fetchone()
+            )
+
+    def start_repair_page(
+        self,
+        *,
+        job_id: str,
+        document_id: str,
+        page_number: int,
+        source_sha256: str,
+        prompt_version: str,
+    ) -> None:
+        now = utc_now()
+        with self.connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO repair_pages (
+                    job_id, document_id, page_number, source_sha256,
+                    prompt_version, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'running', ?, ?)
+                ON CONFLICT(document_id, page_number, source_sha256, prompt_version)
+                DO UPDATE SET
+                    job_id = excluded.job_id,
+                    status = 'running',
+                    error = NULL,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    job_id,
+                    document_id,
+                    page_number,
+                    source_sha256,
+                    prompt_version,
+                    now,
+                    now,
+                ),
+            )
+
+    def finish_repair_page(
+        self,
+        *,
+        document_id: str,
+        page_number: int,
+        source_sha256: str,
+        prompt_version: str,
+        model: str,
+        changed: bool,
+        edit_count: int,
+        math_node_count: int,
+        result_relpath: str,
+        summary: str,
+    ) -> None:
+        with self.connection() as connection:
+            connection.execute(
+                """
+                UPDATE repair_pages
+                SET status = 'completed', model = ?, changed = ?, edit_count = ?,
+                    math_node_count = ?, result_relpath = ?, summary = ?,
+                    error = NULL, updated_at = ?
+                WHERE document_id = ? AND page_number = ?
+                  AND source_sha256 = ? AND prompt_version = ?
+                """,
+                (
+                    model,
+                    int(changed),
+                    edit_count,
+                    math_node_count,
+                    result_relpath,
+                    summary[:1000],
+                    utc_now(),
+                    document_id,
+                    page_number,
+                    source_sha256,
+                    prompt_version,
+                ),
+            )
+
+    def fail_repair_page(
+        self,
+        *,
+        document_id: str,
+        page_number: int,
+        source_sha256: str,
+        prompt_version: str,
+        error: str,
+    ) -> None:
+        with self.connection() as connection:
+            connection.execute(
+                """
+                UPDATE repair_pages
+                SET status = 'failed', error = ?, updated_at = ?
+                WHERE document_id = ? AND page_number = ?
+                  AND source_sha256 = ? AND prompt_version = ?
+                """,
+                (
+                    error[:2000],
+                    utc_now(),
+                    document_id,
+                    page_number,
+                    source_sha256,
+                    prompt_version,
+                ),
+            )
 
     def record_usage(
         self,
@@ -729,7 +937,10 @@ class PersistentStore:
                 connection.execute(
                     """
                     UPDATE jobs
-                    SET status = 'completed', completed_at = ?, error = NULL
+                    SET status = 'completed', stage = 'completed',
+                        progress_current = progress_total,
+                        progress_message = 'Import complete',
+                        completed_at = ?, error = NULL
                     WHERE job_id = ?
                     """,
                     (now, job_id),
@@ -771,10 +982,11 @@ class PersistentStore:
                 connection.execute(
                     """
                     UPDATE jobs
-                    SET status = 'failed', completed_at = ?, error = ?
+                    SET status = 'failed', stage = 'failed',
+                        progress_message = ?, completed_at = ?, error = ?
                     WHERE job_id = ?
                     """,
-                    (now, safe_error, job_id),
+                    (safe_error, now, safe_error, job_id),
                 )
                 connection.execute(
                     """
@@ -810,7 +1022,26 @@ class PersistentStore:
                     """
                 ).fetchall()
             ]
+        interrupted = 0
         for job_id, reserved_pages in running:
+            job = self.get_job(job_id)
+            if (
+                job is not None
+                and job.get("hq_markdown_relpath")
+                and str(job.get("stage")) in {"repair", "assembling"}
+            ):
+                with self.connection() as connection:
+                    connection.execute(
+                        """
+                        UPDATE jobs
+                        SET status = 'queued', started_at = NULL,
+                            progress_message = 'Resuming formatting after restart'
+                        WHERE job_id = ?
+                        """,
+                        (job_id,),
+                    )
+                interrupted += 1
+                continue
             if self.usage_event_for_job(job_id) is None:
                 self.record_usage(
                     job_id=job_id,
@@ -826,7 +1057,8 @@ class PersistentStore:
                 "Service restarted while the job was running; retry was not automatic "
                 "to avoid a duplicate Mistral charge.",
             )
-        return len(running)
+            interrupted += 1
+        return interrupted
 
     def queued_job_ids(self) -> list[str]:
         with self.connection() as connection:
@@ -847,7 +1079,9 @@ class PersistentStore:
                 connection.execute(
                     """
                     SELECT job_id, chat_id, document_id, status, reserved_pages,
-                           error, created_at, started_at, completed_at
+                           stage, progress_current, progress_total,
+                           progress_message, error, created_at, started_at,
+                           completed_at
                     FROM jobs
                     WHERE job_id = ? AND user_id = ?
                     """,

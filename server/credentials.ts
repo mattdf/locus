@@ -152,7 +152,7 @@ export interface ResolvedCredential {
   credentialLabel: string;
 }
 
-export async function resolveCredentialDetails(
+async function resolveSavedCredential(
   ownerUserId: string,
   provider: BuiltInProviderId,
 ): Promise<ResolvedCredential | null> {
@@ -180,16 +180,22 @@ export async function resolveCredentialDetails(
     [ownerUserId, provider],
   );
   const row = result.rows[0];
-  if (row) {
-    return {
-      apiKey: decryptCredential(ownerUserId, provider, row),
-      source: "saved",
-      credentialKind: "personal",
-      credentialRef: `personal:${row.credentialId}`,
-      credentialLabel: `${providerName(provider)} personal key`,
-    };
-  }
+  return row
+    ? {
+        apiKey: decryptCredential(ownerUserId, provider, row),
+        source: "saved",
+        credentialKind: "personal",
+        credentialRef: `personal:${row.credentialId}`,
+        credentialLabel: `${providerName(provider)} personal key`,
+      }
+    : null;
+}
 
+async function resolveManagedCredential(
+  ownerUserId: string,
+  provider: BuiltInProviderId,
+): Promise<ResolvedCredential | null> {
+  if (!isHosted) return null;
   const managed = await query<{
     id: string;
     label: string;
@@ -204,17 +210,39 @@ export async function resolveCredentialDetails(
       where a."ownerUserId" = $1 and a."provider" = $2 and c."revokedAt" is null`,
     [ownerUserId, provider],
   );
-  const managedRow = managed.rows[0];
-  return managedRow
+  const row = managed.rows[0];
+  return row
     ? {
-        apiKey: decryptCredential(`managed:${managedRow.id}`, provider, managedRow),
+        apiKey: decryptCredential(`managed:${row.id}`, provider, row),
         source: "managed",
-        managedCredentialId: managedRow.id,
+        managedCredentialId: row.id,
         credentialKind: "managed",
-        credentialRef: `managed:${managedRow.id}`,
-        credentialLabel: managedRow.label,
+        credentialRef: `managed:${row.id}`,
+        credentialLabel: row.label,
       }
     : null;
+}
+
+export async function resolvePersonalCredentialDetails(
+  ownerUserId: string,
+  provider: BuiltInProviderId,
+): Promise<ResolvedCredential | null> {
+  return resolveSavedCredential(ownerUserId, provider);
+}
+
+export async function resolveManagedCredentialDetails(
+  ownerUserId: string,
+  provider: BuiltInProviderId,
+): Promise<ResolvedCredential | null> {
+  return resolveManagedCredential(ownerUserId, provider);
+}
+
+export async function resolveCredentialDetails(
+  ownerUserId: string,
+  provider: BuiltInProviderId,
+): Promise<ResolvedCredential | null> {
+  return (await resolveSavedCredential(ownerUserId, provider))
+    ?? resolveManagedCredential(ownerUserId, provider);
 }
 
 export interface ManagedCredentialSummary {

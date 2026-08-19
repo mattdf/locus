@@ -37,6 +37,7 @@ export interface GenerationJob {
   credentialRef: string;
   credentialLabel: string;
   model: string;
+  purpose: NonNullable<RespondInput["purpose"]>;
   generation?: GenerationMetrics;
   error?: string;
   subscribers: Set<Response>;
@@ -120,8 +121,8 @@ function persistFinished(job: GenerationJob): void {
            ("ownerUserId", "generationId", "provider", "model", "inputTokens",
             "cachedInputTokens", "outputTokens", "reasoningTokens", "totalTokens",
             "totalCostUsd", "managedCredentialId", "credentialKind", "credentialRef",
-            "credentialLabel")
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+            "credentialLabel", "purpose")
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
         [
           job.ownerUserId,
           job.id,
@@ -137,6 +138,7 @@ function persistFinished(job: GenerationJob): void {
           job.credentialKind,
           job.credentialRef,
           job.credentialLabel,
+          job.purpose,
         ],
       );
       if (job.managedCredentialId) {
@@ -342,7 +344,8 @@ export function createGeneration(
     credentialKind: attribution?.credentialKind ?? "provider",
     credentialRef: attribution?.credentialRef ?? `provider:${input.provider}`,
     credentialLabel: attribution?.credentialLabel ?? input.providerLabel ?? input.provider,
-    model: input.model,
+      model: input.model,
+      purpose: input.purpose ?? "chat",
     subscribers: new Set(),
     lastCheckpointAt: Date.now(),
     persistenceReady: Promise.resolve(),

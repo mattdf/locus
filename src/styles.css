@@ -1991,6 +1991,65 @@ a:focus-visible {
   animation: pulse 1.2s ease-in-out infinite;
 }
 
+.pdf-import-progress {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  overflow: hidden;
+  margin: 8px 0 18px;
+  padding: 18px 18px 22px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--panel));
+}
+
+.pdf-import-progress > svg {
+  margin-top: 1px;
+  color: var(--accent);
+  animation: spin 1s linear infinite;
+}
+
+.pdf-import-progress strong {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-import-progress p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.pdf-import-progress__track {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.pdf-import-progress__track > i {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 38%;
+  background: var(--accent);
+  animation: pdf-import-sweep 1.5s ease-in-out infinite;
+}
+
+@keyframes pdf-import-sweep {
+  0% { transform: translateX(-110%); }
+  55%, 100% { transform: translateX(290%); }
+}
+
 .regenerate-response-control {
   position: relative;
   display: inline-flex;
@@ -7051,6 +7110,33 @@ body.resizing-drawer {
   background: rgba(13, 112, 101, .035);
 }
 
+.admin-budget-editor--repair {
+  grid-template-columns: minmax(230px, 1fr) auto minmax(160px, .6fr) auto;
+}
+
+.admin-budget-editor--repair > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: #8a5d36;
+  font-size: 8px;
+}
+
+.admin-budget-editor > .admin-repair-toggle {
+  align-self: center;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.admin-budget-editor > .admin-repair-toggle input {
+  width: 16px;
+  min-height: 16px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
 .admin-managed-usage {
   color: var(--accent) !important;
 }
@@ -7091,6 +7177,10 @@ body.resizing-drawer {
   .admin-password-reset,
   .admin-budget-editor {
     grid-template-columns: 1fr;
+  }
+
+  .admin-budget-editor--repair > p {
+    grid-column: auto;
   }
 
   .admin-account-row__actions {

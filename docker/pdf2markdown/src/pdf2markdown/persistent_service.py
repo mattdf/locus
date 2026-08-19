@@ -42,6 +42,7 @@ from .mistral_images import (
     upgrade_document_images,
 )
 from .mistral_ocr import DEFAULT_MODEL, process_pdf, read_api_key
+from .markdown_repair import RepairSettings, repair_document_markdown
 from .page_furniture import document_furniture
 from .persistent_store import (
     PersistentStore,
@@ -173,6 +174,9 @@ class PersistentSettings:
     # Locus renders Markdown without raw HTML for XSS safety, so preserve
     # standard Markdown image syntax instead of emitting <p><img> wrappers.
     center_images: bool = False
+    repair_service_url: str = ""
+    repair_admin_token: str = field(default="", repr=False)
+    repair_timeout_seconds: int = 300
 
     @classmethod
     def from_environment(cls) -> "PersistentSettings":
@@ -220,6 +224,15 @@ class PersistentSettings:
             ),
             default_key_monthly_page_cap=_optional_cap(
                 "PDF2MARKDOWN_DEFAULT_KEY_MONTHLY_PAGE_CAP"
+            ),
+            repair_service_url=os.getenv(
+                "PDF_REPAIR_SERVICE_URL", ""
+            ).strip(),
+            repair_admin_token=os.getenv(
+                "PDF2MARKDOWN_ADMIN_TOKEN", ""
+            ).strip(),
+            repair_timeout_seconds=_positive_int(
+                "PDF_REPAIR_TIMEOUT_SECONDS", 300
             ),
         )
 
@@ -385,7 +398,33 @@ def process_persistent_job(
     page_end = int(job.get("page_end") or job["page_count"])
     page_number_offset = page_start - 1
 
+    repair_settings = RepairSettings(
+        service_url=settings.repair_service_url,
+        admin_token=settings.repair_admin_token,
+        timeout_seconds=settings.repair_timeout_seconds,
+    )
+
+    existing_hq = job.get("hq_markdown_relpath")
+    if existing_hq:
+        hq_path = document_root / str(existing_hq)
+        if hq_path.is_file():
+            repaired_path = repair_document_markdown(
+                job=job,
+                document_root=document_root,
+                hq_markdown_path=hq_path,
+                settings=repair_settings,
+                store=store,
+            )
+            return repaired_path.relative_to(document_root).as_posix()
+
     def convert(ocr_pdf_path: Path) -> str:
+        store.set_job_progress(
+            job["job_id"],
+            stage="ocr",
+            current=0,
+            total=int(job["reserved_pages"]),
+            message="Extracting text, equations, and figures",
+        )
         raw_markdown = process_pdf(
             pdf_path=ocr_pdf_path,
             output_root=output_root,
@@ -406,6 +445,16 @@ def process_persistent_job(
             model=model,
             outcome="ocr_completed",
         )
+        store.set_job_progress(
+            job["job_id"],
+            stage="images",
+            current=0,
+            total=int(job["reserved_pages"]),
+            message="Recovering high-resolution figures",
+            ocr_markdown_relpath=(
+                raw_markdown.relative_to(document_root).as_posix()
+            ),
+        )
         try:
             hq_markdown = upgrade_document_images(
                 pdf_path=ocr_pdf_path,
@@ -425,7 +474,23 @@ def process_persistent_job(
                 outcome="ocr_consumed_conversion_failed",
             )
             raise
-        return hq_markdown.relative_to(document_root).as_posix()
+        hq_relpath = hq_markdown.relative_to(document_root).as_posix()
+        store.set_job_progress(
+            job["job_id"],
+            stage="repair",
+            current=0,
+            total=int(job["reserved_pages"]),
+            message="Checking Markdown and LaTeX formatting",
+            hq_markdown_relpath=hq_relpath,
+        )
+        repaired_markdown = repair_document_markdown(
+            job=job,
+            document_root=document_root,
+            hq_markdown_path=hq_markdown,
+            settings=repair_settings,
+            store=store,
+        )
+        return repaired_markdown.relative_to(document_root).as_posix()
 
     if page_start == 1 and page_end == int(job["page_count"]):
         return convert(source_path)
@@ -764,6 +829,8 @@ def create_app(
             missing.append("admin_token")
         if not resolved_settings.signing_secret:
             missing.append("signing_secret")
+        if not resolved_settings.repair_service_url:
+            missing.append("repair_service_url")
         return JSONResponse(
             status_code=200 if not missing else 503,
             content={

@@ -77,6 +77,13 @@ import {
 } from "./workspace-search.ts";
 import { accountUsage } from "./usage.ts";
 import {
+  PdfRepairError,
+  pdfRepairHttpError,
+  pdfRepairPreflight,
+  repairPdfMarkdownPage,
+  requirePdfRepairInternalToken,
+} from "./pdf-repair.ts";
+import {
   commitStagedPdfImport,
   deleteStagedPdfImport,
   getAccountPdfUsage,
@@ -210,6 +217,44 @@ if (isHosted && auth) {
 }
 
 app.use(express.json({ limit: isHosted ? "32mb" : "100mb" }));
+
+// The persistent PDF worker calls this server-only endpoint. It is placed
+// before browser CSRF/session middleware because the worker authenticates with
+// its own bearer token and never receives a user's provider credential.
+app.post("/api/internal/pdf-repair/page", async (request, response) => {
+  if (!requirePdfRepairInternalToken(request, response)) return;
+  const body = request.body ?? {};
+  if (
+    typeof body.ownerUserId !== "string" || !body.ownerUserId.trim() ||
+    typeof body.jobId !== "string" || !body.jobId.trim() ||
+    typeof body.documentId !== "string" || !body.documentId.trim() ||
+    !Number.isSafeInteger(body.pageNumber) || body.pageNumber < 1 ||
+    typeof body.sourceSha256 !== "string" || !/^[a-f0-9]{64}$/i.test(body.sourceSha256) ||
+    typeof body.markdown !== "string" || body.markdown.length > 2_000_000 ||
+    (body.previousMarkdown !== undefined && typeof body.previousMarkdown !== "string") ||
+    (body.nextMarkdown !== undefined && typeof body.nextMarkdown !== "string")
+  ) {
+    response.status(400).json({ error: "Invalid PDF repair page request" });
+    return;
+  }
+  try {
+    response.setHeader("Cache-Control", "no-store");
+    response.json(await repairPdfMarkdownPage({
+      ownerUserId: body.ownerUserId.trim(),
+      jobId: body.jobId.trim(),
+      documentId: body.documentId.trim(),
+      pageNumber: body.pageNumber,
+      sourceSha256: body.sourceSha256.toLowerCase(),
+      markdown: body.markdown,
+      previousMarkdown: body.previousMarkdown?.slice(-8_000),
+      nextMarkdown: body.nextMarkdown?.slice(0, 8_000),
+    }));
+  } catch (error) {
+    const resolved = pdfRepairHttpError(error);
+    response.status(resolved.status).json({ error: resolved.message, code: resolved.code });
+  }
+});
+
 app.use("/api", rateLimit({
   windowMs: 60_000,
   limit: isHosted ? 300 : 10_000,
@@ -427,6 +472,7 @@ app.post("/api/pdf-imports/staged/:uploadId", async (request, response, next) =>
       });
       return;
     }
+    await pdfRepairPreflight(owner(response));
     const imported = await commitStagedPdfImport(
       owner(response),
       uploadId,
@@ -438,6 +484,11 @@ app.post("/api/pdf-imports/staged/:uploadId", async (request, response, next) =>
     );
     response.status(202).json(imported);
   } catch (error) {
+    if (error instanceof PdfRepairError || error instanceof ManagedUsageLimitError) {
+      const resolved = pdfRepairHttpError(error);
+      response.status(resolved.status).json({ error: resolved.message, code: resolved.code });
+      return;
+    }
     if (error instanceof PdfImportServiceError) {
       response.status(error.status).json({ error: error.message });
       return;
@@ -504,6 +555,7 @@ app.post("/api/pdf-imports", async (request, response, next) => {
       response.status(400).json({ error: "Enter a valid PDF page range" });
       return;
     }
+    await pdfRepairPreflight(owner(response));
     const imported = await submitPdfImport(
       request,
       owner(response),
@@ -525,6 +577,11 @@ app.post("/api/pdf-imports", async (request, response, next) => {
       processed_page_count: imported.processed_page_count,
     });
   } catch (error) {
+    if (error instanceof PdfRepairError || error instanceof ManagedUsageLimitError) {
+      const resolved = pdfRepairHttpError(error);
+      response.status(resolved.status).json({ error: resolved.message, code: resolved.code });
+      return;
+    }
     if (error instanceof PdfImportServiceError) {
       response.status(error.status).json({ error: error.message });
       return;

@@ -398,6 +398,9 @@ def test_persistent_worker_uploads_the_local_slice_not_the_full_pdf(
         def record_usage(self, **options: Any) -> None:
             observed["usage"] = options
 
+        def set_job_progress(self, job_id: str, **options: Any) -> None:
+            observed.setdefault("progress", []).append({"job_id": job_id, **options})
+
     monkeypatch.setattr(
         "pdf2markdown.persistent_service.process_pdf",
         fake_process_pdf,
@@ -406,10 +409,16 @@ def test_persistent_worker_uploads_the_local_slice_not_the_full_pdf(
         "pdf2markdown.persistent_service.upgrade_document_images",
         fake_upgrade,
     )
+    monkeypatch.setattr(
+        "pdf2markdown.persistent_service.repair_document_markdown",
+        lambda **options: options["hq_markdown_path"],
+    )
 
     result = process_persistent_job(
         {
-            "job_id": "job-a",
+                "job_id": "job-a",
+                "user_id": "user-a",
+                "document_id": "document-a",
             "storage_relpath": "documents/document-a",
             "page_count": 5,
             "page_start": 2,

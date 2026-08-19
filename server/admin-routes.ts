@@ -23,6 +23,10 @@ type ManagedUserRow = {
   lifetimeCostUsd: number;
   monthlyTokens: number;
   unpricedEvents: number;
+  pdfRepairManagedEnabled: boolean;
+  pdfRepairMonthlyLimitUsd: number | null;
+  pdfRepairMonthlyCostUsd: number;
+  pdfRepairMonthlyTokens: number;
 };
 
 async function managedUsers(userId?: string): Promise<ManagedUserRow[]> {
@@ -39,7 +43,11 @@ async function managedUsers(userId?: string): Promise<ManagedUserRow[]> {
             coalesce(all_usage."monthlyCostUsd", 0)::double precision as "monthlyCostUsd",
             coalesce(all_usage."lifetimeCostUsd", 0)::double precision as "lifetimeCostUsd",
             coalesce(all_usage."monthlyTokens", 0)::double precision as "monthlyTokens",
-            coalesce(all_usage."unpricedEvents", 0)::int as "unpricedEvents"
+            coalesce(all_usage."unpricedEvents", 0)::int as "unpricedEvents",
+            coalesce(repair_policy."managedEnabled", true) as "pdfRepairManagedEnabled",
+            repair_policy."monthlyLimitUsd"::double precision as "pdfRepairMonthlyLimitUsd",
+            coalesce(repair_usage."monthlyCostUsd", 0)::double precision as "pdfRepairMonthlyCostUsd",
+            coalesce(repair_usage."monthlyTokens", 0)::double precision as "pdfRepairMonthlyTokens"
        from "user" u
        left join lateral (
          select count(*)::int as "activeSessions"
@@ -54,6 +62,8 @@ async function managedUsers(userId?: string): Promise<ManagedUserRow[]> {
           where a."ownerUserId" = u."id"
        ) a on true
        left join "locus_managed_account_limits" l on l."ownerUserId" = u."id"
+       left join "locus_pdf_repair_policies" repair_policy
+         on repair_policy."ownerUserId" = u."id"
        left join lateral (
          select
            sum("totalCostUsd") filter (
@@ -92,6 +102,21 @@ async function managedUsers(userId?: string): Promise<ManagedUserRow[]> {
            from "locus_usage_events"
           where "ownerUserId" = u."id"
        ) all_usage on true
+       left join lateral (
+         select
+           sum("totalCostUsd") filter (
+             where "createdAt" >=
+               (date_trunc('month', current_timestamp at time zone 'UTC') at time zone 'UTC')
+           ) as "monthlyCostUsd",
+           sum("totalTokens") filter (
+             where "createdAt" >=
+               (date_trunc('month', current_timestamp at time zone 'UTC') at time zone 'UTC')
+           ) as "monthlyTokens"
+           from "locus_usage_events"
+          where "ownerUserId" = u."id"
+            and "purpose" = 'pdf-repair'
+            and "managedCredentialId" is not null
+       ) repair_usage on true
       ${userId ? `where u."id" = $1` : ""}
       order by u."createdAt" asc`,
     userId ? [userId] : [],
@@ -173,6 +198,11 @@ adminRouter.patch("/users/:userId", async (request, response) => {
     request.body ?? {},
     "managedMonthlyLimitUsd",
   );
+  const hasPdfRepairManagedEnabled = typeof request.body?.pdfRepairManagedEnabled === "boolean";
+  const hasPdfRepairMonthlyLimit = Object.prototype.hasOwnProperty.call(
+    request.body ?? {},
+    "pdfRepairMonthlyLimitUsd",
+  );
   if (
     hasManagedMonthlyLimit &&
     !validMonthlyLimit(request.body?.managedMonthlyLimitUsd)
@@ -182,7 +212,19 @@ adminRouter.patch("/users/:userId", async (request, response) => {
     });
     return;
   }
-  if (!hasDisabled && !hasRole && !hasManagedMonthlyLimit) {
+  if (
+    hasPdfRepairMonthlyLimit &&
+    !validMonthlyLimit(request.body?.pdfRepairMonthlyLimitUsd)
+  ) {
+    response.status(400).json({
+      error: "The monthly PDF-formatting limit must be null or between $0 and $10,000,000",
+    });
+    return;
+  }
+  if (
+    !hasDisabled && !hasRole && !hasManagedMonthlyLimit &&
+    !hasPdfRepairManagedEnabled && !hasPdfRepairMonthlyLimit
+  ) {
     response.status(400).json({ error: "Specify an account status or role" });
     return;
   }
@@ -227,6 +269,26 @@ adminRouter.patch("/users/:userId", async (request, response) => {
          "updatedByUserId" = excluded."updatedByUserId",
          "updatedAt" = current_timestamp`,
       [target.id, request.body.managedMonthlyLimitUsd, administrator.id],
+    );
+  }
+  if (hasPdfRepairManagedEnabled || hasPdfRepairMonthlyLimit) {
+    await query(
+      `insert into "locus_pdf_repair_policies"
+         ("ownerUserId", "managedEnabled", "monthlyLimitUsd", "updatedByUserId", "updatedAt")
+       values ($1, coalesce($2, true), $3, $4, current_timestamp)
+       on conflict ("ownerUserId") do update set
+         "managedEnabled" = case when $5 then excluded."managedEnabled" else "locus_pdf_repair_policies"."managedEnabled" end,
+         "monthlyLimitUsd" = case when $6 then excluded."monthlyLimitUsd" else "locus_pdf_repair_policies"."monthlyLimitUsd" end,
+         "updatedByUserId" = excluded."updatedByUserId",
+         "updatedAt" = current_timestamp`,
+      [
+        target.id,
+        hasPdfRepairManagedEnabled ? request.body.pdfRepairManagedEnabled : null,
+        hasPdfRepairMonthlyLimit ? request.body.pdfRepairMonthlyLimitUsd : null,
+        administrator.id,
+        hasPdfRepairManagedEnabled,
+        hasPdfRepairMonthlyLimit,
+      ],
     );
   }
 
