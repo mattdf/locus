@@ -634,61 +634,48 @@ function normalizeCopiedInlineMath(markdown: string): string {
 function separateAdjacentDisplayBlocks(markdown: string): string {
   const lines = markdown.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean) ?? [];
   const output: string[] = [];
-  let prose: string[] = [];
   let fence: { marker: "`" | "~"; length: number } | null = null;
 
-  const flushProse = () => {
-    if (prose.length === 0) return;
-    let source = prose.join("");
-    let previous: string;
-    do {
-      previous = source;
-      source = source.replace(
-        /([^$\r\n])\$\$([ \t]*(?:\r?\n[ \t]*)?)\$\$([^$\r\n])/g,
-        (match, before: string, gap: string, after: string, offset: number) => {
-          // Two delimiter pairs separated by at most one line break are a
-          // closing display followed by an opening display. Put both fences
-          // on their own lines so remark-math cannot absorb the second pair.
-          const newline = gap.includes("\r\n") ? "\r\n" : "\n";
-          const lineStart = source.lastIndexOf("\n", offset) + 1;
-          const currentIndent = source.slice(lineStart).match(/^[ \t]*/)?.[0] ?? "";
-          const nextIndent = gap.match(/\r?\n([ \t]*)$/)?.[1] ?? currentIndent;
-          return [
-            before,
-            newline,
-            `${currentIndent}$$`,
-            newline,
-            newline,
-            `${nextIndent}$$`,
-            newline,
-            nextIndent,
-            after,
-          ].join("");
-        },
-      );
-    } while (source !== previous);
-
-    const separatedLines = source.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean) ?? [];
-    for (let index = 0; index < separatedLines.length; index += 1) {
-      const line = separatedLines[index];
-      output.push(line);
-      const ending = line.match(/\r?\n$/)?.[0] ?? "";
-      const content = line.slice(0, line.length - ending.length);
-      const nextContent = separatedLines[index + 1]?.replace(/\r?\n$/, "") ?? "";
-      if (
-        ending &&
-        /^[ \t]*\$\$[ \t]*$/.test(content) &&
-        /^[ \t]*\$\$[ \t]*$/.test(nextContent)
-      ) {
-        output.push(ending);
-      }
+  const splitSameLineBoundaries = (
+    content: string,
+    indent: string,
+    newline: string,
+  ): string | null => {
+    const replacements: Array<{ start: number; end: number }> = [];
+    for (let cursor = 0; cursor < content.length - 1; cursor += 1) {
+      if (!content.startsWith("$$", cursor) || escapedAt(content, cursor)) continue;
+      let next = cursor + 2;
+      while (content[next] === " " || content[next] === "\t") next += 1;
+      if (!content.startsWith("$$", next) || escapedAt(content, next)) continue;
+      if (!content.slice(0, cursor).trim() || !content.slice(next + 2).trim()) continue;
+      replacements.push({ start: cursor, end: next + 2 });
+      cursor = next + 1;
     }
-    prose = [];
+    if (!replacements.length) return null;
+    const parts: string[] = [];
+    let copied = 0;
+    for (const replacement of replacements) {
+      parts.push(
+        content.slice(copied, replacement.start).trimEnd(),
+        newline,
+        `${indent}$$`,
+        newline,
+        newline,
+        `${indent}$$`,
+        newline,
+        indent,
+      );
+      copied = replacement.end;
+    }
+    parts.push(content.slice(copied).trimStart(), newline);
+    return parts.join("");
   };
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
-    const content = line.replace(/\r?\n$/, "");
+    const ending = line.match(/\r?\n$/)?.[0] ?? "";
+    const newline = ending || "\n";
+    const content = line.slice(0, line.length - ending.length);
     const fenceMarker = /^ {0,3}(`{3,}|~{3,})/.exec(content)?.[1];
 
     if (fence) {
@@ -702,7 +689,6 @@ function separateAdjacentDisplayBlocks(markdown: string): string {
       continue;
     }
     if (fenceMarker) {
-      flushProse();
       fence = {
         marker: fenceMarker[0] as "`" | "~",
         length: fenceMarker.length,
@@ -710,11 +696,53 @@ function separateAdjacentDisplayBlocks(markdown: string): string {
       output.push(line);
       continue;
     }
-    prose.push(line);
+
+    const indent = content.match(/^[ \t]*/)?.[0] ?? "";
+    const trimmed = content.trim();
+    const delimiterOnly = trimmed === "$$";
+    const leading = !delimiterOnly && trimmed.startsWith("$$");
+    const trailing = !delimiterOnly && trimmed.endsWith("$$") && !escapedAt(trimmed, trimmed.length - 2);
+    const sameLineBoundaries = splitSameLineBoundaries(content, indent, newline);
+    if (sameLineBoundaries) {
+      output.push(sameLineBoundaries);
+      continue;
+    }
+
+    // A complete one-line `$$equation$$` is handled by
+    // canonicalizeInlineDisplayBlocks. Here we only detach a delimiter that
+    // OCR glued to the first or last equation line. Handling the two edges
+    // independently also covers chains of three or more adjacent displays.
+    if (leading && !trailing) {
+      output.push(`${indent}$$${newline}`);
+      const body = trimmed.slice(2).trimStart();
+      if (body) output.push(`${indent}${body}${ending}`);
+      continue;
+    }
+    if (trailing && !leading) {
+      const body = trimmed.slice(0, -2).trimEnd();
+      if (body) output.push(`${indent}${body}${newline}`);
+      output.push(`${indent}$$${ending}`);
+      continue;
+    }
+    output.push(line);
   }
 
-  flushProse();
-  return output.join("");
+  const separated: string[] = [];
+  for (let index = 0; index < output.length; index += 1) {
+    const line = output[index];
+    separated.push(line);
+    const ending = line.match(/\r?\n$/)?.[0] ?? "";
+    const content = line.slice(0, line.length - ending.length);
+    const nextContent = output[index + 1]?.replace(/\r?\n$/, "") ?? "";
+    if (
+      ending &&
+      /^[ \t]*\$\$[ \t]*$/.test(content) &&
+      /^[ \t]*\$\$[ \t]*$/.test(nextContent)
+    ) {
+      separated.push(ending);
+    }
+  }
+  return separated.join("");
 }
 
 /**
@@ -1216,12 +1244,85 @@ function repairDisplayMath(markdown: string): string {
   return output.join("");
 }
 
+/** Remove redundant `$...$` wrappers from a TeX `\tag{...}` argument.
+ * A tag already lives inside display math, so nested dollar delimiters are
+ * invalid and can make an otherwise well-formed outer `$$...$$` block look
+ * unterminated to a Markdown scanner. This uses balanced-brace scanning and
+ * only acts when the tag argument contains exactly one outer dollar pair. */
+function unwrapDollarMathInLatexTags(markdown: string): string {
+  return mapOutsideMarkdownCode(markdown, (source) => {
+    const output: string[] = [];
+    let copied = 0;
+    let cursor = 0;
+    while (cursor < source.length) {
+      if (
+        source[cursor] !== "\\" ||
+        escapedAt(source, cursor) ||
+        !source.startsWith("\\tag", cursor) ||
+        /[A-Za-z@]/.test(source[cursor + 4] ?? "")
+      ) {
+        cursor += 1;
+        continue;
+      }
+      let braceStart = cursor + 4;
+      if (source[braceStart] === "*") braceStart += 1;
+      while (/\s/.test(source[braceStart] ?? "")) braceStart += 1;
+      if (source[braceStart] !== "{") {
+        cursor += 4;
+        continue;
+      }
+      let depth = 1;
+      let end = braceStart + 1;
+      while (end < source.length && depth > 0) {
+        if (!escapedAt(source, end)) {
+          if (source[end] === "{") depth += 1;
+          else if (source[end] === "}") depth -= 1;
+        }
+        end += 1;
+      }
+      if (depth !== 0) {
+        cursor = braceStart + 1;
+        continue;
+      }
+      const contentStart = braceStart + 1;
+      const contentEnd = end - 1;
+      const dollars: number[] = [];
+      for (let index = contentStart; index < contentEnd; index += 1) {
+        if (source[index] === "$" && !escapedAt(source, index)) dollars.push(index);
+      }
+      const firstNonWhitespace = source.slice(contentStart, contentEnd).search(/\S/);
+      const lastNonWhitespace = (() => {
+        for (let index = contentEnd - 1; index >= contentStart; index -= 1) {
+          if (!/\s/.test(source[index])) return index;
+        }
+        return -1;
+      })();
+      if (
+        dollars.length === 2 &&
+        firstNonWhitespace >= 0 &&
+        dollars[0] === contentStart + firstNonWhitespace &&
+        dollars[1] === lastNonWhitespace
+      ) {
+        output.push(
+          source.slice(copied, dollars[0]),
+          source.slice(dollars[0] + 1, dollars[1]),
+        );
+        copied = dollars[1] + 1;
+      }
+      cursor = end;
+    }
+    output.push(source.slice(copied));
+    return output.join("");
+  });
+}
+
 export function normalizeMathDelimiters(
   markdown: string,
   recoverCopiedChatGptMath = false,
 ): string {
+  const withoutNestedTagMath = unwrapDollarMathInLatexTags(markdown);
   if (!recoverCopiedChatGptMath) {
-    const normalizedDelimiters = normalizeSlashMathDelimiters(markdown);
+    const normalizedDelimiters = normalizeSlashMathDelimiters(withoutNestedTagMath);
     return repairLatexMathBodies(repairDisplayMath(
       mapMarkdownProse(normalizedDelimiters, (source) =>
         wrapParenthesizedLatex(source)
@@ -1230,7 +1331,7 @@ export function normalizeMathDelimiters(
   }
 
   const importedMarkdown = unwrapMisclassifiedIndentedPdfMath(
-    unwrapMisclassifiedPdfPageFences(normalizeLegacyPdfMarkup(markdown)),
+    unwrapMisclassifiedPdfPageFences(normalizeLegacyPdfMarkup(withoutNestedTagMath)),
   );
   const withDisplayMath = normalizeSlashMathDelimiters(
     normalizeCopiedBracketDisplayBlocks(

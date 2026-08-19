@@ -1,6 +1,7 @@
 import { memo, useMemo } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
+import { KATEX_RENDER_OPTIONS } from "../lib/katex";
 import remarkMath from "remark-math";
 import { normalizeMathDelimiters } from "../lib/markdown";
 
@@ -33,7 +34,7 @@ export const InlineMath = memo(function InlineMath({
     <span className={`inline-math ${className}`.trim()}>
       <ReactMarkdown
         remarkPlugins={[remarkMath]}
-        rehypePlugins={[[rehypeKatex, { strict: false }]]}
+        rehypePlugins={[[rehypeKatex, KATEX_RENDER_OPTIONS]]}
         components={INLINE_COMPONENTS}
       >
         {inlineSource}
@@ -51,7 +52,7 @@ export const MathBlock = memo(function MathBlock({
     <div className={`math-block ${className}`.trim()}>
       <ReactMarkdown
         remarkPlugins={[remarkMath]}
-        rehypePlugins={[[rehypeKatex, { strict: false }]]}
+        rehypePlugins={[[rehypeKatex, KATEX_RENDER_OPTIONS]]}
       >
         {normalizedSource}
       </ReactMarkdown>

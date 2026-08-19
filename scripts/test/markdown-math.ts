@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import katex from "katex";
+import { KATEX_RENDER_OPTIONS } from "../../src/lib/katex.ts";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import remarkParse from "remark-parse";
@@ -20,8 +21,8 @@ function assertMarkdownMathRenders(source: string): number {
     count += 1;
     assert.doesNotThrow(() =>
       katex.renderToString(node.value, {
+        ...KATEX_RENDER_OPTIONS,
         displayMode: node.type === "math",
-        strict: false,
       }),
     );
   });
@@ -177,7 +178,10 @@ assert.match(repairedDisplays[0], /\\tag\{3\.2\}/);
 assert.doesNotMatch(repairedDisplays[0], /\\tag\{3\.3\}/);
 assert.match(repairedDisplays[1], /\\tag\{3\.3\}/);
 repairedDisplays.forEach((equation) => {
-  assert.doesNotThrow(() => katex.renderToString(equation, { displayMode: true, strict: false }));
+  assert.doesNotThrow(() => katex.renderToString(equation, {
+    ...KATEX_RENDER_OPTIONS,
+    displayMode: true,
+  }));
 });
 assert.equal(
   normalizeMathDelimiters(repairedTaggedArray, true),
@@ -208,8 +212,31 @@ assert.equal(repairedAlignedDisplays.length, 2);
 assert.match(repairedAlignedDisplays[0], /\\tag\{18\.18\}/);
 assert.match(repairedAlignedDisplays[1], /\\tag\{18\.19\}/);
 repairedAlignedDisplays.forEach((equation) => {
-  assert.doesNotThrow(() => katex.renderToString(equation, { displayMode: true, strict: false }));
+  assert.doesNotThrow(() => katex.renderToString(equation, {
+    ...KATEX_RENDER_OPTIONS,
+    displayMode: true,
+  }));
 });
+
+const taggedProofSymbol = String.raw`$$
+\begin{aligned}
+\int_{T_j} \left( \sum_i \chi_{T_i} \right)^{p-1}
+&\le \delta^{n-(n-1)p}.
+\end{aligned} \tag*{$\square$}
+$$`;
+const repairedProofSymbol = normalizeMathDelimiters(taggedProofSymbol, true);
+assert.match(repairedProofSymbol, /\\tag\*\{\\square\}/);
+assert.doesNotMatch(repairedProofSymbol, /\\tag\*\{\$\\square\$\}/);
+assert.equal((repairedProofSymbol.match(/\$\$/g) ?? []).length, 2);
+assert.doesNotThrow(() => {
+  const body = repairedProofSymbol.match(/^\$\$\s*([\s\S]*?)\s*\$\$$/)?.[1] ?? "";
+  katex.renderToString(body, { ...KATEX_RENDER_OPTIONS, displayMode: true });
+});
+assert.equal(
+  normalizeMathDelimiters("```tex\n\\tag*{$\\square$}\n```", true),
+  "```tex\n\\tag*{$\\square$}\n```",
+  "tag repair must not alter code fences",
+);
 
 const adjacentDisplayMath = String.raw`Here and below $a_j$ and $b_j$ are constants.
 
@@ -234,6 +261,20 @@ assert.equal(
   ),
   normalizeMathDelimiters(adjacentDisplayMath, true),
   "adjacent display repair must be idempotent",
+);
+
+const threeDisplayChain = String.raw`$$
+S(u) = A(u) + B(u)$$
+$$\times \int_{-\infty}^{\infty} f(r,u)\,dr$$
+$$+ \operatorname{sgn}(u) \int_{-\infty}^{\infty} g(r,u)\,dr.
+$$`;
+assert.equal(assertMarkdownMathRenders(threeDisplayChain), 3);
+const repairedThreeDisplayChain = normalizeMathDelimiters(threeDisplayChain, true);
+assert.equal((repairedThreeDisplayChain.match(/\$\$/g) ?? []).length, 6);
+assert.equal(
+  normalizeMathDelimiters(repairedThreeDisplayChain, true),
+  repairedThreeDisplayChain,
+  "three-display chain repair must be idempotent",
 );
 
 const adjacentDisplaysInCode = [

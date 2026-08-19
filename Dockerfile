@@ -18,7 +18,7 @@ RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --include=optional --
 COPY --from=build /app/build ./build
 COPY --from=build /app/dist ./dist
 COPY migrations ./migrations
-COPY SYSTEM_PROMPT.md VISUALIZATION_PROMPT.md SOURCE_REWRITE_PROMPT.md ./
+COPY SYSTEM_PROMPT.md VISUALIZATION_PROMPT.md SOURCE_REWRITE_PROMPT.md PDF_REPAIR_PROMPT.md ./
 USER node
 EXPOSE 8787
 CMD ["node", "build/server/index.mjs"]

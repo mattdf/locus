@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
+import { KATEX_RENDER_OPTIONS } from "../lib/katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { normalizeMathDelimiters } from "../lib/markdown";
@@ -15,7 +16,7 @@ function MarkdownPreview({ source }: { source: string }) {
     <div className="source-rewrite-preview__markdown">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[[rehypeKatex, { strict: false }], rehypeHighlight]}
+        rehypePlugins={[[rehypeKatex, KATEX_RENDER_OPTIONS], rehypeHighlight]}
       >
         {normalizeMathDelimiters(source, true)}
       </ReactMarkdown>

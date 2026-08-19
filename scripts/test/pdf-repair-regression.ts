@@ -108,7 +108,7 @@ if (process.env.PDF_REPAIR_LIVE === "1") {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          ownerUserId: "local",
+          ownerUserId: process.env.PDF_REPAIR_LIVE_OWNER_ID ?? "local",
           jobId: `regression-${issue.chatId}`,
           documentId: issue.documentId,
           pageNumber: issue.page,

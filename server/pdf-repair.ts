@@ -9,6 +9,7 @@ import remarkParse from "remark-parse";
 import { unified } from "unified";
 import { diff_match_patch } from "diff-match-patch";
 import { normalizeMathDelimiters } from "../src/lib/markdown.ts";
+import { KATEX_RENDER_OPTIONS } from "../src/lib/katex.ts";
 import { isHosted } from "./config.ts";
 import {
   resolveManagedCredentialDetails,
@@ -26,8 +27,12 @@ import { calculateGenerationCost } from "./pricing.ts";
 import { createProviderClient } from "./providers.ts";
 
 const PROMPT_FILE = path.resolve("PDF_REPAIR_PROMPT.md");
-export const PDF_REPAIR_PROMPT_VERSION = "pdf-markdown-repair-v1";
+export const PDF_REPAIR_PROMPT_VERSION = "pdf-markdown-repair-v2";
 export const PDF_REPAIR_MODEL = process.env.PDF_REPAIR_MODEL?.trim() || "gpt-5.4-mini";
+const MAX_ATTEMPTS = Math.min(
+  4,
+  Math.max(1, Number(process.env.PDF_REPAIR_MAX_ATTEMPTS ?? 3)),
+);
 const MAX_OUTPUT_TOKENS = Math.max(
   1_000,
   Number(process.env.PDF_REPAIR_MAX_OUTPUT_TOKENS ?? 16_000),
@@ -250,9 +255,9 @@ function validateKatex(markdown: string): number {
   const visit = (node: MarkdownNode) => {
     if ((node.type === "math" || node.type === "inlineMath") && typeof node.value === "string") {
       katex.renderToString(node.value, {
+        ...KATEX_RENDER_OPTIONS,
         displayMode: node.type === "math",
         throwOnError: true,
-        strict: false,
       });
       count += 1;
     }
@@ -260,6 +265,48 @@ function validateKatex(markdown: string): number {
   };
   visit(tree);
   return count;
+}
+
+function katexDiagnostics(markdown: string, limit = 8): string[] {
+  const tree = unified().use(remarkParse).use(remarkGfm).use(remarkMath).parse(markdown) as MarkdownNode;
+  const diagnostics: string[] = [];
+  const visit = (node: MarkdownNode) => {
+    if (
+      diagnostics.length < limit &&
+      (node.type === "math" || node.type === "inlineMath") &&
+      typeof node.value === "string"
+    ) {
+      try {
+        katex.renderToString(node.value, {
+          ...KATEX_RENDER_OPTIONS,
+          displayMode: node.type === "math",
+          throwOnError: true,
+        });
+      } catch (error) {
+        const compact = node.value.replace(/\s+/g, " ").trim();
+        diagnostics.push(
+          `${node.type === "math" ? "display" : "inline"} math ${JSON.stringify(
+            compact.length > 500 ? `${compact.slice(0, 497)}...` : compact,
+          )}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+    node.children?.forEach(visit);
+  };
+  visit(tree);
+  return diagnostics;
+}
+
+function addTokenUsage(total: TokenUsage | null, current: TokenUsage | null): TokenUsage | null {
+  if (!current) return total;
+  if (!total) return { ...current };
+  return {
+    inputTokens: total.inputTokens + current.inputTokens,
+    cachedInputTokens: total.cachedInputTokens + current.cachedInputTokens,
+    outputTokens: total.outputTokens + current.outputTokens,
+    reasoningTokens: total.reasoningTokens + current.reasoningTokens,
+    totalTokens: total.totalTokens + current.totalTokens,
+  };
 }
 
 export function validateAndNormalizeRepair(source: string, candidate: string): {
@@ -432,44 +479,86 @@ export async function repairPdfMarkdownPage(input: {
     const prompt = (await readFile(PROMPT_FILE, "utf8")).trim();
     if (!prompt) throw new PdfRepairError("PDF_REPAIR_PROMPT.md is empty");
     const client = await createProviderClient("openai", undefined, credential.apiKey);
-    const response = await client.responses.create({
-      model: PDF_REPAIR_MODEL,
-      instructions: prompt,
-      input: [
-        `PROMPT_VERSION: ${PDF_REPAIR_PROMPT_VERSION}`,
-        `PAGE_NUMBER: ${input.pageNumber}`,
-        `SOURCE_SHA256: ${input.sourceSha256}`,
-        `<PREVIOUS_PAGE_READ_ONLY>\n${input.previousMarkdown ?? ""}\n</PREVIOUS_PAGE_READ_ONLY>`,
-        `<CURRENT_PAGE>\n${input.markdown}\n</CURRENT_PAGE>`,
-        `<NEXT_PAGE_READ_ONLY>\n${input.nextMarkdown ?? ""}\n</NEXT_PAGE_READ_ONLY>`,
-      ].join("\n\n"),
-      reasoning: { effort: "low" },
-      max_output_tokens: MAX_OUTPUT_TOKENS,
-      text: {
-        format: {
-          type: "json_schema",
-          name: "pdf_markdown_repair",
-          strict: true,
-          schema: outputSchema(),
+    let working = normalizeMathDelimiters(input.markdown, true);
+    validateSemanticStability(input.markdown, working);
+    let feedback = katexDiagnostics(working);
+    let validated: { markdown: string; mathNodeCount: number } | null = null;
+    let editCount = 0;
+    let summary = "";
+    let lastFailure = feedback.length
+      ? `KaTeX validation failed:\n- ${feedback.join("\n- ")}`
+      : "No parser failure was detected; inspect for other unambiguous OCR Markdown structure defects.";
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      const response = await client.responses.create({
+        model: PDF_REPAIR_MODEL,
+        instructions: prompt,
+        input: [
+          `PROMPT_VERSION: ${PDF_REPAIR_PROMPT_VERSION}`,
+          `ATTEMPT: ${attempt} of ${MAX_ATTEMPTS}`,
+          `PAGE_NUMBER: ${input.pageNumber}`,
+          `SOURCE_SHA256: ${input.sourceSha256}`,
+          `<VALIDATOR_FEEDBACK>\n${lastFailure}\n</VALIDATOR_FEEDBACK>`,
+          `<PREVIOUS_PAGE_READ_ONLY>\n${input.previousMarkdown ?? ""}\n</PREVIOUS_PAGE_READ_ONLY>`,
+          `<CURRENT_PAGE>\n${working}\n</CURRENT_PAGE>`,
+          `<NEXT_PAGE_READ_ONLY>\n${input.nextMarkdown ?? ""}\n</NEXT_PAGE_READ_ONLY>`,
+        ].join("\n\n"),
+        reasoning: { effort: "low" },
+        max_output_tokens: MAX_OUTPUT_TOKENS,
+        text: {
+          format: {
+            type: "json_schema",
+            name: "pdf_markdown_repair",
+            strict: true,
+            schema: outputSchema(),
+          },
         },
-      },
-      store: false,
-    }, { signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
-    usage = tokenUsage(response);
-    if (response.status !== "completed" || !response.output_text) {
-      throw new PdfRepairError(
-        response.status === "incomplete"
-          ? `PDF repair model stopped early: ${response.incomplete_details?.reason ?? "unknown reason"}`
-          : "PDF repair model returned no usable output",
-      );
+        store: false,
+      }, { signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS) });
+      usage = addTokenUsage(usage, tokenUsage(response));
+      if (response.status !== "completed" || !response.output_text) {
+        lastFailure = response.status === "incomplete"
+          ? `The previous response stopped early: ${response.incomplete_details?.reason ?? "unknown reason"}`
+          : "The previous response contained no usable output.";
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(response.output_text) as RepairOutput;
+        if (!Array.isArray(parsed.edits) || typeof parsed.summary !== "string") {
+          throw new PdfRepairError("The repair model returned an invalid edit set");
+        }
+        const acceptedEdits = parsed.edits.filter((edit) => edit.confidence === "high");
+        const candidate = applyExactRepairEdits(working, acceptedEdits);
+        validateSemanticStability(input.markdown, candidate);
+        editCount += acceptedEdits.length;
+        summary = parsed.summary;
+        try {
+          validated = validateAndNormalizeRepair(input.markdown, candidate);
+          working = validated.markdown;
+          break;
+        } catch (error) {
+          working = normalizeMathDelimiters(candidate, true);
+          feedback = katexDiagnostics(working);
+          lastFailure = [
+            `The previous edit set was applied but still failed validation: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            ...(feedback.length ? ["Remaining KaTeX failures:", ...feedback.map((item) => `- ${item}`)] : []),
+            "Return a new exact edit set against the CURRENT_PAGE below, which includes accepted prior fixes.",
+          ].join("\n");
+        }
+      } catch (error) {
+        lastFailure = [
+          `The previous edit set could not be applied safely: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          "Every before value must be copied verbatim from CURRENT_PAGE, with the correct occurrence.",
+        ].join("\n");
+      }
     }
-    const parsed = JSON.parse(response.output_text) as RepairOutput;
-    if (!Array.isArray(parsed.edits) || typeof parsed.summary !== "string") {
-      throw new PdfRepairError("PDF repair model returned an invalid edit set");
+    if (!validated) {
+      throw new PdfRepairError(`PDF repair remained invalid after ${MAX_ATTEMPTS} attempts: ${lastFailure}`);
     }
-    const acceptedEdits = parsed.edits.filter((edit) => edit.confidence === "high");
-    const candidate = applyExactRepairEdits(input.markdown, acceptedEdits);
-    const validated = validateAndNormalizeRepair(input.markdown, candidate);
     await persistRepairFinished({
       ownerUserId: input.ownerUserId,
       generationId,
@@ -480,9 +569,9 @@ export async function repairPdfMarkdownPage(input: {
     return {
       markdown: validated.markdown,
       changed: validated.markdown !== input.markdown,
-      editCount: acceptedEdits.length,
+      editCount,
       mathNodeCount: validated.mathNodeCount,
-      summary: parsed.summary,
+      summary,
       model: PDF_REPAIR_MODEL,
       promptVersion: PDF_REPAIR_PROMPT_VERSION,
     };

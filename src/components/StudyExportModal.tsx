@@ -3,6 +3,7 @@ import { useState } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
+import { KATEX_RENDER_OPTIONS } from "../lib/katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import type { ChatTree, ThreadNode } from "../types";
@@ -48,7 +49,7 @@ function Markdown({
     >
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkMath]}
-        rehypePlugins={[[rehypeKatex, { strict: false }], rehypeHighlight]}
+        rehypePlugins={[[rehypeKatex, KATEX_RENDER_OPTIONS], rehypeHighlight]}
         components={EXPORT_MARKDOWN_COMPONENTS}
       >
         {normalizeMathDelimiters(source, imported)}

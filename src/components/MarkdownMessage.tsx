@@ -11,6 +11,7 @@ import {
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
+import { KATEX_RENDER_OPTIONS } from "../lib/katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { normalizeMathDelimiters } from "../lib/markdown";
@@ -107,7 +108,7 @@ const RenderedMarkdownBody = memo(function RenderedMarkdownBody({
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm, remarkMath]}
-      rehypePlugins={[[rehypeKatex, { strict: false }], rehypeHighlight]}
+      rehypePlugins={[[rehypeKatex, KATEX_RENDER_OPTIONS], rehypeHighlight]}
       components={preserveSoftBreaks ? PDF_MARKDOWN_COMPONENTS : MARKDOWN_COMPONENTS}
     >
       {content}

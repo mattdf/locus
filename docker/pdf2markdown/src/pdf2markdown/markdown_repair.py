@@ -17,7 +17,7 @@ from .markdown_pages import format_markdown_page
 from .persistent_store import PersistentStore
 
 
-PROMPT_VERSION = "pdf-markdown-repair-v1"
+PROMPT_VERSION = "pdf-markdown-repair-v2"
 PAGE_FILE_PATTERN = re.compile(r"^page-(\d+)\.md$")
 
 
