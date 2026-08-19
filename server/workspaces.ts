@@ -141,7 +141,15 @@ async function loadIndexWithClient(
     }>(
       `select "document" - 'nodes' as "document",
               "categoryId", "title", "pinned",
-              greatest(jsonb_object_length(coalesce("document" -> 'nodes', '{}'::jsonb)) - 1, 0)::int as "branchCount"
+              greatest(
+                (
+                  select count(*)
+                    from jsonb_object_keys(
+                      coalesce("locus_chats"."document" -> 'nodes', '{}'::jsonb)
+                    )
+                ) - 1,
+                0
+              )::int as "branchCount"
          from "locus_chats"
         where "ownerUserId" = $1 order by "updatedAt" desc`,
       [ownerUserId],
