@@ -2020,11 +2020,132 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+.pdf-import-progress__body {
+  min-width: 0;
+}
+
+.pdf-import-progress__heading {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.pdf-import-progress__heading time {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
 .pdf-import-progress p {
   margin: 5px 0 0;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.55;
+}
+
+.pdf-import-progress .pdf-import-progress__file {
+  overflow: hidden;
+  margin-top: 2px;
+  color: color-mix(in srgb, var(--muted) 88%, transparent);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pdf-import-progress .pdf-import-progress__note {
+  max-width: 62ch;
+  color: color-mix(in srgb, var(--muted) 85%, var(--accent));
+  font-size: 9px;
+}
+
+.pdf-import-progress__steps {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pdf-import-progress__steps li {
+  position: relative;
+  display: grid;
+  gap: 5px;
+  justify-items: center;
+  color: color-mix(in srgb, var(--muted) 72%, transparent);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.pdf-import-progress__steps li::after {
+  position: absolute;
+  z-index: 0;
+  top: 4px;
+  left: calc(50% + 7px);
+  width: calc(100% - 14px);
+  height: 1px;
+  content: "";
+  background: color-mix(in srgb, var(--border) 82%, transparent);
+}
+
+.pdf-import-progress__steps li:last-child::after {
+  display: none;
+}
+
+.pdf-import-progress__steps li > i {
+  position: relative;
+  z-index: 1;
+  width: 9px;
+  height: 9px;
+  background: color-mix(in srgb, var(--border) 80%, var(--panel));
+  border: 2px solid var(--panel);
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 80%, transparent);
+}
+
+.pdf-import-progress__steps li.is-complete,
+.pdf-import-progress__steps li.is-active {
+  color: var(--accent);
+}
+
+.pdf-import-progress__steps li.is-complete > i,
+.pdf-import-progress__steps li.is-active > i {
+  background: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 68%, transparent);
+}
+
+.pdf-import-progress__steps li.is-complete::after {
+  background: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.pdf-import-progress__steps li.is-active > i {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.pdf-import-progress__pages {
+  display: grid;
+  gap: 5px;
+  margin-top: 11px;
+  color: var(--muted);
+  font-size: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pdf-import-progress__page-track {
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 999px;
+}
+
+.pdf-import-progress__page-track > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width 180ms ease;
 }
 
 .pdf-import-progress__track {

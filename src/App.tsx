@@ -174,6 +174,8 @@ import type {
   ProviderModelOption,
   PromptProfilePurpose,
   PdfChatSource,
+  PdfImportProgress,
+  PdfImportStage,
   PdfPageFurniture,
   ReasoningEffort,
   SelectionDraft,
@@ -194,6 +196,18 @@ import {
 import type { RuntimeInfo } from "./runtime";
 
 const UNCATEGORIZED_CATEGORY_ID = "__uncategorized__";
+const PDF_IMPORT_STAGES = new Set<PdfImportStage>([
+  "queued",
+  "preparing",
+  "ocr",
+  "mistral",
+  "exporting",
+  "images",
+  "repair",
+  "assembling",
+  "completed",
+  "failed",
+]);
 const SELECTION_ACTION_OPTIONS = [
   { id: "define", label: "Define" },
   { id: "visualize", label: "Visualize" },
@@ -2092,6 +2106,9 @@ export default function App({
   const [studyExportOpen, setStudyExportOpen] = useState(false);
   const [jobCompletionNotice, setJobCompletionNotice] =
     useState<WorkspaceJob | null>(null);
+  const [pdfImportProgressByJob, setPdfImportProgressByJob] = useState<
+    Record<string, PdfImportProgress>
+  >({});
   const [customInstructionsDraft, setCustomInstructionsDraft] = useState("");
   const [providerConnections, setProviderConnections] = useState<ProviderConnectionSummary[]>([]);
   const [providerModels, setProviderModels] = useState<ProviderModelOption[]>([]);
@@ -3004,9 +3021,48 @@ export default function App({
           );
           const job = (await response.json().catch(() => ({}))) as {
             status?: "queued" | "running" | "completed" | "failed";
+            stage?: string;
+            progress_current?: number;
+            progress_total?: number;
+            progress_message?: string | null;
+            started_at?: string | null;
             error?: string | null;
           };
           if (!response.ok) return;
+          if (job.status) {
+            const progress: PdfImportProgress = {
+              jobId: item.jobId,
+              status: job.status,
+              stage: PDF_IMPORT_STAGES.has(job.stage as PdfImportStage)
+                ? job.stage as PdfImportStage
+                : job.status === "queued"
+                  ? "queued"
+                  : "preparing",
+              current: Number.isFinite(job.progress_current)
+                ? Math.max(0, Number(job.progress_current))
+                : 0,
+              total: Number.isFinite(job.progress_total)
+                ? Math.max(0, Number(job.progress_total))
+                : 0,
+              message: typeof job.progress_message === "string"
+                ? job.progress_message
+                : null,
+              startedAt: typeof job.started_at === "string" ? job.started_at : null,
+            };
+            setPdfImportProgressByJob((current) => {
+              const previous = current[item.jobId];
+              if (
+                previous &&
+                previous.status === progress.status &&
+                previous.stage === progress.stage &&
+                previous.current === progress.current &&
+                previous.total === progress.total &&
+                previous.message === progress.message &&
+                previous.startedAt === progress.startedAt
+              ) return current;
+              return { ...current, [item.jobId]: progress };
+            });
+          }
           if (job.status === "failed") {
             const updatedAt = timestamp();
             setWorkspace((current) => ({
@@ -7519,6 +7575,11 @@ export default function App({
           <ThreadView
             chat={activeChat}
             node={leftPaneNode}
+            pdfImportProgress={
+              leftPaneIsRoot && activeChat.source?.kind === "pdf"
+                ? pdfImportProgressByJob[activeChat.source.jobId]
+                : undefined
+            }
             initialPdfPage={leftPaneIsRoot ? readPdfPageAnchor() ?? undefined : undefined}
             onPdfPageChange={leftPaneIsRoot ? replacePdfPageAnchor : undefined}
             provider={chatProviderKind}

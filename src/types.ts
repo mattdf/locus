@@ -245,6 +245,29 @@ export interface PdfChatSource {
   error?: string;
 }
 
+export type PdfImportStage =
+  | "queued"
+  | "preparing"
+  | "ocr"
+  | "mistral"
+  | "exporting"
+  | "images"
+  | "repair"
+  | "assembling"
+  | "completed"
+  | "failed";
+
+/** Ephemeral progress read from the durable PDF worker job. */
+export interface PdfImportProgress {
+  jobId: string;
+  status: "queued" | "running" | "completed" | "failed";
+  stage: PdfImportStage;
+  current: number;
+  total: number;
+  message: string | null;
+  startedAt: string | null;
+}
+
 export interface PdfTocEntry {
   level: number;
   title: string;

@@ -418,13 +418,22 @@ def process_persistent_job(
             return repaired_path.relative_to(document_root).as_posix()
 
     def convert(ocr_pdf_path: Path) -> str:
-        store.set_job_progress(
-            job["job_id"],
-            stage="ocr",
-            current=0,
-            total=int(job["reserved_pages"]),
-            message="Extracting text, equations, and figures",
-        )
+        reserved_pages = int(job["reserved_pages"])
+
+        def report_progress(
+            stage: str,
+            current: int,
+            total: int,
+            message: str,
+        ) -> None:
+            store.set_job_progress(
+                job["job_id"],
+                stage=stage,
+                current=current,
+                total=total or reserved_pages,
+                message=message,
+            )
+
         raw_markdown = process_pdf(
             pdf_path=ocr_pdf_path,
             output_root=output_root,
@@ -433,6 +442,7 @@ def process_persistent_job(
             timeout=settings.timeout_seconds,
             center_images=settings.center_images,
             page_number_offset=page_number_offset,
+            progress_callback=report_progress,
         )
         pages, doc_size, model = _metadata_usage(
             raw_markdown.parent / "metadata.json",
@@ -495,6 +505,13 @@ def process_persistent_job(
     if page_start == 1 and page_end == int(job["page_count"]):
         return convert(source_path)
 
+    store.set_job_progress(
+        job["job_id"],
+        stage="preparing",
+        current=0,
+        total=int(job["reserved_pages"]),
+        message=f"Preparing pages {page_start}-{page_end} for OCR",
+    )
     with tempfile.TemporaryDirectory(prefix="locus-pdf-range-") as temporary_dir:
         selected_path = Path(temporary_dir) / (
             f"pages-{page_start:04d}-{page_end:04d}.pdf"

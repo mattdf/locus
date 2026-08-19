@@ -44,6 +44,8 @@ import type {
   SendShortcut,
   ProviderId,
   ProviderModelOption,
+  PdfImportProgress,
+  PdfImportStage,
   PdfPageFurniture,
   PdfTocEntry,
   VisualizationContextScope,
@@ -151,6 +153,7 @@ interface ThreadViewProps {
   readOnly?: boolean;
   initialPdfPage?: number;
   onPdfPageChange?: (page: number) => void;
+  pdfImportProgress?: PdfImportProgress;
   onSelect: (selection: SelectionDraft) => void;
   onOpenElaboration: (childId: string) => void;
   onOpenDefinition: (
@@ -241,6 +244,119 @@ function ThinkingIndicator({ startedAt }: { startedAt: string }) {
       <span />
       <em>Working through the steps…</em>
       <time>{elapsed}</time>
+    </div>
+  );
+}
+
+const PDF_IMPORT_STEPS: Array<{
+  label: string;
+  stages: PdfImportStage[];
+}> = [
+  { label: "Queued", stages: ["queued"] },
+  { label: "OCR", stages: ["preparing", "ocr", "mistral", "exporting"] },
+  { label: "Figures", stages: ["images"] },
+  { label: "Formatting", stages: ["repair"] },
+  { label: "Finishing", stages: ["assembling", "completed"] },
+];
+
+function pdfImportStageLabel(stage: PdfImportStage): string {
+  switch (stage) {
+    case "queued": return "Waiting for a conversion worker";
+    case "preparing": return "Preparing PDF for OCR";
+    case "ocr": return "Waiting for Mistral OCR";
+    case "mistral": return "Waiting for Mistral OCR";
+    case "exporting": return "Saving OCR pages";
+    case "images": return "Recovering figures";
+    case "repair": return "Running model formatter";
+    case "assembling": return "Assembling the finished document";
+    case "completed": return "PDF import complete";
+    case "failed": return "PDF import failed";
+  }
+}
+
+function PdfImportProgressCard({
+  filename,
+  progress,
+}: {
+  filename: string;
+  progress?: PdfImportProgress;
+}) {
+  const stage = progress?.stage ?? "queued";
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!progress?.startedAt) return;
+    const interval = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(interval);
+  }, [progress?.startedAt]);
+
+  const activeStep = Math.max(
+    0,
+    PDF_IMPORT_STEPS.findIndex((step) => step.stages.includes(stage)),
+  );
+  const current = Math.max(0, progress?.current ?? 0);
+  const total = Math.max(0, progress?.total ?? 0);
+  const hasPageProgress =
+    total > 0 &&
+    (stage === "exporting" || stage === "repair" || stage === "assembling");
+  const fraction = hasPageProgress ? Math.min(1, current / total) : 0;
+  const started = progress?.startedAt ? Date.parse(progress.startedAt) : NaN;
+  const elapsed = Number.isFinite(started)
+    ? formatDuration(Math.max(0, now - started))
+    : null;
+  const detail = progress?.message || pdfImportStageLabel(stage);
+
+  return (
+    <div className="pdf-import-progress" role="status" aria-live="polite">
+      <LoaderCircle size={22} aria-hidden="true" />
+      <div className="pdf-import-progress__body">
+        <div className="pdf-import-progress__heading">
+          <strong>{pdfImportStageLabel(stage)}</strong>
+          {elapsed && <time>{elapsed}</time>}
+        </div>
+        <p className="pdf-import-progress__file">{filename}</p>
+        <p>{detail}</p>
+        {(stage === "mistral" || stage === "ocr") && (
+          <p className="pdf-import-progress__note">
+            Mistral returns OCR as one completed response, so it does not expose
+            page-by-page progress during this step.
+          </p>
+        )}
+        <ol className="pdf-import-progress__steps" aria-label="PDF conversion stages">
+          {PDF_IMPORT_STEPS.map((step, index) => (
+            <li
+              className={
+                index < activeStep
+                  ? "is-complete"
+                  : index === activeStep
+                    ? "is-active"
+                    : undefined
+              }
+              key={step.label}
+            >
+              <i aria-hidden="true" />
+              <span>{step.label}</span>
+            </li>
+          ))}
+        </ol>
+        {hasPageProgress && (
+          <div className="pdf-import-progress__pages">
+            <span>{Math.min(current, total)} of {total} pages</span>
+            <span
+              className="pdf-import-progress__page-track"
+              role="progressbar"
+              aria-label={`${pdfImportStageLabel(stage)} progress`}
+              aria-valuemin={0}
+              aria-valuemax={total}
+              aria-valuenow={Math.min(current, total)}
+            >
+              <i style={{ width: `${fraction * 100}%` }} />
+            </span>
+          </div>
+        )}
+      </div>
+      {!hasPageProgress && (
+        <span className="pdf-import-progress__track" aria-hidden="true"><i /></span>
+      )}
     </div>
   );
 }
@@ -368,6 +484,7 @@ export function ThreadView({
   readOnly = false,
   initialPdfPage,
   onPdfPageChange,
+  pdfImportProgress,
   onSelect,
   onOpenElaboration,
   onOpenDefinition,
@@ -1817,7 +1934,7 @@ export function ThreadView({
                       chat.source?.kind === "pdf" &&
                       chat.source.status === "importing" && (
                         <span className="source-pdf-status">
-                          <span /> Converting PDF…
+                          <span /> {pdfImportStageLabel(pdfImportProgress?.stage ?? "queued")}
                         </span>
                       )}
                     {!readOnly && (
@@ -2123,17 +2240,10 @@ export function ThreadView({
                 node.id === chat.rootId &&
                 chat.source?.kind === "pdf" &&
                 chat.source.status === "importing" ? (
-                <div className="pdf-import-progress" role="status" aria-live="polite">
-                  <LoaderCircle size={22} aria-hidden="true" />
-                  <div>
-                    <strong>Converting {chat.source.filename}</strong>
-                    <p>
-                      Extracting pages, recovering figures, then checking Markdown and LaTeX
-                      formatting. This job continues on the server if you leave or refresh.
-                    </p>
-                  </div>
-                  <span className="pdf-import-progress__track" aria-hidden="true"><i /></span>
-                </div>
+                <PdfImportProgressCard
+                  filename={chat.source.filename}
+                  progress={pdfImportProgress}
+                />
               ) : (
                 <>
                 <MarkdownMessage

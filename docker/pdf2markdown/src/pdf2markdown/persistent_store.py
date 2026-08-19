@@ -689,7 +689,11 @@ class PersistentStore:
                     """
                     UPDATE jobs
                     SET status = 'running',
-                        stage = CASE WHEN stage = 'queued' THEN 'ocr' ELSE stage END,
+                        stage = CASE WHEN stage = 'queued' THEN 'preparing' ELSE stage END,
+                        progress_message = CASE
+                            WHEN stage = 'queued' THEN 'Preparing PDF for OCR'
+                            ELSE progress_message
+                        END,
                         started_at = COALESCE(started_at, ?)
                     WHERE job_id = ? AND status = 'queued'
                     """,

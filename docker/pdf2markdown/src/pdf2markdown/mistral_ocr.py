@@ -13,7 +13,7 @@ import urllib.error
 import urllib.request
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .markdown_cleanup import CleanupStats, normalize_ocr_page_markdown
 from .markdown_images import center_markdown_images
@@ -22,6 +22,8 @@ from .markdown_pages import format_markdown_page
 
 API_URL = "https://api.mistral.ai/v1/ocr"
 DEFAULT_MODEL = "mistral-ocr-4-0"
+ProgressCallback = Callable[[str, int, int, str], None]
+StatusCallback = Callable[[str], None]
 
 
 def read_api_key(path: Path) -> str:
@@ -66,6 +68,7 @@ def call_ocr(
     api_key: str,
     body: bytes,
     timeout: int,
+    status_callback: StatusCallback | None = None,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     request = urllib.request.Request(
         API_URL,
@@ -81,7 +84,18 @@ def call_ocr(
     delays = (0, 2, 5, 10)
     for attempt, delay in enumerate(delays, start=1):
         if delay:
+            if status_callback is not None:
+                status_callback(
+                    f"Mistral OCR is busy; retrying in {delay} seconds "
+                    f"(attempt {attempt} of {len(delays)})"
+                )
             time.sleep(delay)
+        if status_callback is not None:
+            status_callback(
+                "Waiting for Mistral OCR"
+                if attempt == 1
+                else f"Waiting for Mistral OCR (attempt {attempt} of {len(delays)})"
+            )
         try:
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 headers = {key.lower(): value for key, value in response.headers.items()}
@@ -124,6 +138,7 @@ def export_result(
     response_headers: dict[str, str],
     center_images: bool = True,
     page_number_offset: int = 0,
+    progress_callback: ProgressCallback | None = None,
 ) -> Path:
     document_dir = output_root / pdf_path.stem
     pages_dir = document_dir / "pages"
@@ -141,6 +156,7 @@ def export_result(
 
     pages = response.get("pages") or []
     sanitized_pages = sanitized.get("pages") or []
+    total_pages = len(pages)
     for position, page in enumerate(pages):
         page_index = int(page.get("index", position))
         page_number = page_index + 1 + page_number_offset
@@ -201,6 +217,13 @@ def export_result(
         page_path = pages_dir / f"page-{page_number:04d}.md"
         page_path.write_text(markdown.rstrip() + "\n", encoding="utf-8")
         combined_pages.append(format_markdown_page(page_number, markdown))
+        if progress_callback is not None:
+            progress_callback(
+                "exporting",
+                position + 1,
+                total_pages,
+                f"Saving OCR page {position + 1} of {total_pages}",
+            )
 
     combined_path = document_dir / f"{pdf_path.stem}.md"
     combined_path.write_text(
@@ -258,14 +281,50 @@ def process_pdf(
     timeout: int = 600,
     center_images: bool = True,
     page_number_offset: int = 0,
+    progress_callback: ProgressCallback | None = None,
 ) -> Path:
     """Run Mistral OCR on a PDF and export its response to a document folder."""
     started = time.monotonic()
+    if progress_callback is not None:
+        progress_callback(
+            "preparing",
+            0,
+            0,
+            "Preparing PDF for Mistral OCR",
+        )
+    body = make_request(pdf_path, model)
+    if progress_callback is not None:
+        progress_callback(
+            "mistral",
+            0,
+            0,
+            "Waiting for Mistral OCR",
+        )
     response, headers = call_ocr(
         api_key=api_key,
-        body=make_request(pdf_path, model),
+        body=body,
         timeout=timeout,
+        status_callback=(
+            (
+                lambda message: progress_callback(
+                    "mistral",
+                    0,
+                    0,
+                    message,
+                )
+            )
+            if progress_callback is not None
+            else None
+        ),
     )
+    response_pages = response.get("pages") or []
+    if progress_callback is not None:
+        progress_callback(
+            "exporting",
+            0,
+            len(response_pages),
+            "Mistral OCR complete; saving pages",
+        )
     return export_result(
         pdf_path=pdf_path,
         output_root=output_root,
@@ -275,4 +334,5 @@ def process_pdf(
         response_headers=headers,
         center_images=center_images,
         page_number_offset=page_number_offset,
+        progress_callback=progress_callback,
     )
