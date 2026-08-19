@@ -17,6 +17,7 @@ import {
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { adminRequest } from "../lib/admin";
 import { AdminAccessPanel } from "./AdminAccessPanel";
+import { AdminPdfFormattingPanel } from "./AdminPdfFormattingPanel";
 
 interface ManagedUser {
   id: string;
@@ -86,7 +87,7 @@ export function AdminAccountsModal({
   const [repairTarget, setRepairTarget] = useState<ManagedUser | null>(null);
   const [repairManagedDraft, setRepairManagedDraft] = useState(true);
   const [repairLimitDraft, setRepairLimitDraft] = useState("");
-  const [activeTab, setActiveTab] = useState<"accounts" | "access">("accounts");
+  const [activeTab, setActiveTab] = useState<"accounts" | "access" | "pdf-formatting">("accounts");
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -289,6 +290,9 @@ export function AdminAccountsModal({
           </button>
           <button type="button" aria-current={activeTab === "access" ? "page" : undefined} onClick={() => setActiveTab("access")}>
             <Link2 size={14} /> Access and invites
+          </button>
+          <button type="button" aria-current={activeTab === "pdf-formatting" ? "page" : undefined} onClick={() => setActiveTab("pdf-formatting")}>
+            <FileText size={14} /> PDF formatter
           </button>
         </nav>
 
@@ -621,7 +625,7 @@ export function AdminAccountsModal({
           )}
 
           {error && <p className="admin-account-error" role="alert">{error}</p>}
-        </div> : <AdminAccessPanel />}
+        </div> : activeTab === "access" ? <AdminAccessPanel /> : <AdminPdfFormattingPanel />}
 
         <footer>
           <span>Only administrators can access this view.</span>

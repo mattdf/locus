@@ -4,6 +4,10 @@ import { auth } from "./auth.ts";
 import { query } from "./db.ts";
 import { isAdministrator, requireAdmin, validIdentifier } from "./admin-auth.ts";
 import { abortOwnerGenerations } from "./generations.ts";
+import {
+  getPdfRepairInstanceSettings,
+  updatePdfRepairInstanceSettings,
+} from "./instance-settings.ts";
 
 type ManagedUserRow = {
   id: string;
@@ -143,6 +147,41 @@ adminRouter.get("/users", async (_request, response) => {
   if (!requireAdmin(response)) return;
   response.setHeader("Cache-Control", "no-store");
   response.json({ users: await managedUsers() });
+});
+
+adminRouter.get("/pdf-repair/settings", async (_request, response, next) => {
+  try {
+    if (!requireAdmin(response)) return;
+    response.setHeader("Cache-Control", "no-store");
+    response.json({ settings: await getPdfRepairInstanceSettings() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+adminRouter.patch("/pdf-repair/settings", async (request, response, next) => {
+  try {
+    const administrator = requireAdmin(response);
+    if (!administrator) return;
+    if (!Object.prototype.hasOwnProperty.call(request.body ?? {}, "model")) {
+      response.status(400).json({ error: "Specify a PDF formatting model" });
+      return;
+    }
+    const settings = await updatePdfRepairInstanceSettings(
+      request.body.model,
+      administrator.id,
+    );
+    console.log(
+      `[admin] ${administrator.email} set the PDF formatting model to ${settings.model}`,
+    );
+    response.json({ settings });
+  } catch (error) {
+    if (error instanceof Error && /PDF formatting model|OpenAI model ID/i.test(error.message)) {
+      response.status(400).json({ error: error.message });
+      return;
+    }
+    next(error);
+  }
 });
 
 adminRouter.post("/users", async (request, response) => {

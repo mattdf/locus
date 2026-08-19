@@ -71,6 +71,30 @@ assert(!directSignup.ok, "The unmanaged Better Auth signup endpoint remained ena
 const initialAccess = await json(await request("/api/admin/access", { cookie: adminCookie }));
 assert(initialAccess.policy?.publicSignupEnabled === true, "Public signup was not enabled by default");
 
+const initialPdfRepairSettings = await json(await request(
+  "/api/admin/pdf-repair/settings",
+  { cookie: adminCookie },
+));
+assert(initialPdfRepairSettings.settings?.model, "PDF formatting model settings were unavailable");
+const updatePdfRepairModel = await request("/api/admin/pdf-repair/settings", {
+  method: "PATCH",
+  cookie: adminCookie,
+  body: JSON.stringify({ model: "gpt-5.4" }),
+});
+const updatedPdfRepairSettings = await json(updatePdfRepairModel);
+assert(
+  updatePdfRepairModel.ok &&
+    updatedPdfRepairSettings.settings?.model === "gpt-5.4" &&
+    updatedPdfRepairSettings.settings?.overridden === true,
+  `PDF formatting model was not updated: ${JSON.stringify(updatedPdfRepairSettings)}`,
+);
+const invalidPdfRepairModel = await request("/api/admin/pdf-repair/settings", {
+  method: "PATCH",
+  cookie: adminCookie,
+  body: JSON.stringify({ model: "invalid model id" }),
+});
+assert(invalidPdfRepairModel.status === 400, "An invalid PDF formatting model ID was accepted");
+
 const waitlistMode = await request("/api/admin/access/settings", {
   method: "PATCH",
   cookie: adminCookie,
@@ -181,6 +205,22 @@ try {
 }
 
 const inviteeCookie = await signIn(invitee);
+const nonAdminPdfRepairUpdate = await request("/api/admin/pdf-repair/settings", {
+  method: "PATCH",
+  cookie: inviteeCookie,
+  body: JSON.stringify({ model: "gpt-5.4-mini" }),
+});
+assert(nonAdminPdfRepairUpdate.status === 403, "A non-admin changed the PDF formatting model");
+const restorePdfRepairDefault = await request("/api/admin/pdf-repair/settings", {
+  method: "PATCH",
+  cookie: adminCookie,
+  body: JSON.stringify({ model: null }),
+});
+const restoredPdfRepairSettings = await json(restorePdfRepairDefault);
+assert(
+  restorePdfRepairDefault.ok && restoredPdfRepairSettings.settings?.overridden === false,
+  `PDF formatting model fallback was not restored: ${JSON.stringify(restoredPdfRepairSettings)}`,
+);
 const providers = await json(await request("/api/providers", { cookie: inviteeCookie }));
 assert(providers.openai?.configured && providers.openai?.source === "managed", "Invitee did not receive managed provider access");
 assert(!JSON.stringify(providers).includes(managedApiKey), "Provider status exposed the managed key");
@@ -348,4 +388,4 @@ const suspendedSignIn = await request("/api/auth/sign-in/email", {
 });
 assert(!suspendedSignIn.ok, "Suspended account could create a new session");
 
-console.log("Access-control integration checks passed: waitlist, verification-free invites, managed-key cost tracking and budgets, revocation, non-disclosure, and suspension");
+console.log("Access-control integration checks passed: waitlist, verification-free invites, PDF formatter settings, managed-key cost tracking and budgets, revocation, non-disclosure, and suspension");

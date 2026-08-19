@@ -25,10 +25,12 @@ import {
 import type { TokenUsage } from "./openai.ts";
 import { calculateGenerationCost } from "./pricing.ts";
 import { createProviderClient } from "./providers.ts";
+import {
+  getPdfRepairInstanceSettings,
+} from "./instance-settings.ts";
 
 const PROMPT_FILE = path.resolve("PDF_REPAIR_PROMPT.md");
 export const PDF_REPAIR_PROMPT_VERSION = "pdf-markdown-repair-v4";
-export const PDF_REPAIR_MODEL = process.env.PDF_REPAIR_MODEL?.trim() || "gpt-5.4-mini";
 const MAX_ATTEMPTS = Math.min(
   4,
   Math.max(1, Number(process.env.PDF_REPAIR_MAX_ATTEMPTS ?? 3)),
@@ -611,6 +613,7 @@ async function persistRepairStarted(
   ownerUserId: string,
   generationId: string,
   credential: ResolvedCredential,
+  model: string,
 ): Promise<void> {
   if (!isHosted) return;
   await query(
@@ -621,7 +624,7 @@ async function persistRepairStarted(
     [
       ownerUserId,
       generationId,
-      PDF_REPAIR_MODEL,
+      model,
       credential.managedCredentialId ?? null,
       credential.credentialKind,
       credential.credentialRef,
@@ -636,10 +639,11 @@ async function persistRepairFinished(input: {
   credential: ResolvedCredential;
   usage: TokenUsage | null;
   status: "completed" | "failed";
+  model: string;
   error?: string;
 }): Promise<void> {
   if (!isHosted) return;
-  const cost = calculateGenerationCost("openai", PDF_REPAIR_MODEL, input.usage);
+  const cost = calculateGenerationCost("openai", input.model, input.usage);
   await transaction(async (client) => {
     await client.query(
       `update "locus_generation_jobs"
@@ -666,7 +670,7 @@ async function persistRepairFinished(input: {
         [
           input.ownerUserId,
           input.generationId,
-          PDF_REPAIR_MODEL,
+          input.model,
           input.usage.inputTokens,
           input.usage.cachedInputTokens,
           input.usage.outputTokens,
@@ -695,12 +699,15 @@ export async function pdfRepairPreflight(ownerUserId: string): Promise<{
   source: "managed" | "personal";
   model: string;
 }> {
-  const { credential, policy } = await repairCredential(ownerUserId);
+  const [{ credential, policy }, settings] = await Promise.all([
+    repairCredential(ownerUserId),
+    getPdfRepairInstanceSettings(),
+  ]);
   if (credential.source === "managed") enforceRepairCap(policy);
   return {
     available: true,
     source: credential.credentialKind === "managed" ? "managed" : "personal",
-    model: PDF_REPAIR_MODEL,
+    model: settings.model,
   };
 }
 
@@ -731,7 +738,11 @@ interface PdfRepairPageResult {
 async function repairPdfMarkdownPageUnlocked(
   input: PdfRepairPageInput,
 ): Promise<PdfRepairPageResult> {
-  const { credential, policy } = await repairCredential(input.ownerUserId);
+  const [{ credential, policy }, settings] = await Promise.all([
+    repairCredential(input.ownerUserId),
+    getPdfRepairInstanceSettings(),
+  ]);
+  const model = settings.model;
   if (credential.source === "managed") enforceRepairCap(policy);
   const generationId = `pdf-repair:${input.jobId}:${input.pageNumber}:${randomUUID()}`;
   let reserved = false;
@@ -741,13 +752,13 @@ async function repairPdfMarkdownPageUnlocked(
       generationId,
       managedCredentialId: credential.managedCredentialId,
       provider: "openai",
-      model: PDF_REPAIR_MODEL,
+      model,
     });
     reserved = true;
   }
   let usage: TokenUsage | null = null;
   try {
-    await persistRepairStarted(input.ownerUserId, generationId, credential);
+    await persistRepairStarted(input.ownerUserId, generationId, credential, model);
     const prompt = (await readFile(PROMPT_FILE, "utf8")).trim();
     if (!prompt) throw new PdfRepairError("PDF_REPAIR_PROMPT.md is empty");
     const client = await createProviderClient("openai", undefined, credential.apiKey);
@@ -764,7 +775,7 @@ async function repairPdfMarkdownPageUnlocked(
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
       const response = await client.responses.create({
-        model: PDF_REPAIR_MODEL,
+        model,
         instructions: prompt,
         input: [
           `PROMPT_VERSION: ${PDF_REPAIR_PROMPT_VERSION}`,
@@ -880,6 +891,7 @@ async function repairPdfMarkdownPageUnlocked(
       credential,
       usage,
       status: "completed",
+      model,
     });
     return {
       markdown: validated.markdown,
@@ -888,7 +900,7 @@ async function repairPdfMarkdownPageUnlocked(
       mathNodeCount: validated.mathNodeCount,
       summary,
       furniture,
-      model: PDF_REPAIR_MODEL,
+      model,
       promptVersion: PDF_REPAIR_PROMPT_VERSION,
     };
   } catch (error) {
@@ -898,6 +910,7 @@ async function repairPdfMarkdownPageUnlocked(
       credential,
       usage,
       status: "failed",
+      model,
       error: error instanceof Error ? error.message : "PDF repair failed",
     }).catch(() => undefined);
     if (reserved) {

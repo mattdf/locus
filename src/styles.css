@@ -6761,6 +6761,75 @@ body.resizing-drawer {
   overflow-y: auto;
 }
 
+.admin-pdf-formatting {
+  min-height: 0;
+  margin-top: 10px;
+  overflow-y: auto;
+}
+
+.admin-pdf-formatting__saved {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent-dark);
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.admin-pdf-formatting__form {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto auto;
+  align-items: end;
+  gap: 7px;
+  margin-top: 12px;
+}
+
+.admin-pdf-formatting__form label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.admin-pdf-formatting__form label > span {
+  color: #78817d;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.admin-pdf-formatting__form input,
+.admin-pdf-formatting__form button {
+  min-height: 34px;
+  padding: 0 9px;
+  color: var(--ink);
+  background: white;
+  border: 1px solid #d8d5cc;
+  border-radius: 6px;
+  outline: 0;
+  font-size: 9px;
+}
+
+.admin-pdf-formatting__form button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  cursor: pointer;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.admin-pdf-formatting__form button:disabled { cursor: default; opacity: .5; }
+
+.admin-pdf-formatting__status {
+  display: block;
+  margin-top: 10px;
+  color: #6f7a74;
+  font-size: 8px;
+}
+
+.admin-pdf-formatting__status code { color: #3f4d46; }
+
 .admin-access__section {
   padding: 13px;
   background: rgba(255, 255, 255, .34);
@@ -6972,6 +7041,8 @@ body.resizing-drawer {
   .pdf-admin-usage__period { align-items: flex-end; flex-direction: column; }
   .pdf-admin-usage__totals { grid-template-columns: 1fr; }
   .pdf-admin-usage__limit { justify-content: flex-start; }
+  .admin-pdf-formatting__form { grid-template-columns: 1fr; }
+  .admin-pdf-formatting__form button { justify-self: start; }
 }
 
 .admin-account-create,
@@ -9401,6 +9472,17 @@ body.resizing-drawer {
   background: #151a18;
   border-color: #3a433f;
 }
+
+.app-shell[data-theme="dark"] .admin-pdf-formatting__form input,
+.app-shell[data-theme="dark"] .admin-pdf-formatting__form button {
+  color: #c7d0cb;
+  background: #151a18;
+  border-color: #3a433f;
+}
+
+.app-shell[data-theme="dark"] .admin-pdf-formatting__form label > span,
+.app-shell[data-theme="dark"] .admin-pdf-formatting__status { color: #7e8883; }
+.app-shell[data-theme="dark"] .admin-pdf-formatting__status code { color: #c7d0cb; }
 
 .app-shell[data-theme="dark"] .pdf-admin-usage__totals > span {
   background: rgba(85, 179, 164, .055);
