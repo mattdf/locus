@@ -1488,6 +1488,7 @@ def create_app(
                     result_root,
                     dpi=resolved_settings.dpi,
                     padding_points=resolved_settings.padding_points,
+                    asset_path=asset_path,
                 )
         asset = _safe_resolve(result_root, f"{asset_collection}/{asset_path}")
         if not asset.is_file():

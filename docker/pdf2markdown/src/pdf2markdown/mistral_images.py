@@ -17,7 +17,10 @@ from typing import Any, Iterable
 import fitz
 from PIL import Image
 
-IMAGE_UPGRADE_SCHEMA_VERSION = 3
+IMAGE_UPGRADE_SCHEMA_VERSION = 4
+
+MINIMUM_EMBEDDED_IMAGE_COVERAGE = 0.5
+MINIMUM_PAGE_SCAN_COVERAGE = 0.75
 
 from .markdown_images import center_markdown_images
 from .markdown_pages import format_markdown_page
@@ -120,6 +123,15 @@ def _intersection_fraction(first: fitz.Rect, second: fitz.Rect) -> float:
     return intersection.get_area() / denominator if denominator else 0.0
 
 
+def _covered_fraction(target: fitz.Rect, other: fitz.Rect) -> float:
+    """Return the fraction of ``target`` covered by ``other``."""
+    intersection = target & other
+    area = target.get_area()
+    if intersection.is_empty or area <= 0:
+        return 0.0
+    return intersection.get_area() / area
+
+
 def _page_coverage(info: dict[str, Any], page_rect: fitz.Rect) -> float:
     image_rect = fitz.Rect(info["bbox"])
     intersection = image_rect & page_rect
@@ -148,7 +160,8 @@ def choose_embedded_image(
     image_infos: Iterable[dict[str, Any]],
     minimum_overlap: float = 0.75,
     page_rect: fitz.Rect | None = None,
-    maximum_page_coverage: float = 0.9,
+    maximum_page_coverage: float = MINIMUM_PAGE_SCAN_COVERAGE,
+    minimum_image_coverage: float = MINIMUM_EMBEDDED_IMAGE_COVERAGE,
 ) -> dict[str, Any] | None:
     """Choose a real figure image substantially covered by an OCR bbox.
 
@@ -156,7 +169,7 @@ def choose_embedded_image(
     Otherwise, any small OCR figure region inside a scanned page would appear
     to overlap the full-page raster perfectly.
     """
-    scored: list[tuple[float, dict[str, Any]]] = []
+    scored: list[tuple[float, float, int, dict[str, Any]]] = []
     for info in image_infos:
         if int(info.get("xref", 0)) <= 0:
             continue
@@ -166,19 +179,31 @@ def choose_embedded_image(
             minimum_page_coverage=maximum_page_coverage,
         ):
             continue
-        score = _intersection_fraction(predicted, fitz.Rect(info["bbox"]))
-        if score >= minimum_overlap:
-            scored.append((score, info))
+        image_rect = fitz.Rect(info["bbox"])
+        predicted_coverage = _covered_fraction(predicted, image_rect)
+        image_coverage = _covered_fraction(image_rect, predicted)
+        # A page-sized scan contains every OCR figure box and therefore scored
+        # 1.0 under the old min-area overlap metric. Require a substantial
+        # fraction of *both* boxes to overlap so containment alone cannot make
+        # a full-page raster look like a figure asset.
+        if (
+            predicted_coverage >= minimum_overlap
+            and image_coverage >= minimum_image_coverage
+        ):
+            pixel_count = int(info.get("width", 0)) * int(info.get("height", 0))
+            scored.append(
+                (image_coverage, predicted_coverage, pixel_count, info)
+            )
     if not scored:
         return None
-    scored.sort(key=lambda item: item[0], reverse=True)
-    return scored[0][1]
+    scored.sort(key=lambda item: item[:3], reverse=True)
+    return scored[0][3]
 
 
 def choose_page_scan(
     image_infos: Iterable[dict[str, Any]],
     page_rect: fitz.Rect,
-    minimum_page_coverage: float = 0.9,
+    minimum_page_coverage: float = MINIMUM_PAGE_SCAN_COVERAGE,
 ) -> dict[str, Any] | None:
     """Choose the highest-resolution raster that covers nearly a whole page."""
     candidates = [
@@ -258,6 +283,23 @@ def _pixmap_png_bytes(pixmap: fitz.Pixmap) -> bytes:
         return pixmap.tobytes("png")
     converted = fitz.Pixmap(fitz.csRGB, pixmap)
     return converted.tobytes("png")
+
+
+def _raw_embedded_image_is_safe(
+    document: fitz.Document,
+    xref: int,
+) -> bool:
+    """Return whether raw extraction preserves the PDF page appearance.
+
+    Geometry is checked separately. Decode arrays and image/color-key masks
+    are page-painting semantics which raw image extraction can omit. Rendering
+    the requested PDF region is the conservative path for those objects.
+    """
+    try:
+        definition = document.xref_object(xref, compressed=False)
+    except Exception:
+        return False
+    return re.search(r"/(?:Decode|ImageMask|Mask)\b", definition) is None
 
 
 def _extract_embedded_image(
@@ -368,7 +410,17 @@ def _render_pdf_region(
     if caption_tops:
         clip.y1 = min(clip.y1, min(caption_tops) - 2.0)
     pixmap = page.get_pixmap(dpi=dpi, clip=clip, alpha=False, annots=False)
-    output_path.write_bytes(_pixmap_png_bytes(pixmap))
+    png = _pixmap_png_bytes(pixmap)
+    suffix = output_path.suffix.lower()
+    if suffix in {".jpg", ".jpeg", ".webp"}:
+        with Image.open(BytesIO(png)) as image:
+            converted = image.convert("RGB")
+            if suffix in {".jpg", ".jpeg"}:
+                converted.save(output_path, format="JPEG", quality=95, optimize=True)
+            else:
+                converted.save(output_path, format="WEBP", quality=95, method=6)
+    else:
+        output_path.write_bytes(png)
     return pixmap.width, pixmap.height, clip
 
 
@@ -463,7 +515,14 @@ def upgrade_document_images(
                     page_scan = choose_page_scan(image_infos, page.rect)
                     source_xref: int | None = None
                     source_smask: int | None = None
-                    if embedded is not None and _has_direct_crop_transform(embedded):
+                    if (
+                        embedded is not None
+                        and _has_direct_crop_transform(embedded)
+                        and _raw_embedded_image_is_safe(
+                            document,
+                            int(embedded["xref"]),
+                        )
+                    ):
                         source_xref = int(embedded["xref"])
                         source_smask = smasks.get(source_xref, 0)
                         output_path, width, height = _extract_embedded_image(
@@ -474,20 +533,23 @@ def upgrade_document_images(
                         )
                         method = "embedded-image-lossless"
                         render_rect = fitz.Rect(embedded["bbox"])
-                    elif page_scan is not None and _has_direct_crop_transform(page_scan):
+                    elif page_scan is not None:
                         source_xref = int(page_scan["xref"])
                         source_smask = smasks.get(source_xref, 0)
                         output_path = output_stem.with_suffix(".png")
-                        width, height, render_rect = _crop_page_scan(
-                            document,
-                            page_scan,
-                            source_smask,
+                        # Render the PDF page appearance rather than cropping
+                        # raw scan pixels. This applies Decode arrays, masks,
+                        # color transforms, rotation, and clipping exactly as
+                        # the original document does.
+                        width, height, render_rect = _render_pdf_region(
+                            page,
                             predicted,
-                            page.rect,
                             output_path,
+                            dpi,
                             scan_padding_points,
+                            expand_vector_geometry=False,
                         )
-                        method = "page-scan-raster-crop"
+                        method = f"pdf-region-render-{dpi}dpi-page-scan"
                     else:
                         if embedded is not None:
                             source_xref = int(embedded["xref"])
@@ -501,11 +563,12 @@ def upgrade_document_images(
                             padding_points,
                             expand_vector_geometry=len(page_images) == 1,
                         )
-                        method = (
-                            f"pdf-region-render-{dpi}dpi-transformed-image"
-                            if embedded is not None
-                            else f"pdf-region-render-{dpi}dpi"
-                        )
+                        if embedded is None:
+                            method = f"pdf-region-render-{dpi}dpi"
+                        elif not _has_direct_crop_transform(embedded):
+                            method = f"pdf-region-render-{dpi}dpi-transformed-image"
+                        else:
+                            method = f"pdf-region-render-{dpi}dpi-image-appearance"
 
                     new_path = f"assets-hq/{output_path.name}"
                     old_width, old_height = _image_dimensions(result_dir / old_path)
@@ -567,6 +630,9 @@ def upgrade_document_images(
         "page_scan_crop_count": sum(
             record.method == "page-scan-raster-crop" for record in records
         ),
+        "rendered_page_scan_count": sum(
+            record.method.endswith("page-scan") for record in records
+        ),
         "rendered_pdf_region_count": sum(
             record.method.startswith("pdf-region-render") for record in records
         ),
@@ -586,13 +652,17 @@ def repair_transformed_embedded_images(
     *,
     dpi: int = 360,
     padding_points: float = 6.0,
+    asset_path: str | None = None,
 ) -> int:
-    """Repair orientation for assets made by the pre-v3 lossless extractor.
+    """Repair unsafe assets made by legacy lossless extraction.
 
-    Older reports could label a rotated or mirrored PDF image as losslessly
-    extracted even though the raw raster needs its PDF placement transform to
-    display correctly. Re-render only those legacy assets from the page
-    appearance, retain their URLs, and mark the report as migrated.
+    Older reports could extract a rotated, decoded/inverted, or page-sized
+    raster even though the OCR requested only a small figure. Re-render those
+    assets from the page appearance while retaining their public URLs.
+
+    When ``asset_path`` is supplied, inspect only that requested asset. This
+    keeps migration work bounded for large existing books instead of blocking
+    the first image request while hundreds of records are audited.
     """
     report_path = result_dir / "image-upgrade-report.json"
     if not pdf_path.is_file() or not report_path.is_file():
@@ -601,11 +671,34 @@ def repair_transformed_embedded_images(
     if int(report.get("schema_version") or 0) >= IMAGE_UPGRADE_SCHEMA_VERSION:
         return 0
 
+    requested_new_path = (
+        f"assets-hq/{asset_path.lstrip('/')}" if asset_path is not None else None
+    )
+    assets = report.get("assets") or []
+    selected_records = [
+        record
+        for record in assets
+        if requested_new_path is None
+        or str(record.get("new_path") or "") == requested_new_path
+    ]
+    if not selected_records or all(
+        int(record.get("appearance_checked_version") or 0) >= 4
+        for record in selected_records
+    ):
+        return 0
+
     repaired = 0
+    orientation_repaired = 0
+    report_changed = False
     document = fitz.open(pdf_path)
     try:
-        for record in report.get("assets") or []:
+        for record in selected_records:
+            new_path = str(record.get("new_path") or "")
+            if int(record.get("appearance_checked_version") or 0) >= 4:
+                continue
             if record.get("method") != "embedded-image-lossless":
+                record["appearance_checked_version"] = 4
+                report_changed = True
                 continue
             page_number = int(record.get("page") or 0)
             source_xref = int(record.get("source_xref") or 0)
@@ -620,29 +713,50 @@ def repair_transformed_embedded_images(
                 ),
                 None,
             )
-            if image_info is None or _has_direct_crop_transform(image_info):
+            if image_info is None:
                 continue
             pdf_bbox = record.get("pdf_bbox")
-            new_path = str(record.get("new_path") or "")
             if (
                 not isinstance(pdf_bbox, list)
                 or len(pdf_bbox) != 4
                 or not new_path.startswith("assets-hq/")
             ):
                 continue
-            output_path = result_dir / new_path
+            predicted = fitz.Rect(*(float(value) for value in pdf_bbox))
+            if not _has_direct_crop_transform(image_info):
+                reason = "transform"
+            elif (
+                _covered_fraction(fitz.Rect(image_info["bbox"]), predicted)
+                < MINIMUM_EMBEDDED_IMAGE_COVERAGE
+            ):
+                reason = "oversized-image"
+            elif not _raw_embedded_image_is_safe(document, source_xref):
+                reason = "image-appearance"
+            else:
+                reason = None
+
+            record["appearance_checked_version"] = 4
+            report_changed = True
+            if reason is None:
+                continue
+
+            output_path = (result_dir / new_path).resolve()
+            if not output_path.is_relative_to(result_dir.resolve()):
+                continue
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary_path = output_path.with_name(f".{output_path.name}.repair")
+            temporary_path = output_path.with_name(
+                f".{output_path.stem}.repair{output_path.suffix}"
+            )
             width, height, render_rect = _render_pdf_region(
                 page,
-                fitz.Rect(*(float(value) for value in pdf_bbox)),
+                predicted,
                 temporary_path,
                 dpi,
                 padding_points,
                 expand_vector_geometry=False,
             )
             os.replace(temporary_path, output_path)
-            record["method"] = f"pdf-region-render-{dpi}dpi-transform-repair"
+            record["method"] = f"pdf-region-render-{dpi}dpi-{reason}-repair"
             record["new_width"] = width
             record["new_height"] = height
             record["render_bbox"] = [
@@ -655,11 +769,26 @@ def repair_transformed_embedded_images(
                 )
             ]
             repaired += 1
+            orientation_repaired += int(reason == "transform")
     finally:
         document.close()
 
-    report["schema_version"] = IMAGE_UPGRADE_SCHEMA_VERSION
-    report["orientation_repair_count"] = repaired
+    if asset_path is None or all(
+        int(record.get("appearance_checked_version") or 0) >= 4
+        for record in assets
+    ):
+        report["schema_version"] = IMAGE_UPGRADE_SCHEMA_VERSION
+        report_changed = True
+    report["appearance_repair_count"] = (
+        int(report.get("appearance_repair_count") or 0) + repaired
+    )
+    # Retain the old report field for consumers of schema versions 2 and 3.
+    report["orientation_repair_count"] = (
+        int(report.get("orientation_repair_count") or 0)
+        + orientation_repaired
+    )
+    if not report_changed:
+        return 0
     temporary_report = report_path.with_suffix(".json.tmp")
     temporary_report.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n",
