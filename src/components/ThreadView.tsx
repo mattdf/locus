@@ -14,11 +14,13 @@ import {
   Pencil,
   Printer,
   RotateCcw,
+  Search,
   Sparkles,
   Square,
 } from "lucide-react";
 import {
   useCallback,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -51,6 +53,10 @@ import { formatDuration, generationDetails } from "../lib/generation";
 import { applyMarkdownShortcut } from "../lib/textarea";
 import { compatibleReasoningEffort } from "../lib/providers";
 import { countTextTokens } from "../lib/tokenContext";
+import {
+  createPdfSearchPages,
+  searchPdfPages,
+} from "../lib/pdfVirtualization";
 import { Composer } from "./Composer";
 import { MarkdownMessage, type LinkedAnchor } from "./MarkdownMessage";
 import { MODEL_OPTIONS, REASONING_OPTIONS } from "./ModelPicker";
@@ -385,6 +391,8 @@ export function ThreadView({
   const visualizationScrollFrame = useRef<number | null>(null);
   const pdfJumpCleanupRef = useRef<(() => void) | null>(null);
   const pdfJumpPageRef = useRef<number | null>(null);
+  const pdfSearchFocusFrameRef = useRef<number | null>(null);
+  const pdfSearchFocusTimerRef = useRef<number | null>(null);
   const currentPdfPageRef = useRef(1);
   const pdfViewportAnchorRef = useRef<{ page: number; top: number } | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
@@ -421,6 +429,9 @@ export function ThreadView({
   const [pdfTocError, setPdfTocError] = useState<string | null>(null);
   const [pdfTocQuery, setPdfTocQuery] = useState("");
   const [pdfTocCenterRequest, setPdfTocCenterRequest] = useState(0);
+  const [pdfSearchOpen, setPdfSearchOpen] = useState(false);
+  const [pdfSearchQuery, setPdfSearchQuery] = useState("");
+  const [pdfSearchActiveIndex, setPdfSearchActiveIndex] = useState(-1);
   const [pdfFurniture, setPdfFurniture] = useState<PdfPageFurniture[]>([]);
   const [pdfTokenCount, setPdfTokenCount] = useState<number | null>(null);
   const [pdfTokenCountError, setPdfTokenCountError] = useState(false);
@@ -431,11 +442,26 @@ export function ThreadView({
     pdfSource ? boundedInitialPdfPage : null,
   );
   const pdfNavigationRef = useRef<HTMLDivElement>(null);
+  const pdfSearchInputRef = useRef<HTMLInputElement>(null);
+  const [collapsedPdfComposerNodeId, setCollapsedPdfComposerNodeId] = useState<
+    string | null
+  >(() => (pdfSource && !side ? node.id : null));
   const children = useMemo(() => childThreads(chat, node.id), [chat, node.id]);
   const messages = useMemo(() => messagesForNode(node), [node]);
   const pdfMarkdown = pdfSource
     ? messages.find((message) => message.role === "source")?.content ?? ""
     : "";
+  const pdfSearchPages = useMemo(
+    () => createPdfSearchPages(pdfMarkdown, pdfPageStart),
+    [pdfMarkdown, pdfPageStart],
+  );
+  const deferredPdfSearchQuery = useDeferredValue(pdfSearchQuery);
+  const pdfSearchResult = useMemo(
+    () => searchPdfPages(pdfSearchPages, deferredPdfSearchQuery, 300),
+    [deferredPdfSearchQuery, pdfSearchPages],
+  );
+  const pdfComposerCollapsed =
+    Boolean(pdfSource && !side) && collapsedPdfComposerNodeId === node.id;
   const linkedAnchorsByMessage = useMemo(() => {
     const anchors = new Map<string, LinkedAnchor[]>();
     children.forEach((child) => {
@@ -532,6 +558,10 @@ export function ThreadView({
     setPdfTocOpen(false);
     setPdfTocError(null);
     setPdfTocQuery("");
+    setPdfSearchOpen(false);
+    setPdfSearchQuery("");
+    setPdfSearchActiveIndex(-1);
+    setCollapsedPdfComposerNodeId(pdfSource && !side ? node.id : null);
     if (!pdfSource) return;
     const controller = new AbortController();
     setPdfTocLoading(true);
@@ -571,7 +601,7 @@ export function ThreadView({
         if (!controller.signal.aborted) setPdfTocLoading(false);
       });
     return () => controller.abort();
-  }, [pdfSource?.documentId, pdfPageEnd, pdfPageStart]);
+  }, [node.id, pdfSource?.documentId, pdfPageEnd, pdfPageStart, side]);
 
   useEffect(() => {
     let disposed = false;
@@ -720,7 +750,7 @@ export function ThreadView({
   ]);
 
   useEffect(() => {
-    if (!pdfTocOpen) return;
+    if (!pdfTocOpen && !pdfSearchOpen) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
       if (
         event.target instanceof Node &&
@@ -729,9 +759,12 @@ export function ThreadView({
         return;
       }
       setPdfTocOpen(false);
+      setPdfSearchOpen(false);
     };
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setPdfTocOpen(false);
+      if (event.key !== "Escape") return;
+      setPdfTocOpen(false);
+      setPdfSearchOpen(false);
     };
     document.addEventListener("pointerdown", closeOnOutsidePointer);
     document.addEventListener("keydown", closeOnEscape);
@@ -739,7 +772,37 @@ export function ThreadView({
       document.removeEventListener("pointerdown", closeOnOutsidePointer);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [pdfTocOpen]);
+  }, [pdfSearchOpen, pdfTocOpen]);
+
+  useEffect(() => {
+    if (!pdfSource) return;
+    const openFullPdfSearch = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.key.toLowerCase() !== "f") {
+        return;
+      }
+      const view = messagesRef.current?.closest<HTMLElement>(".thread-view");
+      const bounds = view?.getBoundingClientRect();
+      if (!view || !bounds || bounds.width <= 0 || bounds.height <= 0) return;
+      const focusedView =
+        document.activeElement instanceof Element
+          ? document.activeElement.closest<HTMLElement>(".thread-view")
+          : null;
+      if (focusedView && focusedView !== view) return;
+      event.preventDefault();
+      setPdfTocOpen(false);
+      setPdfSearchOpen(true);
+      window.requestAnimationFrame(() => {
+        pdfSearchInputRef.current?.focus();
+        pdfSearchInputRef.current?.select();
+      });
+    };
+    document.addEventListener("keydown", openFullPdfSearch);
+    return () => document.removeEventListener("keydown", openFullPdfSearch);
+  }, [pdfSource?.documentId]);
+
+  useEffect(() => {
+    setPdfSearchActiveIndex(-1);
+  }, [deferredPdfSearchQuery]);
 
   useLayoutEffect(() => {
     if (!pdfTocOpen || !pdfToc.length) return;
@@ -1006,6 +1069,12 @@ export function ThreadView({
         window.cancelAnimationFrame(visualizationScrollFrame.current);
       }
       pdfJumpCleanupRef.current?.();
+      if (pdfSearchFocusFrameRef.current !== null) {
+        window.cancelAnimationFrame(pdfSearchFocusFrameRef.current);
+      }
+      if (pdfSearchFocusTimerRef.current !== null) {
+        window.clearTimeout(pdfSearchFocusTimerRef.current);
+      }
     },
     [],
   );
@@ -1213,6 +1282,68 @@ export function ThreadView({
 
   };
 
+  const activatePdfSearchMatch = (requestedIndex: number) => {
+    if (!pdfSearchResult.matches.length) return;
+    const index =
+      (requestedIndex % pdfSearchResult.matches.length + pdfSearchResult.matches.length) %
+      pdfSearchResult.matches.length;
+    const match = pdfSearchResult.matches[index];
+    setPdfSearchActiveIndex(index);
+    jumpToPdfPage(match.page);
+    if (pdfSearchFocusFrameRef.current !== null) {
+      window.cancelAnimationFrame(pdfSearchFocusFrameRef.current);
+    }
+    if (pdfSearchFocusTimerRef.current !== null) {
+      window.clearTimeout(pdfSearchFocusTimerRef.current);
+      pdfSearchFocusTimerRef.current = null;
+    }
+    let attempts = 0;
+    const query = deferredPdfSearchQuery.trim().toLocaleLowerCase();
+    const focusMatch = () => {
+      pdfSearchFocusFrameRef.current = null;
+      const shell = messagesRef.current?.querySelector<HTMLElement>(
+        `[data-pdf-page-shell="${match.page}"][data-pdf-page-active="true"]`,
+      );
+      if (!shell) {
+        attempts += 1;
+        if (attempts < 90) {
+          pdfSearchFocusFrameRef.current = window.requestAnimationFrame(focusMatch);
+        }
+        return;
+      }
+      const blocks = Array.from(
+        shell.querySelectorAll<HTMLElement>("[data-markdown-block-index]"),
+      );
+      let remaining = match.pageOccurrence;
+      let target: HTMLElement | null = null;
+      for (const block of blocks) {
+        const text = (block.textContent ?? "").toLocaleLowerCase();
+        let blockMatches = 0;
+        let cursor = query ? text.indexOf(query) : -1;
+        while (cursor >= 0) {
+          blockMatches += 1;
+          cursor = text.indexOf(query, cursor + Math.max(1, query.length));
+        }
+        if (blockMatches > remaining) {
+          target = block;
+          break;
+        }
+        remaining -= blockMatches;
+      }
+      target ??= shell;
+      pdfJumpCleanupRef.current?.();
+      target.scrollIntoView({ behavior: "auto", block: target === shell ? "start" : "center" });
+      if (target !== shell) {
+        target.classList.add("pdf-search-target");
+        pdfSearchFocusTimerRef.current = window.setTimeout(() => {
+          target?.classList.remove("pdf-search-target");
+          pdfSearchFocusTimerRef.current = null;
+        }, 2_200);
+      }
+    };
+    pdfSearchFocusFrameRef.current = window.requestAnimationFrame(focusMatch);
+  };
+
   const activePdfTocIndex = pdfToc.reduce((bestIndex, item, index) => {
     if (item.page > currentPdfPage) return bestIndex;
     if (bestIndex < 0) return index;
@@ -1236,17 +1367,36 @@ export function ThreadView({
             <button
               className="pdf-document-nav__contents"
               type="button"
+              aria-label="PDF table of contents"
               aria-expanded={pdfTocOpen}
               aria-controls={`pdf-toc-${pdfSource.documentId}`}
               onClick={() => {
                 if (!pdfTocOpen) {
                   setPdfTocCenterRequest((request) => request + 1);
                 }
+                setPdfSearchOpen(false);
                 setPdfTocOpen(!pdfTocOpen);
               }}
             >
               <ListTree size={14} />
               <span>Contents</span>
+            </button>
+            <button
+              className="pdf-document-nav__contents"
+              type="button"
+              aria-label="Search PDF"
+              aria-expanded={pdfSearchOpen}
+              aria-controls={`pdf-search-${pdfSource.documentId}`}
+              onClick={() => {
+                setPdfTocOpen(false);
+                setPdfSearchOpen((open) => !open);
+                if (!pdfSearchOpen) {
+                  window.requestAnimationFrame(() => pdfSearchInputRef.current?.focus());
+                }
+              }}
+            >
+              <Search size={14} />
+              <span>Search</span>
             </button>
             <span
               className="pdf-document-nav__token-count"
@@ -1350,6 +1500,90 @@ export function ThreadView({
                   ))
                 )}
               </div>
+            </section>
+          )}
+          {pdfSearchOpen && (
+            <section
+              className="pdf-document-search"
+              id={`pdf-search-${pdfSource.documentId}`}
+              aria-label="Search the entire PDF"
+            >
+              <header>
+                <strong>Search all {pdfSearchPages.length.toLocaleString()} pages</strong>
+                <span>
+                  {pdfSearchQuery.trim()
+                    ? deferredPdfSearchQuery !== pdfSearchQuery
+                      ? "Searching…"
+                      : `${pdfSearchResult.total.toLocaleString()} match${pdfSearchResult.total === 1 ? "" : "es"}`
+                    : "Cmd/Ctrl + F"}
+                </span>
+              </header>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  activatePdfSearchMatch(
+                    pdfSearchActiveIndex < 0 ? 0 : pdfSearchActiveIndex + 1,
+                  );
+                }}
+              >
+                <Search size={13} aria-hidden="true" />
+                <input
+                  ref={pdfSearchInputRef}
+                  type="search"
+                  value={pdfSearchQuery}
+                  placeholder="Search text, equations, or code…"
+                  aria-label="Search the entire imported PDF"
+                  onChange={(event) => setPdfSearchQuery(event.target.value)}
+                />
+                <button
+                  type="button"
+                  aria-label="Previous PDF search result"
+                  disabled={!pdfSearchResult.matches.length}
+                  onClick={() =>
+                    activatePdfSearchMatch(
+                      pdfSearchActiveIndex < 0
+                        ? pdfSearchResult.matches.length - 1
+                        : pdfSearchActiveIndex - 1,
+                    )
+                  }
+                >
+                  <ChevronUp size={13} />
+                </button>
+                <button
+                  type="submit"
+                  aria-label="Next PDF search result"
+                  disabled={!pdfSearchResult.matches.length}
+                >
+                  <ChevronDown size={13} />
+                </button>
+              </form>
+              <div className="pdf-document-search__items">
+                {!pdfSearchQuery.trim() ? (
+                  <p>Search uses the full imported Markdown, including pages outside the rendered window.</p>
+                ) : deferredPdfSearchQuery !== pdfSearchQuery ? (
+                  <p>Searching the document…</p>
+                ) : !pdfSearchResult.matches.length ? (
+                  <p>No matches in this PDF.</p>
+                ) : (
+                  pdfSearchResult.matches.map((match, index) => (
+                    <button
+                      type="button"
+                      className={index === pdfSearchActiveIndex ? "is-current" : ""}
+                      key={`${match.page}-${match.index}`}
+                      onClick={() => activatePdfSearchMatch(index)}
+                    >
+                      <small>Page {match.page}</small>
+                      <span>{match.snippet}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+              {pdfSearchResult.truncated && (
+                <footer>
+                  Showing the first {pdfSearchResult.matches.length.toLocaleString()} of{" "}
+                  {pdfSearchResult.total.toLocaleString()} matches. Refine the search to narrow it.
+                </footer>
+              )}
             </section>
           )}
         </div>
@@ -1941,7 +2175,34 @@ export function ThreadView({
         <div ref={endRef} />
       </div>
       {!readOnly && (
-        <div className="thread-composer-wrap">
+        <div
+          className={`thread-composer-wrap${pdfComposerCollapsed ? " thread-composer-wrap--collapsed" : ""}`}
+        >
+          {pdfComposerCollapsed ? (
+            <button
+              className="pdf-composer-toggle pdf-composer-toggle--open"
+              type="button"
+              aria-expanded="false"
+              onClick={() => setCollapsedPdfComposerNodeId(null)}
+            >
+              <MessageSquareText size={14} />
+              <span>{pendingAssistant ? "Response in progress" : "Ask about this topic"}</span>
+              <ChevronUp size={14} />
+            </button>
+          ) : (
+            <>
+          {pdfSource && !side && (
+            <button
+              className="pdf-composer-toggle pdf-composer-toggle--close"
+              type="button"
+              aria-expanded="true"
+              aria-label="Minimize Ask about this topic"
+              onClick={() => setCollapsedPdfComposerNodeId(node.id)}
+            >
+              <span>Ask about this topic</span>
+              <ChevronDown size={13} />
+            </button>
+          )}
           {pendingAssistant && (
             <button
               className="stop-response-button"
@@ -1972,6 +2233,8 @@ export function ThreadView({
             <p className="selection-tip">
               Select any passage or equation to define, visualize, quote, elaborate, or rewrite it.
             </p>
+          )}
+            </>
           )}
         </div>
       )}

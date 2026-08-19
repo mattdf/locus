@@ -1716,6 +1716,150 @@ a:focus-visible {
   font-size: 8px;
 }
 
+.pdf-document-search {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  left: max(18px, calc((100% - 760px) / 2));
+  display: flex;
+  width: min(460px, calc(100% - 36px));
+  max-height: min(70vh, 650px);
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--ink);
+  background: var(--paper, #fbfaf6);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(35, 44, 41, 0.18);
+}
+
+.pdf-document-search > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 13px 14px 8px;
+}
+
+.pdf-document-search > header strong {
+  font-size: 11px;
+}
+
+.pdf-document-search > header span {
+  color: var(--muted);
+  font-size: 8px;
+}
+
+.pdf-document-search > form {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) 28px 28px;
+  align-items: center;
+  gap: 3px;
+  margin: 0 10px 8px;
+  padding: 0 3px 0 9px;
+  color: var(--muted);
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.pdf-document-search > form:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.pdf-document-search > form input {
+  min-width: 0;
+  height: 34px;
+  padding: 4px 5px;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font: inherit;
+  font-size: 10px;
+}
+
+.pdf-document-search > form button {
+  display: grid;
+  width: 27px;
+  height: 27px;
+  place-items: center;
+  padding: 0;
+  border-radius: 5px;
+}
+
+.pdf-document-search > form button:hover:not(:disabled) {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.pdf-document-search__items {
+  min-height: 0;
+  padding: 0 5px 7px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.pdf-document-search__items > p {
+  margin: 0;
+  padding: 22px 15px 25px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.pdf-document-search__items > button {
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  padding: 7px 9px;
+  border-radius: 6px;
+  text-align: left;
+}
+
+.pdf-document-search__items > button:hover,
+.pdf-document-search__items > button.is-current {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.pdf-document-search__items > button small {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 750;
+}
+
+.pdf-document-search__items > button span {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 10px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.pdf-document-search > footer {
+  padding: 8px 11px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--paper) 90%, var(--canvas));
+  border-top: 1px solid var(--line-soft);
+  font-size: 8px;
+  line-height: 1.4;
+}
+
+.pdf-search-target {
+  animation: pdf-search-target 2.2s ease-out;
+}
+
+@keyframes pdf-search-target {
+  0%, 35% { background: rgba(240, 196, 89, 0.34); }
+  100% { background: transparent; }
+}
+
 .thread-messages {
   min-width: 0;
   min-height: 0;
@@ -3180,6 +3324,50 @@ a:focus-visible {
   border-top: 1px solid var(--line-soft);
 }
 
+.thread-composer-wrap--collapsed {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.pdf-composer-toggle {
+  color: #65716c;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.pdf-composer-toggle--open {
+  display: flex;
+  width: min(760px, 100%);
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin: 0 auto;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.pdf-composer-toggle--open:hover,
+.pdf-composer-toggle--close:hover {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.pdf-composer-toggle--close {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  margin: -5px auto 5px;
+  border-radius: 5px;
+}
+
 .stop-response-button {
   display: flex;
   min-height: 28px;
@@ -3898,10 +4086,6 @@ body.resizing-drawer {
   background: #f5cf70;
 }
 
-.selection-toolbar > button.selection-inline-mobile-button {
-  display: none;
-}
-
 .selection-elaborate-split {
   position: relative;
   display: flex;
@@ -4020,6 +4204,91 @@ body.resizing-drawer {
 
 .selection-toolbar > button.selection-quote-button:hover {
   background: #46544f;
+}
+
+.selection-toolbar > button.selection-copy-button {
+  color: #edf2f0;
+  background: #394641;
+  border: 1px solid #53615c;
+}
+
+.selection-toolbar > button.selection-copy-button:hover {
+  background: #46544f;
+}
+
+.annotation-choice-backdrop {
+  position: fixed;
+  z-index: 128;
+  inset: 0;
+}
+
+.annotation-choice-menu {
+  position: fixed;
+  display: grid;
+  width: min(280px, calc(100vw - 16px));
+  max-height: min(360px, calc(100vh - 16px));
+  gap: 3px;
+  padding: 6px;
+  overflow-y: auto;
+  color: #29332f;
+  background: #fbfaf6;
+  border: 1px solid #d8d5cb;
+  border-radius: 9px;
+  box-shadow: 0 14px 36px rgba(17, 27, 23, 0.24);
+}
+
+.annotation-choice-menu > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 7px 7px;
+  border-bottom: 1px solid #e6e2d8;
+}
+
+.annotation-choice-menu > header strong {
+  font-size: 10px;
+}
+
+.annotation-choice-menu > header span {
+  color: #828a86;
+  font-size: 8px;
+}
+
+.annotation-choice-menu > button {
+  display: grid;
+  width: 100%;
+  min-height: 42px;
+  gap: 3px;
+  padding: 7px 8px;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.annotation-choice-menu > button:hover {
+  color: #216b59;
+  background: #edf5f1;
+}
+
+.annotation-choice-menu > button small {
+  color: #78817c;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.annotation-choice-menu > button .inline-math {
+  overflow: hidden;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .definition-popover {
@@ -7505,6 +7774,12 @@ body.resizing-drawer {
     max-height: 62vh;
   }
 
+  .pdf-document-search {
+    left: 10px;
+    width: calc(100% - 20px);
+    max-height: 68vh;
+  }
+
   .thread-composer-wrap {
     padding: 9px 10px 10px;
   }
@@ -7599,10 +7874,6 @@ body.resizing-drawer {
   .selection-toolbar > button:not(.toolbar-close),
   .selection-elaborate-split > button:first-child {
     justify-content: center;
-  }
-
-  .selection-toolbar > button.selection-inline-mobile-button {
-    display: flex;
   }
 
   .selection-elaborate-split > button:first-child {
@@ -7979,16 +8250,44 @@ body.resizing-drawer {
 }
 
 .app-shell[data-theme="dark"] .pdf-document-nav__pages input,
-.app-shell[data-theme="dark"] .pdf-document-toc {
+.app-shell[data-theme="dark"] .pdf-document-toc,
+.app-shell[data-theme="dark"] .pdf-document-search {
   color: #d8e0dc;
   background: #1d2421;
   border-color: #3a443f;
 }
 
-.app-shell[data-theme="dark"] .pdf-document-toc > input {
+.app-shell[data-theme="dark"] .pdf-document-toc > input,
+.app-shell[data-theme="dark"] .pdf-document-search > form {
   color: #d8e0dc;
   background: #171d1a;
   border-color: #3a443f;
+}
+
+.app-shell[data-theme="dark"] .pdf-document-search__items > button span,
+.app-shell[data-theme="dark"] .pdf-document-search > form input {
+  color: #d8e0dc;
+}
+
+.app-shell[data-theme="dark"] .pdf-document-search > footer {
+  background: #202724;
+  border-color: #343d39;
+}
+
+.app-shell[data-theme="dark"] .annotation-choice-menu {
+  color: #d8e0dc;
+  background: #1d2421;
+  border-color: #3a443f;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42);
+}
+
+.app-shell[data-theme="dark"] .annotation-choice-menu > header {
+  border-color: #343d39;
+}
+
+.app-shell[data-theme="dark"] .annotation-choice-menu > button:hover {
+  color: #8ed2c1;
+  background: #263a34;
 }
 
 .app-shell[data-theme="dark"] .message__meta,
@@ -9292,6 +9591,13 @@ body.resizing-drawer {
   border: 1px solid #477064;
   border-radius: 9px;
   box-shadow: 0 12px 34px rgba(18, 28, 24, 0.28);
+  animation: job-completion-decay 7s both;
+}
+
+@keyframes job-completion-decay {
+  0% { opacity: 0; transform: translateY(6px); }
+  4%, 90% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(4px); }
 }
 
 .job-completion-toast--failed {

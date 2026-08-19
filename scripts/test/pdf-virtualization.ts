@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import {
   createPdfMarkdownPages,
+  createPdfSearchPages,
   pdfPageForBlock,
+  searchPdfPages,
   stabilizePdfActiveRange,
 } from "../../src/lib/pdfVirtualization";
 import { createMarkdownDocumentIndex } from "../../src/lib/sourceEditing";
@@ -70,5 +72,22 @@ assert.deepEqual(
   { start: 110, end: 130 },
   "a distant page jump should reset the active window around its target",
 );
+
+const searchPages = createPdfSearchPages(source, 12);
+assert.deepEqual(
+  searchPages.map((page) => page.page),
+  [12, 13, 14],
+  "search indexing must cover every page without rendering it",
+);
+const search = searchPdfPages(searchPages, "page");
+assert.equal(search.total, 6);
+assert.deepEqual(
+  search.matches.map((match) => match.page),
+  [12, 12, 13, 13, 14, 14],
+);
+const limitedSearch = searchPdfPages(searchPages, "page", 2);
+assert.equal(limitedSearch.total, 6);
+assert.equal(limitedSearch.matches.length, 2);
+assert.equal(limitedSearch.truncated, true);
 
 console.log("PDF page virtualization invariants passed");

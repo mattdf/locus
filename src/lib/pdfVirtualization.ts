@@ -13,6 +13,27 @@ export interface PdfActiveRange {
   end: number;
 }
 
+export interface PdfSearchPage {
+  page: number;
+  content: string;
+  sourceStart: number;
+}
+
+export interface PdfSearchMatch {
+  page: number;
+  pageOccurrence: number;
+  index: number;
+  sourceIndex: number;
+  length: number;
+  snippet: string;
+}
+
+export interface PdfSearchResult {
+  matches: PdfSearchMatch[];
+  total: number;
+  truncated: boolean;
+}
+
 /**
  * Keeps the mounted PDF page window stable while the reader crosses nearby
  * page boundaries. Pages are added ahead of the reader immediately, but old
@@ -46,7 +67,88 @@ export function stabilizePdfActiveRange(
 }
 
 const PAGE_MARKER = /^\s*(?:\*\*|__)?Page\s+(\d+)(?:\*\*|__)?\s*$/i;
+const GLOBAL_PAGE_MARKER = /^\s*(?:\*\*|__)?Page\s+(\d+)(?:\*\*|__)?\s*$/gim;
 const THEMATIC_BREAK = /^\s{0,3}(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})\s*$/;
+
+/**
+ * Builds a lightweight, full-document search index without mounting every PDF
+ * page. This intentionally scans the stored Markdown directly: the result
+ * snippets retain equations and code, while page virtualization remains
+ * untouched.
+ */
+export function createPdfSearchPages(
+  source: string,
+  fallbackPageStart = 1,
+): PdfSearchPage[] {
+  const markers = Array.from(source.matchAll(GLOBAL_PAGE_MARKER))
+    .map((match) => ({
+      page: Number(match[1]),
+      index: match.index ?? 0,
+    }))
+    .filter((marker) => Number.isSafeInteger(marker.page));
+
+  if (!markers.length) {
+    return source
+      ? [{ page: fallbackPageStart, content: source, sourceStart: 0 }]
+      : [];
+  }
+
+  return markers.map((marker, index) => {
+    const sourceStart = index === 0 ? 0 : marker.index;
+    const sourceEnd = markers[index + 1]?.index ?? source.length;
+    return {
+      page: marker.page,
+      content: source.slice(sourceStart, sourceEnd),
+      sourceStart,
+    };
+  });
+}
+
+function searchSnippet(content: string, index: number, length: number): string {
+  const start = Math.max(0, index - 72);
+  const end = Math.min(content.length, index + Math.max(length, 24) + 96);
+  const compact = content
+    .slice(start, end)
+    .replace(/^\s*(?:\*\*|__)?Page\s+\d+(?:\*\*|__)?\s*$/gim, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return `${start > 0 ? "…" : ""}${compact}${end < content.length ? "…" : ""}`;
+}
+
+/** Searches every indexed page while bounding only the rendered result list. */
+export function searchPdfPages(
+  pages: readonly PdfSearchPage[],
+  rawQuery: string,
+  limit = 500,
+): PdfSearchResult {
+  const query = rawQuery.trim().toLocaleLowerCase();
+  if (!query) return { matches: [], total: 0, truncated: false };
+
+  const matches: PdfSearchMatch[] = [];
+  let total = 0;
+  pages.forEach((page) => {
+    const searchable = page.content.toLocaleLowerCase();
+    let index = searchable.indexOf(query);
+    let pageOccurrence = 0;
+    while (index >= 0) {
+      total += 1;
+      if (matches.length < limit) {
+        matches.push({
+          page: page.page,
+          pageOccurrence,
+          index,
+          sourceIndex: page.sourceStart + index,
+          length: query.length,
+          snippet: searchSnippet(page.content, index, query.length),
+        });
+      }
+      pageOccurrence += 1;
+      index = searchable.indexOf(query, index + Math.max(1, query.length));
+    }
+  });
+
+  return { matches, total, truncated: total > matches.length };
+}
 
 function blockSource(source: string, range: SourceRange): string {
   return source.slice(range.start, range.end);

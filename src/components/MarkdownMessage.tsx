@@ -6,6 +6,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
 } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
@@ -386,6 +387,17 @@ interface InlineElaborationBlockTarget {
   elaborationId: string;
 }
 
+interface AnnotationClickChoice {
+  target: AnnotationTarget;
+  getBounds: () => DOMRect;
+}
+
+interface AnnotationChooserState {
+  left: number;
+  top: number;
+  choices: AnnotationClickChoice[];
+}
+
 function textMap(container: HTMLElement): { text: string; points: Point[] } {
   const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, {
     acceptNode(node) {
@@ -546,6 +558,8 @@ function MarkdownMessageComponent({
   const visualizationBlockTargetsRef = useRef<VisualizationBlockTarget[]>([]);
   const inlineElaborationTargetsRef = useRef<InlineElaborationRangeTarget[]>([]);
   const inlineElaborationBlockTargetsRef = useRef<InlineElaborationBlockTarget[]>([]);
+  const [annotationChooser, setAnnotationChooser] =
+    useState<AnnotationChooserState | null>(null);
   const renderedBlocksRef = useRef<Map<number, Element>>(new Map());
   const blockTextMapsRef = useRef<WeakMap<Element, ReturnType<typeof textMap>>>(new WeakMap());
   const highlightName = useMemo(
@@ -936,8 +950,15 @@ function MarkdownMessageComponent({
       endBlockIndex,
       section,
     );
+    const mappedSource = message.content.slice(anchor.start, anchor.end);
+    const rawMarkdown =
+      mappedSource &&
+      mappedSource.length <= Math.max(quote.length * 4, quote.length + 256)
+        ? mappedSource
+        : quote;
     onSelect({
       ...anchor,
+      rawMarkdown,
       surface: selectionSurface,
       endBlockIndex,
       sectionStart: section.start,
@@ -966,11 +987,24 @@ function MarkdownMessageComponent({
     return subscribeToSelectionCapture(container, captureSelection);
   }, [captureSelection]);
 
-  const annotationAtPoint = (
+  const annotationAnchorForTarget = (target: AnnotationTarget): HighlightAnchor | undefined => {
+    if (target.kind === "branch") {
+      return linkedAnchors.find((linked) => linked.childId === target.id)?.anchor;
+    }
+    if (target.kind === "definition") {
+      return definitions.find((definition) => definition.id === target.id)?.anchor;
+    }
+    if (target.kind === "visualization") {
+      return visualizations.find((visualization) => visualization.id === target.id)?.anchor;
+    }
+    return inlineElaborations.find((elaboration) => elaboration.id === target.id)?.anchor;
+  };
+
+  const annotationChoicesAtPoint = (
     targetNode: EventTarget | null,
     clientX: number,
     clientY: number,
-  ): AnnotationTarget | null => {
+  ): AnnotationClickChoice[] => {
     const rangeContainsPoint = (range: Range) =>
       Array.from(range.getClientRects()).some(
         (rect) =>
@@ -981,39 +1015,191 @@ function MarkdownMessageComponent({
       );
     const elementContainsTarget = (element: Element) =>
       targetNode instanceof Node && element.contains(targetNode);
+    const exact: AnnotationClickChoice[] = [];
+    definitionTargetsRef.current.forEach((target) => {
+      if (rangeContainsPoint(target.range)) {
+        exact.push({
+          target: { kind: "definition", id: target.definitionId },
+          getBounds: () => target.range.getBoundingClientRect(),
+        });
+      }
+    });
+    inlineElaborationTargetsRef.current.forEach((target) => {
+      if (rangeContainsPoint(target.range)) {
+        exact.push({
+          target: { kind: "inline-elaboration", id: target.elaborationId },
+          getBounds: () => target.range.getBoundingClientRect(),
+        });
+      }
+    });
+    visualizationTargetsRef.current.forEach((target) => {
+      if (rangeContainsPoint(target.range)) {
+        exact.push({
+          target: { kind: "visualization", id: target.visualizationId },
+          getBounds: () => target.range.getBoundingClientRect(),
+        });
+      }
+    });
+    targetsRef.current.forEach((target) => {
+      if (rangeContainsPoint(target.range)) {
+        exact.push({
+          target: { kind: "branch", id: target.childId },
+          getBounds: () => target.range.getBoundingClientRect(),
+        });
+      }
+    });
 
-    const definition =
-      definitionTargetsRef.current.find((target) => rangeContainsPoint(target.range)) ??
-      definitionBlockTargetsRef.current.find((target) =>
-        elementContainsTarget(target.element),
-      );
-    if (definition) return { kind: "definition", id: definition.definitionId };
-
-    const inlineElaboration =
-      inlineElaborationTargetsRef.current.find((target) =>
-        rangeContainsPoint(target.range),
-      ) ??
-      inlineElaborationBlockTargetsRef.current.find((target) =>
-        elementContainsTarget(target.element),
-      );
-    if (inlineElaboration) {
-      return { kind: "inline-elaboration", id: inlineElaboration.elaborationId };
+    const blockCandidates = [
+          ...definitionBlockTargetsRef.current
+            .filter((target) => elementContainsTarget(target.element))
+            .map((target) => ({
+              target: { kind: "definition", id: target.definitionId } as AnnotationTarget,
+              getBounds: () => target.element.getBoundingClientRect(),
+            })),
+          ...inlineElaborationBlockTargetsRef.current
+            .filter((target) => elementContainsTarget(target.element))
+            .map((target) => ({
+              target: {
+                kind: "inline-elaboration",
+                id: target.elaborationId,
+              } as AnnotationTarget,
+              getBounds: () => target.element.getBoundingClientRect(),
+            })),
+          ...visualizationBlockTargetsRef.current
+            .filter((target) => elementContainsTarget(target.element))
+            .map((target) => ({
+              target: {
+                kind: "visualization",
+                id: target.visualizationId,
+              } as AnnotationTarget,
+              getBounds: () => target.element.getBoundingClientRect(),
+            })),
+          ...blockTargetsRef.current
+            .filter((target) => elementContainsTarget(target.element))
+            .map((target) => ({
+              target: { kind: "branch", id: target.childId } as AnnotationTarget,
+              getBounds: () => target.element.getBoundingClientRect(),
+            })),
+        ];
+    const logicalOverlaps: AnnotationClickChoice[] = [];
+    if (exact.length) {
+      const allTargets: AnnotationTarget[] = [
+        ...linkedAnchors.map((linked) => ({ kind: "branch", id: linked.childId } as const)),
+        ...definitions.map((definition) => ({ kind: "definition", id: definition.id } as const)),
+        ...visualizations.map((visualization) => ({ kind: "visualization", id: visualization.id } as const)),
+        ...inlineElaborations.map((elaboration) => ({
+          kind: "inline-elaboration",
+          id: elaboration.id,
+        } as const)),
+      ];
+      allTargets.forEach((target) => {
+        if (exact.some((choice) =>
+          choice.target.kind === target.kind && choice.target.id === target.id
+        )) return;
+        const anchor = annotationAnchorForTarget(target);
+        if (!anchor) return;
+        const matchingExact = exact.find((choice) => {
+          const exactAnchor = annotationAnchorForTarget(choice.target);
+          if (!exactAnchor) return false;
+          const sameStoredRange =
+            Number.isSafeInteger(anchor.start) &&
+            Number.isSafeInteger(anchor.end) &&
+            anchor.start === exactAnchor.start &&
+            anchor.end === exactAnchor.end;
+          return sameStoredRange || anchor.quote.trim() === exactAnchor.quote.trim();
+        });
+        if (matchingExact) {
+          logicalOverlaps.push({ target, getBounds: matchingExact.getBounds });
+        }
+      });
     }
+    const candidates = exact.length
+      ? [
+          ...exact,
+          ...logicalOverlaps,
+          ...blockCandidates.filter((candidate) => {
+            const candidateAnchor = annotationAnchorForTarget(candidate.target);
+            if (!candidateAnchor) return false;
+            return exact.some((exactChoice) => {
+              const exactAnchor = annotationAnchorForTarget(exactChoice.target);
+              if (!exactAnchor) return false;
+              const sameStoredRange =
+                Number.isSafeInteger(candidateAnchor.start) &&
+                Number.isSafeInteger(candidateAnchor.end) &&
+                candidateAnchor.start === exactAnchor.start &&
+                candidateAnchor.end === exactAnchor.end;
+              return (
+                sameStoredRange ||
+                candidateAnchor.quote.trim() === exactAnchor.quote.trim()
+              );
+            });
+          }),
+        ]
+      : blockCandidates;
 
-    const visualization =
-      visualizationTargetsRef.current.find((target) => rangeContainsPoint(target.range)) ??
-      visualizationBlockTargetsRef.current.find((target) =>
-        elementContainsTarget(target.element),
-      );
-    if (visualization) {
-      return { kind: "visualization", id: visualization.visualizationId };
-    }
-
-    const branch =
-      targetsRef.current.find((target) => rangeContainsPoint(target.range)) ??
-      blockTargetsRef.current.find((target) => elementContainsTarget(target.element));
-    return branch ? { kind: "branch", id: branch.childId } : null;
+    const seen = new Set<string>();
+    return candidates.filter((candidate) => {
+      const key = `${candidate.target.kind}:${candidate.target.id}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   };
+
+  const openAnnotationChoice = (choice: AnnotationClickChoice) => {
+    setAnnotationChooser(null);
+    if (choice.target.kind === "definition") {
+      const getAnchorRect = () => {
+        const bounds = choice.getBounds();
+        return {
+          left: bounds.left,
+          top: bounds.top,
+          width: bounds.width,
+          height: bounds.height,
+        };
+      };
+      onOpenDefinition(choice.target.id, getAnchorRect(), getAnchorRect);
+      return;
+    }
+    if (choice.target.kind === "inline-elaboration") {
+      onOpenInlineElaboration(choice.target.id);
+      return;
+    }
+    if (choice.target.kind === "visualization") {
+      onOpenVisualization(choice.target.id);
+      return;
+    }
+    onOpenElaboration(choice.target.id);
+  };
+
+  const annotationChoiceText = (target: AnnotationTarget) => {
+    if (target.kind === "branch") {
+      return linkedAnchors.find((linked) => linked.childId === target.id)?.title ?? "Elaboration";
+    }
+    if (target.kind === "definition") {
+      return definitions.find((definition) => definition.id === target.id)?.anchor.quote ?? "Definition";
+    }
+    if (target.kind === "visualization") {
+      return visualizations.find((visualization) => visualization.id === target.id)?.anchor.quote ?? "Visualization";
+    }
+    return inlineElaborations.find((elaboration) => elaboration.id === target.id)?.anchor.quote ?? "Inline elaboration";
+  };
+
+  const annotationChoiceKind = (kind: AnnotationTarget["kind"]) => {
+    if (kind === "branch") return "Branch";
+    if (kind === "definition") return "Definition";
+    if (kind === "visualization") return "Visualization";
+    return "Inline elaboration";
+  };
+
+  useEffect(() => {
+    if (!annotationChooser) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setAnnotationChooser(null);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [annotationChooser]);
 
   return (
     <div
@@ -1048,7 +1234,11 @@ function MarkdownMessageComponent({
       }}
       onContextMenu={(event) => {
         if (!onAnnotationContextMenu) return;
-        const annotation = annotationAtPoint(event.target, event.clientX, event.clientY);
+        const annotation = annotationChoicesAtPoint(
+          event.target,
+          event.clientX,
+          event.clientY,
+        )[0]?.target;
         if (!annotation) return;
         event.preventDefault();
         event.stopPropagation();
@@ -1069,104 +1259,22 @@ function MarkdownMessageComponent({
           event.target instanceof Element ? event.target.closest("a, button") : null;
         if (interactive) return;
 
-        const definitionRangeMatch = definitionTargetsRef.current.find((target) =>
-          Array.from(target.range.getClientRects()).some(
-            (rect) =>
-              event.clientX >= rect.left &&
-              event.clientX <= rect.right &&
-              event.clientY >= rect.top &&
-              event.clientY <= rect.bottom,
-          ),
+        const choices = annotationChoicesAtPoint(
+          event.target,
+          event.clientX,
+          event.clientY,
         );
-        const definitionBlockMatch =
-          event.target instanceof Node
-            ? definitionBlockTargetsRef.current.find((target) =>
-                target.element.contains(event.target as Node),
-              )
-            : undefined;
-        const definitionMatch = definitionRangeMatch ?? definitionBlockMatch;
-        if (definitionMatch) {
-          const getAnchorRect = () => {
-            const bounds =
-            "range" in definitionMatch
-              ? definitionMatch.range.getBoundingClientRect()
-              : definitionMatch.element.getBoundingClientRect();
-            return {
-              left: bounds.left,
-              top: bounds.top,
-              width: bounds.width,
-              height: bounds.height,
-            };
-          };
-          const bounds = getAnchorRect();
-          event.preventDefault();
-          onOpenDefinition(definitionMatch.definitionId, bounds, getAnchorRect);
+        if (!choices.length) return;
+        event.preventDefault();
+        if (choices.length === 1) {
+          openAnnotationChoice(choices[0]);
           return;
         }
-
-        const inlineElaborationRangeMatch = inlineElaborationTargetsRef.current.find((target) =>
-          Array.from(target.range.getClientRects()).some(
-            (rect) =>
-              event.clientX >= rect.left &&
-              event.clientX <= rect.right &&
-              event.clientY >= rect.top &&
-              event.clientY <= rect.bottom,
-          ),
-        );
-        const inlineElaborationBlockMatch =
-          event.target instanceof Node
-            ? inlineElaborationBlockTargetsRef.current.find((target) =>
-                target.element.contains(event.target as Node),
-              )
-            : undefined;
-        const inlineElaborationMatch =
-          inlineElaborationRangeMatch ?? inlineElaborationBlockMatch;
-        if (inlineElaborationMatch) {
-          event.preventDefault();
-          onOpenInlineElaboration(inlineElaborationMatch.elaborationId);
-          return;
-        }
-
-        const visualizationRangeMatch = visualizationTargetsRef.current.find((target) =>
-          Array.from(target.range.getClientRects()).some(
-            (rect) =>
-              event.clientX >= rect.left &&
-              event.clientX <= rect.right &&
-              event.clientY >= rect.top &&
-              event.clientY <= rect.bottom,
-          ),
-        );
-        const visualizationBlockMatch =
-          event.target instanceof Node
-            ? visualizationBlockTargetsRef.current.find((target) =>
-                target.element.contains(event.target as Node),
-              )
-            : undefined;
-        const visualizationMatch = visualizationRangeMatch ?? visualizationBlockMatch;
-        if (visualizationMatch) {
-          event.preventDefault();
-          onOpenVisualization(visualizationMatch.visualizationId);
-          return;
-        }
-
-        const rangeMatch = targetsRef.current.find((target) =>
-          Array.from(target.range.getClientRects()).some(
-            (rect) =>
-              event.clientX >= rect.left &&
-              event.clientX <= rect.right &&
-              event.clientY >= rect.top &&
-              event.clientY <= rect.bottom,
-          ),
-        );
-        const blockMatch =
-          event.target instanceof Node
-            ? blockTargetsRef.current.find((target) => target.element.contains(event.target as Node))
-            : undefined;
-        const match = rangeMatch ?? blockMatch;
-        if (match) {
-          event.preventDefault();
-          onOpenElaboration(match.childId);
-        }
+        setAnnotationChooser({
+          left: event.clientX,
+          top: event.clientY,
+          choices,
+        });
       }}
     >
       {pdfVirtualization ? (
@@ -1195,6 +1303,39 @@ function MarkdownMessageComponent({
               <InlineMath source={linked.title} />
             </button>
           ))}
+        </div>
+      )}
+      {annotationChooser && (
+        <div
+          className="annotation-choice-backdrop"
+          onPointerDown={() => setAnnotationChooser(null)}
+        >
+          <div
+            className="annotation-choice-menu"
+            role="menu"
+            aria-label="Choose a highlight"
+            style={{
+              left: Math.max(8, Math.min(annotationChooser.left, window.innerWidth - 288)),
+              top: Math.max(8, Math.min(annotationChooser.top, window.innerHeight - 260)),
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            <header>
+              <strong>Choose highlight</strong>
+              <span>{annotationChooser.choices.length} overlap here</span>
+            </header>
+            {annotationChooser.choices.map((choice) => (
+              <button
+                type="button"
+                role="menuitem"
+                key={`${choice.target.kind}:${choice.target.id}`}
+                onClick={() => openAnnotationChoice(choice)}
+              >
+                <small>{annotationChoiceKind(choice.target.kind)}</small>
+                <InlineMath source={annotationChoiceText(choice.target)} />
+              </button>
+            ))}
+          </div>
         </div>
       )}
     </div>

@@ -7,7 +7,8 @@ export type SelectionAction =
   | "rewrite"
   | "elaborate"
   | "elaborate-inline"
-  | "quote";
+  | "quote"
+  | "copy";
 export type PromptProfilePurpose =
   | "chat"
   | "definition"
@@ -331,6 +332,8 @@ export interface WorkspaceState {
 export interface SelectionDraft extends HighlightAnchor {
   /** The rendered surface where the selection originated. */
   surface?: "message" | "inline-elaboration";
+  /** Exact stored Markdown when it can be mapped safely from the rendered selection. */
+  rawMarkdown?: string;
   rect: { left: number; top: number; width: number; height: number };
   endBlockIndex?: number;
   sectionStart?: number;

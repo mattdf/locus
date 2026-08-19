@@ -11,6 +11,7 @@ import {
   ChevronRight,
   CornerDownLeft,
   CornerUpRight,
+  Copy,
   Download,
   FileInput,
   Folder,
@@ -197,9 +198,28 @@ const SELECTION_ACTION_OPTIONS = [
   { id: "visualize", label: "Visualize" },
   { id: "rewrite", label: "Rewrite" },
   { id: "elaborate", label: "Elaborate" },
-  { id: "elaborate-inline", label: "Elaborate inline" },
   { id: "quote", label: "Quote" },
+  { id: "copy", label: "Copy" },
 ] as const;
+
+function normalizedMobileSelectionActions(
+  actions: readonly SelectionAction[] | undefined,
+): SelectionAction[] {
+  const allowed = new Set<SelectionAction>(
+    SELECTION_ACTION_OPTIONS.map((option) => option.id),
+  );
+  const normalized: SelectionAction[] = [];
+  for (const action of actions ?? []) {
+    const candidate = action === "elaborate-inline" ? "elaborate" : action;
+    if (allowed.has(candidate) && !normalized.includes(candidate)) {
+      normalized.push(candidate);
+    }
+  }
+  for (const fallback of ["define", "elaborate", "rewrite"] as SelectionAction[]) {
+    if (!normalized.includes(fallback)) normalized.push(fallback);
+  }
+  return normalized.slice(0, 3);
+}
 
 const DEFAULT_STATE: WorkspaceState = {
   version: 1,
@@ -246,6 +266,27 @@ function saveFailureMessage(error: unknown): string {
   }
   if (error instanceof Error && error.message.trim()) return error.message;
   return "The workspace could not be saved for an unknown reason.";
+}
+
+async function writeTextToClipboard(value: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch {
+      // Fall through for older mobile browsers and restricted clipboard contexts.
+    }
+  }
+  const fallback = document.createElement("textarea");
+  fallback.value = value;
+  fallback.setAttribute("readonly", "");
+  fallback.style.cssText =
+    "position:fixed;left:-10000px;top:0;width:1px;height:1px;opacity:0";
+  document.body.appendChild(fallback);
+  fallback.select();
+  const copied = document.execCommand("copy");
+  fallback.remove();
+  if (!copied) throw new Error("Clipboard access was denied");
 }
 
 function providerForPromptPurpose(
@@ -1043,6 +1084,7 @@ function SelectionToolbar({
   onVisualize,
   onElaborate,
   onElaborateInline,
+  onCopy,
   onQuote,
   onRewrite,
   onDismiss,
@@ -1053,6 +1095,7 @@ function SelectionToolbar({
   onVisualize: () => void;
   onElaborate: () => void;
   onElaborateInline: () => void;
+  onCopy: () => Promise<void>;
   onQuote: () => void;
   onRewrite?: () => void;
   onDismiss: () => void;
@@ -1060,6 +1103,7 @@ function SelectionToolbar({
 }) {
   const [rect, setRect] = useState(selection.rect);
   const [elaborateMenuOpen, setElaborateMenuOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const inlineElaborationSelection = selection.surface === "inline-elaboration";
   const actionStyle = (action: SelectionAction) =>
     ({
@@ -1194,14 +1238,6 @@ function SelectionToolbar({
           )}
         </div>
         <button
-          className="selection-inline-mobile-button"
-          type="button"
-          style={actionStyle("elaborate-inline")}
-          onClick={onElaborateInline}
-        >
-          <Sparkles size={14} /> Inline
-        </button>
-        <button
           className="selection-quote-button"
           type="button"
           style={actionStyle("quote")}
@@ -1210,6 +1246,19 @@ function SelectionToolbar({
           <Quote size={14} /> Quote
         </button>
       </>}
+      <button
+        className="selection-copy-button"
+        type="button"
+        style={actionStyle("copy")}
+        onClick={() => {
+          void onCopy().then(() => {
+            setCopied(true);
+            window.setTimeout(() => setCopied(false), 1_500);
+          }).catch(() => undefined);
+        }}
+      >
+        <Copy size={14} /> {copied ? "Copied" : "Copy"}
+      </button>
       <button
         type="button"
         className="toolbar-close"
@@ -2028,6 +2077,16 @@ export default function App({
     );
     if (completed) setJobCompletionNotice(completed);
   }, [allWorkspaceJobs]);
+  useEffect(() => {
+    if (!jobCompletionNotice) return;
+    const noticeId = jobCompletionNotice.id;
+    const timer = window.setTimeout(() => {
+      setJobCompletionNotice((notice) =>
+        notice?.id === noticeId ? null : notice,
+      );
+    }, 7_000);
+    return () => window.clearTimeout(timer);
+  }, [jobCompletionNotice?.id, jobCompletionNotice?.status]);
   const isAdministrator = runtime.mode === "hosted" && Boolean(
     runtime.user?.role?.split(",").includes("admin"),
   );
@@ -2255,7 +2314,16 @@ export default function App({
           chat && requestedView.nodeId && chat.nodes[requestedView.nodeId]
             ? requestedView.nodeId
             : chat?.rootId ?? null;
-        const nextState = { ...state, activeChatId: chat?.id ?? null };
+        const nextState = {
+          ...state,
+          activeChatId: chat?.id ?? null,
+          settings: {
+            ...state.settings,
+            mobileSelectionActions: normalizedMobileSelectionActions(
+              state.settings.mobileSelectionActions,
+            ),
+          },
+        };
         hostedRevisionRef.current = revision;
         lastSavedWorkspaceRef.current = nextState;
         workspaceRef.current = nextState;
@@ -2969,8 +3037,10 @@ export default function App({
         promptProfileAssignments:
           recoveredSettings.promptProfileAssignments ?? {},
         mobileSelectionActions:
-          recoveredSettings.mobileSelectionActions ??
-          DEFAULT_STATE.settings.mobileSelectionActions,
+          normalizedMobileSelectionActions(
+            recoveredSettings.mobileSelectionActions ??
+              DEFAULT_STATE.settings.mobileSelectionActions,
+          ),
       },
       activeChatId:
         record.workspace.activeChatId &&
@@ -6701,9 +6771,6 @@ export default function App({
             <Plus size={16} /> New study
             <span>⌘ N</span>
           </button>
-          <button className="import-button" type="button" onClick={() => startNew("import")}>
-            <FileInput size={15} /> Import Markdown
-          </button>
           <label className="search-box">
             <Search size={14} />
             <input
@@ -8594,6 +8661,9 @@ export default function App({
           onDefine={defineSelection}
           onVisualize={visualizeSelection}
           onElaborateInline={elaborateInlineSelection}
+          onCopy={() =>
+            writeTextToClipboard(selection.rawMarkdown ?? selection.quote)
+          }
           onQuote={quoteSelectionInThread}
           onRewrite={
             selectionIsRewritable
