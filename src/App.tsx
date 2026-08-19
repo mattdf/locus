@@ -47,7 +47,7 @@ import {
   UserRound,
   X,
 } from "lucide-react";
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
   KeyboardEvent as ReactKeyboardEvent,
@@ -111,9 +111,9 @@ import {
 import { generationDetails } from "./lib/generation";
 import {
   annotationIntegrity,
-  searchWorkspace,
   workspaceJobs,
   type AnnotationIntegrityItem,
+  type StudySearchResult,
   type WorkspaceJob,
 } from "./lib/study";
 import {
@@ -1388,6 +1388,42 @@ function DefinitionPopover({
   );
 }
 
+function SidebarSearchBox({
+  committedValue,
+  onCommittedValueChange,
+}: {
+  committedValue: string;
+  onCommittedValueChange: (value: string) => void;
+}) {
+  const [value, setValue] = useState(committedValue);
+  const previousCommittedValue = useRef(committedValue);
+
+  useEffect(() => {
+    if (!value) {
+      onCommittedValueChange("");
+      return;
+    }
+    const timer = window.setTimeout(() => onCommittedValueChange(value), 75);
+    return () => window.clearTimeout(timer);
+  }, [onCommittedValueChange, value]);
+
+  useEffect(() => {
+    if (!committedValue && previousCommittedValue.current) setValue("");
+    previousCommittedValue.current = committedValue;
+  }, [committedValue]);
+
+  return (
+    <label className="search-box">
+      <Search size={14} />
+      <input
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        placeholder="Search titles, content, equations…"
+      />
+    </label>
+  );
+}
+
 function NewChatScreen({
   initialMode,
   onCreate,
@@ -1934,6 +1970,11 @@ export default function App({
   const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [search, setSearch] = useState("");
+  const [workspaceSearchResults, setWorkspaceSearchResults] = useState<
+    StudySearchResult[]
+  >([]);
+  const [workspaceSearchPending, setWorkspaceSearchPending] = useState(false);
+  const [workspaceSearchError, setWorkspaceSearchError] = useState("");
   const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
   const [selection, setSelection] = useState<SelectionDraft | null>(null);
   const [annotationMenu, setAnnotationMenu] = useState<AnnotationMenuState | null>(null);
@@ -2059,11 +2100,42 @@ export default function App({
     () => (activeChat ? annotationIntegrity(activeChat) : []),
     [activeChat],
   );
-  const deferredSearch = useDeferredValue(search);
-  const workspaceSearchResults = useMemo(
-    () => searchWorkspace(workspace, deferredSearch),
-    [deferredSearch, workspace],
-  );
+  useEffect(() => {
+    const query = search.trim();
+    if (!query) {
+      setWorkspaceSearchResults([]);
+      setWorkspaceSearchPending(false);
+      setWorkspaceSearchError("");
+      return;
+    }
+
+    const controller = new AbortController();
+    setWorkspaceSearchPending(true);
+    setWorkspaceSearchResults([]);
+    setWorkspaceSearchError("");
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/search?q=${encodeURIComponent(query)}&limit=80`,
+          { cache: "no-store", signal: controller.signal },
+        );
+        const payload = (await response.json()) as {
+          error?: string;
+          results?: StudySearchResult[];
+        };
+        if (!response.ok) throw new Error(payload.error || "Search failed");
+        setWorkspaceSearchResults(payload.results ?? []);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setWorkspaceSearchError(
+          error instanceof Error ? error.message : "Search failed",
+        );
+      } finally {
+        if (!controller.signal.aborted) setWorkspaceSearchPending(false);
+      }
+    })();
+    return () => controller.abort();
+  }, [search]);
   useEffect(() => {
     const previous = previousJobStatusesRef.current;
     const next = new Map(allWorkspaceJobs.map((job) => [job.id, job.status]));
@@ -6771,14 +6843,10 @@ export default function App({
             <Plus size={16} /> New study
             <span>⌘ N</span>
           </button>
-          <label className="search-box">
-            <Search size={14} />
-            <input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search titles, content, equations…"
-            />
-          </label>
+          <SidebarSearchBox
+            committedValue={search}
+            onCommittedValueChange={setSearch}
+          />
         </div>
 
         <div className="chat-list">
@@ -6794,7 +6862,11 @@ export default function App({
             </button>
           </div>
           {search ? (
-            workspaceSearchResults.length ? (
+            workspaceSearchPending ? (
+              <p className="empty-list">Searching all studies…</p>
+            ) : workspaceSearchError ? (
+              <p className="empty-list">{workspaceSearchError}</p>
+            ) : workspaceSearchResults.length ? (
               <div className="workspace-search-results" role="list" aria-label="Search results">
                 {workspaceSearchResults.map((result) => (
                   <button

@@ -67,6 +67,10 @@ import {
   WorkspaceConflictError,
   type WorkspaceSyncInput,
 } from "./workspaces.ts";
+import {
+  invalidateWorkspaceSearch,
+  searchStoredWorkspace,
+} from "./workspace-search.ts";
 import { accountUsage } from "./usage.ts";
 import {
   commitStagedPdfImport,
@@ -843,6 +847,7 @@ app.put("/api/state", async (request, response, next) => {
       return;
     }
     await writeState(state);
+    invalidateWorkspaceSearch(owner(response));
     response.status(204).end();
   } catch (error) {
     next(error);
@@ -858,6 +863,7 @@ app.post("/api/state/sync", async (request, response, next) => {
     const input = request.body as WorkspaceSyncInput;
     validateWorkspaceSync(input);
     await syncState(input);
+    invalidateWorkspaceSearch(owner(response));
     response.status(204).end();
   } catch (error) {
     if (error instanceof LocalStateConflictError) {
@@ -881,6 +887,25 @@ app.get("/api/workspace", async (_request, response, next) => {
   }
 });
 
+app.get("/api/search", async (request, response, next) => {
+  try {
+    const searchQuery = typeof request.query.q === "string" ? request.query.q.trim() : "";
+    if (!searchQuery || searchQuery.length > 500) {
+      response.status(400).json({ error: "Enter a search query of at most 500 characters" });
+      return;
+    }
+    const requestedLimit = Number(request.query.limit ?? 80);
+    const limit = Number.isSafeInteger(requestedLimit) ? requestedLimit : 80;
+    response.setHeader("Cache-Control", "private, no-store");
+    response.json({
+      query: searchQuery,
+      results: await searchStoredWorkspace(owner(response), searchQuery, limit),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/workspace/sync", async (request, response, next) => {
   try {
     if (!isHosted) {
@@ -888,6 +913,7 @@ app.post("/api/workspace/sync", async (request, response, next) => {
       return;
     }
     const revision = await syncHostedWorkspace(owner(response), request.body as WorkspaceSyncInput);
+    invalidateWorkspaceSearch(owner(response));
     response.json({ revision });
   } catch (error) {
     if (error instanceof WorkspaceConflictError) {

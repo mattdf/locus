@@ -1842,6 +1842,11 @@ a:focus-visible {
   -webkit-line-clamp: 2;
 }
 
+.pdf-document-search__items > button span strong {
+  color: var(--accent);
+  font-weight: 850;
+}
+
 .pdf-document-search > footer {
   padding: 8px 11px;
   color: var(--muted);

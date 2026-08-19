@@ -68,6 +68,33 @@ const EMPTY_DEFINITIONS: InlineDefinition[] = [];
 const EMPTY_VISUALIZATIONS: InlineVisualization[] = [];
 const EMPTY_INLINE_ELABORATIONS: InlineElaboration[] = [];
 
+function highlightPdfSearchMatches(text: string, rawQuery: string): ReactNode {
+  const query = rawQuery.trim();
+  if (!query) return text;
+
+  const searchable = text.toLocaleLowerCase();
+  const normalizedQuery = query.toLocaleLowerCase();
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  let matchIndex = searchable.indexOf(normalizedQuery);
+
+  while (matchIndex >= 0) {
+    if (matchIndex > cursor) parts.push(text.slice(cursor, matchIndex));
+    const matchEnd = matchIndex + query.length;
+    parts.push(
+      <strong key={`${matchIndex}-${matchEnd}`}>
+        {text.slice(matchIndex, matchEnd)}
+      </strong>,
+    );
+    cursor = matchEnd;
+    matchIndex = searchable.indexOf(normalizedQuery, matchEnd);
+  }
+
+  if (!parts.length) return text;
+  if (cursor < text.length) parts.push(text.slice(cursor));
+  return parts;
+}
+
 function renderedMessageArticles(container: HTMLElement): HTMLElement[] {
   return Array.from(
     container.querySelectorAll<HTMLElement>(":scope > article[data-message-id]"),
@@ -1014,16 +1041,54 @@ export function ThreadView({
 
   useEffect(() => {
     if (!scrollRequest || scrollRequest.anchor.sourceNodeId !== node.id) return;
+    const unresolvedBlock = scrollRequest.anchor.blockIndex < 0;
+    const sourceOffset = scrollRequest.anchor.start;
+    const offsetPage =
+      unresolvedBlock && Number.isSafeInteger(sourceOffset)
+        ? pdfSearchPages.find(
+            (page, index) =>
+              sourceOffset! >= page.sourceStart &&
+              sourceOffset! <
+                (pdfSearchPages[index + 1]?.sourceStart ?? Number.POSITIVE_INFINITY),
+          )?.page
+        : undefined;
     let attempts = 0;
+    let offsetPageJumped = false;
     const scrollToAnchor = () => {
       const container = messagesRef.current;
       if (!container) return;
       const article = renderedMessageArticles(container).find(
         (candidate) => candidate.dataset.messageId === scrollRequest.anchor.sourceMessageId,
       );
-      const block = article?.querySelector<HTMLElement>(
-        `[data-markdown-block-index="${scrollRequest.anchor.blockIndex}"]`,
-      );
+      const offsetPageShell =
+        article && Number.isInteger(offsetPage)
+          ? article.querySelector<HTMLElement>(
+              `[data-pdf-page-shell="${offsetPage}"]`,
+            )
+          : null;
+      if (
+        offsetPageShell &&
+        offsetPageShell.dataset.pdfPageActive !== "true" &&
+        !offsetPageJumped
+      ) {
+        offsetPageJumped = true;
+        jumpToPdfPage(offsetPage!);
+      }
+      const searchRoot = offsetPageShell?.dataset.pdfPageActive === "true"
+        ? offsetPageShell
+        : unresolvedBlock && offsetPageShell
+          ? null
+          : article;
+      const quote = scrollRequest.anchor.quote.trim().toLocaleLowerCase();
+      const block = unresolvedBlock
+        ? Array.from(
+            searchRoot?.querySelectorAll<HTMLElement>("[data-markdown-block-index]") ?? [],
+          ).find((candidate) =>
+            quote ? candidate.textContent?.toLocaleLowerCase().includes(quote) : false,
+          ) ?? null
+        : article?.querySelector<HTMLElement>(
+            `[data-markdown-block-index="${scrollRequest.anchor.blockIndex}"]`,
+          ) ?? null;
       if (!block && article) {
         const pageShell = Array.from(
           article.querySelectorAll<HTMLElement>("[data-pdf-page-shell]"),
@@ -1042,8 +1107,18 @@ export function ThreadView({
           setCurrentPdfPage((current) => (current === page ? current : page));
         }
       }
-      const target = block ?? article;
-      if (target && (block || !article?.querySelector("[data-pdf-page-shell]"))) {
+      const resolvedOffsetPage =
+        unresolvedBlock &&
+        offsetPageShell?.dataset.pdfPageActive === "true"
+          ? offsetPageShell
+          : null;
+      const target = block ?? resolvedOffsetPage ?? article;
+      if (
+        target &&
+        (block ||
+          resolvedOffsetPage ||
+          !article?.querySelector("[data-pdf-page-shell]"))
+      ) {
         target.scrollIntoView({ behavior: "auto", block: "center" });
         onScrollRequestHandled?.(scrollRequest.id);
         scrollFrame.current = null;
@@ -1573,7 +1648,9 @@ export function ThreadView({
                       onClick={() => activatePdfSearchMatch(index)}
                     >
                       <small>Page {match.page}</small>
-                      <span>{match.snippet}</span>
+                      <span>
+                        {highlightPdfSearchMatches(match.snippet, deferredPdfSearchQuery)}
+                      </span>
                     </button>
                   ))
                 )}

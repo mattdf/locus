@@ -8,7 +8,6 @@ import type {
   ThreadNode,
   WorkspaceState,
 } from "../types";
-import { markdownBlockRanges } from "./sourceEditing";
 import { activeEditContent, messagesForNode } from "./tree";
 
 export type StudySearchKind =
@@ -98,16 +97,6 @@ function snippetAround(source: string, index: number, length: number): string {
   return `${start ? "…" : ""}${compact.slice(start, end).trim()}${end < compact.length ? "…" : ""}`;
 }
 
-function blockIndexAt(source: string, offset: number): number {
-  const blocks = markdownBlockRanges(source);
-  const containing = blocks.findIndex(
-    (block) => offset >= block.start && offset <= block.end,
-  );
-  if (containing >= 0) return containing;
-  const following = blocks.findIndex((block) => block.start > offset);
-  return following < 0 ? Math.max(0, blocks.length - 1) : Math.max(0, following - 1);
-}
-
 function anchorForMatch(
   nodeId: string,
   messageId: string,
@@ -121,7 +110,10 @@ function anchorForMatch(
     sourceNodeId: nodeId,
     sourceMessageId: messageId,
     quote: source.slice(start, end),
-    blockIndex: blockIndexAt(source, start),
+    // Full-workspace search runs outside the UI thread and intentionally does
+    // not parse an entire book merely to count its Markdown blocks. The thread
+    // view resolves this sentinel from the raw offsets after navigation.
+    blockIndex: -1,
     start,
     end,
     prefix: source.slice(Math.max(0, start - 64), start),
@@ -147,8 +139,8 @@ function searchField(
   return plainIndex >= 0 ? { index: 0, length: query.length, score: 4 } : null;
 }
 
-export function searchWorkspace(
-  workspace: WorkspaceState,
+export function searchChats(
+  chats: readonly ChatTree[],
   rawQuery: string,
   limit = 80,
 ): StudySearchResult[] {
@@ -160,7 +152,7 @@ export function searchWorkspace(
     results.push(result);
   };
 
-  workspace.chats.forEach((chat) => {
+  chats.forEach((chat) => {
     const chatMatch = searchField(query, chat.title);
     if (chatMatch) {
       push({
@@ -297,6 +289,14 @@ export function searchWorkspace(
         left.id.localeCompare(right.id),
     )
     .slice(0, limit);
+}
+
+export function searchWorkspace(
+  workspace: WorkspaceState,
+  rawQuery: string,
+  limit = 80,
+): StudySearchResult[] {
+  return searchChats(workspace.chats, rawQuery, limit);
 }
 
 function sourceContent(node: ThreadNode, sourceMessageId: string): string | null {
