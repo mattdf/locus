@@ -272,6 +272,13 @@ const EXPORT_CSS = `
   .markdown-message { min-width:0; max-width:100%; color:#293430; font:15px/1.72 Georgia,serif; }
   .markdown-message--preserve-soft-breaks p,.markdown-message--preserve-soft-breaks li,.markdown-message--preserve-soft-breaks blockquote { white-space:pre-line; }
   .markdown-message h1,.markdown-message h2,.markdown-message h3,.markdown-message h4 { font-family:Inter,system-ui,sans-serif; }
+  .markdown-message ul,.markdown-message ol { margin:.18em 0 .58em; padding-left:1.28em; }
+  .markdown-message li { margin:.06em 0; padding-left:.08em; }
+  .markdown-message li>p { margin:0; }
+  .markdown-message li>p+p { margin-top:.42em; }
+  .markdown-message li>ul,.markdown-message li>ol { margin:.08em 0 .14em; padding-left:1.16em; }
+  .markdown-message p:has(+ul),.markdown-message p:has(+ol) { margin-bottom:.32em; }
+  .markdown-message li>:last-child { margin-bottom:0; }
   .markdown-message img { display:block; max-width:100%; height:auto; margin:1em auto; }
   .markdown-message pre { padding:14px; overflow:auto; color:#edf3f1; background:#24302d; border-radius:7px; }
   .markdown-message code { font-family:ui-monospace,monospace; }

@@ -2573,12 +2573,36 @@ a:focus-visible {
 
 .markdown-message ul,
 .markdown-message ol {
-  padding-left: 1.35em;
+  margin: 0.18em 0 0.58em;
+  padding-left: 1.28em;
 }
 
 .markdown-message li {
-  margin: 0.32em 0;
-  padding-left: 0.15em;
+  margin: 0.06em 0;
+  padding-left: 0.08em;
+}
+
+.markdown-message li > p {
+  margin: 0;
+}
+
+.markdown-message li > p + p {
+  margin-top: 0.42em;
+}
+
+.markdown-message li > ul,
+.markdown-message li > ol {
+  margin: 0.08em 0 0.14em;
+  padding-left: 1.16em;
+}
+
+.markdown-message p:has(+ ul),
+.markdown-message p:has(+ ol) {
+  margin-bottom: 0.32em;
+}
+
+.markdown-message li > :last-child {
+  margin-bottom: 0;
 }
 
 .markdown-message strong {
@@ -5410,6 +5434,16 @@ body.resizing-drawer {
 }
 .source-rewrite-preview__markdown > :first-child { margin-top: 0; }
 .source-rewrite-preview__markdown > :last-child { margin-bottom: 0; }
+.source-rewrite-preview__markdown ul,
+.source-rewrite-preview__markdown ol { margin: .18em 0 .58em; padding-left: 1.28em; }
+.source-rewrite-preview__markdown li { margin: .06em 0; padding-left: .08em; }
+.source-rewrite-preview__markdown li > p { margin: 0; }
+.source-rewrite-preview__markdown li > p + p { margin-top: .42em; }
+.source-rewrite-preview__markdown li > ul,
+.source-rewrite-preview__markdown li > ol { margin: .08em 0 .14em; padding-left: 1.16em; }
+.source-rewrite-preview__markdown p:has(+ ul),
+.source-rewrite-preview__markdown p:has(+ ol) { margin-bottom: .32em; }
+.source-rewrite-preview__markdown li > :last-child { margin-bottom: 0; }
 .source-rewrite-preview__markdown pre { overflow: auto; }
 .source-rewrite-preview__markdown .katex-display { overflow-x: auto; overflow-y: hidden; }
 
