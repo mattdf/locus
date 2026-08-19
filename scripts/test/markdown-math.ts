@@ -30,7 +30,7 @@ function assertMarkdownMathRenders(source: string): number {
 
 assert.equal(
   normalizeMathDelimiters(String.raw`Outside \(x+1\), existing $y+1$, and display \[z+1\].`),
-  "Outside $x+1$, existing $y+1$, and display $$\nz+1\n$$.",
+  "Outside $x+1$, existing $y+1$, and display \n$$\nz+1\n$$\n.",
 );
 
 assert.equal(
@@ -320,6 +320,141 @@ assert.equal(
   normalizeMathDelimiters(protectedBrokenShapes, true),
   protectedBrokenShapes,
   "nested displays and table pipes inside fenced code must remain untouched",
+);
+
+const parentheticalContainingExistingMath = String.raw`A rotation (with the angle \(\theta\) fixed) preserves length.`;
+const normalizedParenthetical = normalizeMathDelimiters(
+  parentheticalContainingExistingMath,
+  true,
+);
+assert.equal(
+  normalizedParenthetical,
+  String.raw`A rotation (with the angle $\theta$ fixed) preserves length.`,
+  "ordinary parentheses containing TeX math must not become nested math",
+);
+assert.equal(assertMarkdownMathRenders(parentheticalContainingExistingMath), 1);
+
+const inlineBracketDisplay = String.raw`The result is \[x^2+y^2=z^2\] (1.2).`;
+assert.equal(assertMarkdownMathRenders(inlineBracketDisplay), 1);
+assert.equal(
+  normalizeMathDelimiters(
+    normalizeMathDelimiters(inlineBracketDisplay, true),
+    true,
+  ),
+  normalizeMathDelimiters(inlineBracketDisplay, true),
+  "slash-delimited display normalization must be idempotent",
+);
+
+const strayDisplayMarker = String.raw`OCR left a $$ marker in prose.
+
+$$
+I_s(\mu)=\int k_s\,d\mu.
+$$`;
+assert.match(
+  normalizeMathDelimiters(strayDisplayMarker, true),
+  /\$\$ marker in prose[\s\S]*\$\$\nI_s\(\\mu\)/,
+  "a stray display marker must not steal a later display opener",
+);
+assert.equal(assertMarkdownMathRenders(strayDisplayMarker), 1);
+
+const prosePageMisclassifiedAsSql = String.raw`---
+
+**Page 20**
+
+\`\`\`sql
+where $n,m=1,2,3$ and the vectors form an orthonormal basis. Any vector in the space can be written as a superposition of them. Therefore the resulting expression is independent of the chosen coordinates.
+\`\`\`
+
+---
+
+**Page 21**
+
+Ordinary prose.`;
+const repairedProsePage = normalizeMathDelimiters(
+  prosePageMisclassifiedAsSql,
+  true,
+);
+assert.doesNotMatch(repairedProsePage, /```sql/);
+assert.equal(assertMarkdownMathRenders(prosePageMisclassifiedAsSql), 1);
+
+const genuineSqlPage = String.raw`---
+
+**Page 1**
+
+\`\`\`sql
+SELECT users.id, users.name
+FROM users
+JOIN accounts ON accounts.user_id = users.id;
+SELECT count(*)
+FROM accounts;
+\`\`\`
+
+---
+
+**Page 2**
+
+Text.`;
+assert.equal(
+  normalizeMathDelimiters(genuineSqlPage, true),
+  genuineSqlPage,
+  "a genuine full-page SQL listing must remain fenced",
+);
+
+const indentedOcrEquation = String.raw`The second term contains
+
+    $\Gamma^\lambda_{\mu\nu}=0$
+
+but this code stays:
+
+    const answer = 42;`;
+const repairedIndentedEquation = normalizeMathDelimiters(indentedOcrEquation, true);
+assert.match(repairedIndentedEquation, /^\$\\Gamma/m);
+assert.match(repairedIndentedEquation, /^    const answer/m);
+assert.equal(assertMarkdownMathRenders(indentedOcrEquation), 1);
+
+const incompleteAlignedEnvironment = String.raw`$$
+{\begin{alignedat}{2}|A\rangle &=& \mathbf 1|A\rangle \\ &=& \sum_i |i\rangle A^i.
+$$`;
+assert.equal(assertMarkdownMathRenders(incompleteAlignedEnvironment), 1);
+assert.match(
+  normalizeMathDelimiters(incompleteAlignedEnvironment, true),
+  /\\end\{alignedat\}\}\n\$\$/,
+);
+
+const duplicatedPhantomScripts = String.raw`The OCR result was $\Gamma^{\lambda}_{\phantom{\lambda}}_{\phantom{\mu\nu}}_{\phantom{\mu\nu}}=0$.`;
+const repairedPhantomScripts = normalizeMathDelimiters(
+  duplicatedPhantomScripts,
+  true,
+);
+assert.match(repairedPhantomScripts, /\\Gamma\^\{\\lambda\}_\{\\mu\\nu\}=0/);
+assert.equal(assertMarkdownMathRenders(duplicatedPhantomScripts), 1);
+
+const primedCommandWithSuperscript = String.raw`$$
+\Gamma'_{\mu\nu}^{\lambda}=\Lambda_\rho^{\lambda'}.
+$$`;
+assert.match(
+  normalizeMathDelimiters(primedCommandWithSuperscript, true),
+  /\{\\Gamma'\}_\{\\mu\\nu\}\^\{\\lambda\}/,
+);
+assert.equal(assertMarkdownMathRenders(primedCommandWithSuperscript), 1);
+
+const missingGroupBeforeRight = String.raw`$\left({\frac{x}{y}\right)$`;
+assert.equal(assertMarkdownMathRenders(missingGroupBeforeRight), 1);
+assert.match(
+  normalizeMathDelimiters(missingGroupBeforeRight, true),
+  /\\frac\{x\}\{y\}\}\\right/,
+);
+
+const missingOuterAlignedEnd = String.raw`$$
+\begin{aligned}
+& x=1 \\
+& \begin{aligned} y&=2 \\ z&=3 \end{aligned}
+\tag{7.35}
+$$`;
+assert.equal(assertMarkdownMathRenders(missingOuterAlignedEnd), 1);
+assert.match(
+  normalizeMathDelimiters(missingOuterAlignedEnd, true),
+  /\\end\{aligned\}\\tag\{7\.35\}/,
 );
 
 console.log("Markdown math normalization checks passed");

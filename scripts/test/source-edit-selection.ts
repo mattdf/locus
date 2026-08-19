@@ -123,7 +123,7 @@ assert.match(renderedPdf, /^---\n\n\*\*Page 1\*\*/);
 assert.match(renderedPdf, /\n---\n\n\*\*Page 2\*\*/);
 assert.match(
   renderedPdf,
-  /\$\$\\operatorname\{Tagged\}\(x\) = x\^2 \\tag\{7\}\$\$/,
+  /\$\$\n\\operatorname\{Tagged\}\(x\) = x\^2 \\tag\{7\}\n\$\$/,
 );
 
 const proseWithCodeIdentifiers =

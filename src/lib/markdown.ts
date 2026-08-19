@@ -1,3 +1,148 @@
+import {
+  mapMarkdownMathBodies,
+  mapOutsideMarkdownCode,
+  mapMarkdownPlainText,
+  normalizeSlashMathDelimiters,
+  unwrapMisclassifiedIndentedPdfMath,
+  unwrapMisclassifiedPdfPageFences,
+} from "./markdownScanner";
+
+function scriptArgumentEnd(source: string, start: number): number {
+  let cursor = start;
+  while (/\s/.test(source[cursor] ?? "")) cursor += 1;
+  if (source[cursor] !== "{") {
+    if (source[cursor] === "\\") {
+      cursor += 1;
+      while (/[A-Za-z@]/.test(source[cursor] ?? "")) cursor += 1;
+      return cursor;
+    }
+    return Math.min(source.length, cursor + 1);
+  }
+  let depth = 1;
+  cursor += 1;
+  while (cursor < source.length && depth > 0) {
+    if (!escapedAt(source, cursor)) {
+      if (source[cursor] === "{") depth += 1;
+      else if (source[cursor] === "}") depth -= 1;
+    }
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function hasExplicitSuperscriptAfterPrime(source: string, start: number): boolean {
+  let cursor = start;
+  while (/\s/.test(source[cursor] ?? "")) cursor += 1;
+  while (source[cursor] === "_") {
+    cursor = scriptArgumentEnd(source, cursor + 1);
+    while (/\s/.test(source[cursor] ?? "")) cursor += 1;
+  }
+  return source[cursor] === "^";
+}
+
+function groupPrimedCommandWithLaterSuperscript(source: string): string {
+  const replacements: Array<{ start: number; end: number; value: string }> = [];
+  for (let cursor = 0; cursor < source.length - 2; cursor += 1) {
+    if (source[cursor] !== "\\" || escapedAt(source, cursor)) continue;
+    let commandEnd = cursor + 1;
+    while (/[A-Za-z@]/.test(source[commandEnd] ?? "")) commandEnd += 1;
+    if (commandEnd === cursor + 1 || source[commandEnd] !== "'") continue;
+    if (!hasExplicitSuperscriptAfterPrime(source, commandEnd + 1)) continue;
+    replacements.push({
+      start: cursor,
+      end: commandEnd + 1,
+      value: `{${source.slice(cursor, commandEnd)}'}`,
+    });
+    cursor = commandEnd;
+  }
+  if (!replacements.length) return source;
+  const output: string[] = [];
+  let cursor = 0;
+  for (const replacement of replacements) {
+    output.push(source.slice(cursor, replacement.start), replacement.value);
+    cursor = replacement.end;
+  }
+  output.push(source.slice(cursor));
+  return output.join("");
+}
+
+function closeBracesBeforeRightDelimiters(source: string): string {
+  const output: string[] = [];
+  const leftDepths: number[] = [];
+  let braceDepth = 0;
+  let cursor = 0;
+  while (cursor < source.length) {
+    if (source.startsWith("\\left", cursor) && !escapedAt(source, cursor)) {
+      leftDepths.push(braceDepth);
+      output.push("\\left");
+      cursor += 5;
+      continue;
+    }
+    if (source.startsWith("\\right", cursor) && !escapedAt(source, cursor)) {
+      const expectedDepth = leftDepths.pop();
+      if (expectedDepth !== undefined && braceDepth > expectedDepth) {
+        output.push("}".repeat(braceDepth - expectedDepth));
+        braceDepth = expectedDepth;
+      }
+      output.push("\\right");
+      cursor += 6;
+      continue;
+    }
+    const character = source[cursor];
+    if (!escapedAt(source, cursor)) {
+      if (character === "{") braceDepth += 1;
+      else if (character === "}") braceDepth = Math.max(0, braceDepth - 1);
+    }
+    output.push(character);
+    cursor += 1;
+  }
+  return output.join("");
+}
+
+function closeUnclosedLatexEnvironments(source: string): string {
+  const stack: string[] = [];
+  for (const match of source.matchAll(/\\(begin|end)\{([A-Za-z*]+)\}/g)) {
+    if (match[1] === "begin") {
+      stack.push(match[2]);
+      continue;
+    }
+    if (stack.at(-1) === match[2]) stack.pop();
+  }
+  if (!stack.length) return source;
+  const closers = stack.reverse().map((name) => `\\end{${name}}`).join("");
+  const tags = latexTags(source);
+  const trailingTag = tags.find(
+    (tag) => !source.slice(tag.end).trim(),
+  );
+  const insertAt = trailingTag?.start ?? source.length;
+  return `${source.slice(0, insertAt)}${closers}${source.slice(insertAt)}`;
+}
+
+function appendMissingLatexBraces(source: string): string {
+  let depth = 0;
+  for (let cursor = 0; cursor < source.length; cursor += 1) {
+    if (escapedAt(source, cursor)) continue;
+    if (source[cursor] === "{") depth += 1;
+    else if (source[cursor] === "}") depth = Math.max(0, depth - 1);
+  }
+  return depth > 0 ? source + "}".repeat(depth) : source;
+}
+
+function repairLatexBody(source: string): string {
+  let repaired = source.replace(
+    /(?:_\{\\phantom\{([^{}]*)\}\}){2,}/g,
+    (_match, finalSubscript: string) => `_{${finalSubscript}}`,
+  );
+  repaired = groupPrimedCommandWithLaterSuperscript(repaired);
+  repaired = closeBracesBeforeRightDelimiters(repaired);
+  repaired = closeUnclosedLatexEnvironments(repaired);
+  return appendMissingLatexBraces(repaired);
+}
+
+function repairLatexMathBodies(markdown: string): string {
+  return mapMarkdownMathBodies(markdown, repairLatexBody);
+}
+
 function cleanCopiedDisplayMath(equation: string): string {
   const lines: string[] = [];
 
@@ -28,6 +173,54 @@ function cleanCopiedDisplayMath(equation: string): string {
   }
 
   return lines.join("\n");
+}
+
+function normalizeCopiedBracketDisplayBlocks(markdown: string): string {
+  return mapOutsideMarkdownCode(markdown, (prose) => {
+    const lines = prose.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean) ?? [];
+    const output: string[] = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      const content = lines[index].replace(/\r?\n$/, "");
+      const opening = /^([ \t]*)\\?\[[ \t]*$/.exec(content);
+      if (!opening) {
+        output.push(lines[index]);
+        continue;
+      }
+
+      let closingIndex = index + 1;
+      while (closingIndex < lines.length) {
+        const candidate = lines[closingIndex].replace(/\r?\n$/, "");
+        if (/^[ \t]*\\?\][ \t]*$/.test(candidate)) break;
+        if (
+          /^---[ \t]*$/.test(candidate) ||
+          /^\*\*Page\s+\d+\*\*[ \t]*$/.test(candidate)
+        ) {
+          closingIndex = lines.length;
+          break;
+        }
+        closingIndex += 1;
+      }
+      if (closingIndex >= lines.length) {
+        output.push(lines[index]);
+        continue;
+      }
+
+      const body = lines.slice(index + 1, closingIndex).join("");
+      // A standalone bracketed prose aside is legal Markdown. Recover the
+      // copied-display form only when its body carries strong TeX/equation
+      // syntax; otherwise preserve it exactly.
+      if (!/[\\_^=]|\b(?:frac|begin|end|det|sum|int)\b/.test(body)) {
+        output.push(lines[index]);
+        continue;
+      }
+      const ending = lines[closingIndex].match(/\r?\n$/)?.[0] ?? "";
+      output.push(
+        `${opening[1]}$$\n${cleanCopiedDisplayMath(body)}\n${opening[1]}$$${ending}`,
+      );
+      index = closingIndex;
+    }
+    return output.join("");
+  });
 }
 
 function normalizeLegacyPdfMarkup(markdown: string): string {
@@ -95,50 +288,7 @@ function mapMarkdownProse(
   markdown: string,
   transform: (source: string) => string,
 ): string {
-  const output: string[] = [];
-  let proseStart = 0;
-  let cursor = 0;
-
-  const protect = (end: number) => {
-    output.push(transform(markdown.slice(proseStart, cursor)), markdown.slice(cursor, end));
-    cursor = end;
-    proseStart = end;
-  };
-
-  while (cursor < markdown.length) {
-    if (markdown.startsWith("```", cursor) || markdown.startsWith("~~~", cursor)) {
-      const marker = markdown.slice(cursor, cursor + 3);
-      const closing = markdown.indexOf(marker, cursor + marker.length);
-      if (closing >= 0) {
-        protect(closing + marker.length);
-        continue;
-      }
-    }
-
-    if (markdown[cursor] === "`") {
-      let runLength = 1;
-      while (markdown[cursor + runLength] === "`") runLength += 1;
-      const closing = closingInlineCode(markdown, cursor, runLength);
-      if (closing >= 0) {
-        protect(closing + runLength);
-        continue;
-      }
-    }
-
-    if (markdown[cursor] === "$" && !escapedAt(markdown, cursor)) {
-      const delimiter: "$" | "$$" = markdown[cursor + 1] === "$" ? "$$" : "$";
-      const closing = closingDollar(markdown, cursor + delimiter.length, delimiter);
-      if (closing >= 0) {
-        protect(closing + delimiter.length);
-        continue;
-      }
-    }
-
-    cursor += 1;
-  }
-
-  output.push(transform(markdown.slice(proseStart)));
-  return output.join("");
+  return mapMarkdownPlainText(markdown, transform);
 }
 
 interface ParenthesizedLatexRange {
@@ -275,7 +425,7 @@ function wrapParenthesizedLatex(source: string): string {
   selected.forEach((range) => {
     output.push(
       source.slice(cursor, range.start),
-      `\\(${source.slice(range.start + 1, range.end)}\\)`,
+      `$${source.slice(range.start + 1, range.end)}$`,
     );
     cursor = range.end + 1;
   });
@@ -1071,23 +1221,21 @@ export function normalizeMathDelimiters(
   recoverCopiedChatGptMath = false,
 ): string {
   if (!recoverCopiedChatGptMath) {
-    return repairDisplayMath(
-      mapMarkdownProse(markdown, (source) =>
+    const normalizedDelimiters = normalizeSlashMathDelimiters(markdown);
+    return repairLatexMathBodies(repairDisplayMath(
+      mapMarkdownProse(normalizedDelimiters, (source) =>
         wrapParenthesizedLatex(source)
-        .replace(/\\\[([\s\S]*?)\\\]/g, (_match, equation: string) =>
-          `$$\n${equation.trim()}\n$$`,
-        )
-        .replace(/\\\((.*?)\\\)/g, (_match, equation: string) => `$${equation}$`),
       ),
-    );
+    ));
   }
 
-  const withDisplayMath = repairInlineMathAcrossPdfPageBreaks(
-    normalizeLegacyPdfMarkup(markdown),
-  ).replace(
-    /(^|\n)[ \t]*\\?\[[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\\?\][ \t]*(?=\r?\n|$)/g,
-    (_match, leading: string, equation: string) =>
-      `${leading}$$\n${cleanCopiedDisplayMath(equation)}\n$$`,
+  const importedMarkdown = unwrapMisclassifiedIndentedPdfMath(
+    unwrapMisclassifiedPdfPageFences(normalizeLegacyPdfMarkup(markdown)),
+  );
+  const withDisplayMath = normalizeSlashMathDelimiters(
+    normalizeCopiedBracketDisplayBlocks(
+      repairInlineMathAcrossPdfPageBreaks(importedMarkdown),
+    ),
   );
 
   // Repair display boundaries before scanning prose. A global `$$…$$` split
@@ -1096,7 +1244,9 @@ export function normalizeMathDelimiters(
   // mapMarkdownProse instead protects recognized math/code regions and errs
   // on the side of leaving ambiguous text unchanged.
   const repairedDisplayMath = repairDisplayMath(withDisplayMath);
-  return repairDisplayMath(normalizeCopiedInlineMath(repairedDisplayMath));
+  return repairLatexMathBodies(repairDisplayMath(
+    mapMarkdownProse(repairedDisplayMath, wrapParenthesizedLatex),
+  ));
 }
 
 export function markdownBlockquote(source: string): string {
